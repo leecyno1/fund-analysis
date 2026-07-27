@@ -1,0 +1,549 @@
+"""
+PostgreSQL 数据库访问层
+使用 SQLAlchemy 管理基金核心数据的持久化
+
+Prisma schema 参考：/Volumes/PSSD/Projects/基金筛选/fund-analysis/prisma/schema.prisma
+"""
+import os
+import logging
+from typing import Optional, List, Dict, Any, TypeVar, Type
+from contextlib import contextmanager
+from datetime import datetime
+from decimal import Decimal
+from dataclasses import dataclass
+
+logger = logging.getLogger(__name__)
+
+# Lazy initialization
+_engine = None
+_SessionLocal = None
+
+
+def normalize_database_url(database_url: str) -> str:
+    """兼容托管平台常见的 postgres:// 写法，SQLAlchemy 需要 postgresql://。"""
+    if database_url.startswith("postgres://"):
+        return f"postgresql://{database_url[len('postgres://'):]}"
+    return database_url
+
+
+def get_database_url(default: str = "postgresql://lichengyin@localhost:5432/fund_analysis") -> str:
+    return normalize_database_url(os.environ.get("DATABASE_URL", default))
+
+
+def get_engine():
+    """获取 SQLAlchemy 引擎"""
+    global _engine
+    if _engine is None:
+        from sqlalchemy import create_engine
+        pg_url = get_database_url()
+        _engine = create_engine(
+            pg_url,
+            pool_pre_ping=True,
+            pool_size=20,
+            max_overflow=30,
+            pool_recycle=3600,
+            pool_timeout=30,
+        )
+        logger.info(f"PostgreSQL engine created: {pg_url.split('@')[1] if '@' in pg_url else 'localhost'}")
+    return _engine
+
+
+def check_database_health(min_fund_count: int = 1) -> Dict[str, Any]:
+    """检查基金研究数据库是否真的可用于本地研究。
+
+    健康检查不打印连接串或密钥，只返回可操作的状态和计数。
+    """
+    from sqlalchemy import text
+
+    health: Dict[str, Any] = {
+        "connected": False,
+        "funds_table": False,
+        "fund_count": 0,
+        "minimum_fund_count": min_fund_count,
+        "status": "database_unavailable",
+    }
+
+    try:
+        engine = get_engine()
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+            health["connected"] = True
+            table_exists = conn.execute(
+                text("SELECT to_regclass('public.funds') IS NOT NULL AS exists")
+            ).scalar()
+            health["funds_table"] = bool(table_exists)
+            if table_exists:
+                fund_count = conn.execute(text("SELECT COUNT(*) FROM funds")).scalar()
+                health["fund_count"] = int(fund_count or 0)
+
+        if not health["funds_table"]:
+            health["status"] = "schema_missing"
+        elif int(health["fund_count"] or 0) < min_fund_count:
+            health["status"] = "fund_universe_empty"
+        else:
+            health["status"] = "ok"
+        return health
+    except Exception as exc:
+        health["error"] = exc.__class__.__name__
+        health["detail"] = str(exc).splitlines()[0] if str(exc) else exc.__class__.__name__
+        return health
+
+
+def get_session():
+    """获取数据库会话工厂"""
+    global _SessionLocal
+    if _SessionLocal is None:
+        from sqlalchemy.orm import sessionmaker
+        engine = get_engine()
+        _SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    return _SessionLocal
+
+
+@contextmanager
+def db_session():
+    """数据库会话上下文管理器"""
+    Session = get_session()
+    session = Session()
+    try:
+        yield session
+        session.commit()
+    except Exception as e:
+        session.rollback()
+        raise
+    finally:
+        session.close()
+
+
+def init_database():
+    """初始化数据库表结构"""
+    from sqlalchemy import text
+    engine = get_engine()
+
+    tables = [
+        # 基金表
+        """CREATE TABLE IF NOT EXISTS funds (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            wind_code VARCHAR(20) UNIQUE NOT NULL,
+            name VARCHAR(200) NOT NULL,
+            type VARCHAR(50),
+            manager_ids TEXT[],
+            nav DECIMAL(10, 4),
+            nav_date DATE,
+            total_asset DECIMAL(15, 2),
+            establishment_date DATE,
+            performance_data JSONB,
+            risk_metrics JSONB,
+            raw_data JSONB,
+            created_at TIMESTAMP DEFAULT NOW(),
+            updated_at TIMESTAMP DEFAULT NOW()
+        )""",
+        # 基金研究画像表：基准、同类池、风格标签与数据可信补充
+        """CREATE TABLE IF NOT EXISTS fund_research_profiles (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            wind_code VARCHAR(20) UNIQUE NOT NULL REFERENCES funds(wind_code) ON DELETE CASCADE,
+            primary_benchmark VARCHAR(100) NOT NULL,
+            secondary_benchmark VARCHAR(100),
+            peer_group VARCHAR(100) NOT NULL,
+            style_label VARCHAR(100) NOT NULL,
+            strategy_tags TEXT[],
+            manager_tenure_start DATE,
+            capacity_notes TEXT,
+            data_quality_notes TEXT,
+            evidence JSONB,
+            updated_by VARCHAR(100),
+            created_at TIMESTAMP DEFAULT NOW(),
+            updated_at TIMESTAMP DEFAULT NOW()
+        )""",
+        # 销售规则/材料证据表：基金研究门禁会直接读取，不能只依赖前端懒创建
+        """CREATE TABLE IF NOT EXISTS fund_sales_rules (
+            wind_code TEXT NOT NULL,
+            platform TEXT NOT NULL DEFAULT 'manual',
+            purchase_status TEXT NOT NULL DEFAULT 'unknown',
+            purchase_status_label TEXT NOT NULL DEFAULT '申购待核',
+            min_purchase_amount NUMERIC,
+            min_sip_amount NUMERIC,
+            daily_limit_amount NUMERIC,
+            purchase_fee_rate NUMERIC,
+            redemption_fee_rules JSONB NOT NULL DEFAULT '[]'::jsonb,
+            sales_service_fee_rate NUMERIC,
+            risk_level TEXT,
+            supports_sip BOOLEAN,
+            source_url TEXT,
+            source_updated_at DATE,
+            notes TEXT,
+            created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT NOW(),
+            PRIMARY KEY (wind_code, platform)
+        )""",
+        # 基金经理表
+        """CREATE TABLE IF NOT EXISTS managers (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            wind_code VARCHAR(50) UNIQUE,
+            name VARCHAR(100) NOT NULL,
+            company VARCHAR(200),
+            education VARCHAR(50),
+            work_years INTEGER,
+            management_years DECIMAL(5, 2),
+            current_funds TEXT[],
+            historical_performance JSONB,
+            style_analysis JSONB,
+            raw_data JSONB,
+            created_at TIMESTAMP DEFAULT NOW(),
+            updated_at TIMESTAMP DEFAULT NOW()
+        )""",
+        # 基金净值表
+        """CREATE TABLE IF NOT EXISTS fund_nav (
+            id SERIAL PRIMARY KEY,
+            wind_code VARCHAR(20) NOT NULL,
+            trade_date DATE NOT NULL,
+            nav DECIMAL(10, 4),
+            unit_nav DECIMAL(10, 4),
+            accum_nav DECIMAL(10, 4),
+            daily_return DECIMAL(12, 8),
+            benchmark_nav DECIMAL(10, 4),
+            discount_rate DECIMAL(12, 8),
+            UNIQUE(wind_code, trade_date)
+        )""",
+        # 基金评分表
+        """CREATE TABLE IF NOT EXISTS scores (
+            id SERIAL PRIMARY KEY,
+            target_type VARCHAR(20) NOT NULL,
+            target_id VARCHAR(50) NOT NULL,
+            dimension VARCHAR(50),
+            score DECIMAL(5, 2),
+            weight DECIMAL(3, 2),
+            calculation_method VARCHAR(50),
+            details JSONB,
+            scored_at TIMESTAMP DEFAULT NOW(),
+            created_at TIMESTAMP DEFAULT NOW()
+        )""",
+        # 基金持仓表
+        """CREATE TABLE IF NOT EXISTS holdings (
+            id SERIAL PRIMARY KEY,
+            wind_code VARCHAR(20) NOT NULL,
+            quarter VARCHAR(10) NOT NULL,
+            stock_code VARCHAR(20) NOT NULL,
+            stock_name VARCHAR(200),
+            industry VARCHAR(50),
+            sub_industry VARCHAR(50),
+            weight DECIMAL(8, 4),
+            shares BIGINT,
+            market_cap VARCHAR(20),
+            pe_ratio DECIMAL(10, 2),
+            pb_ratio DECIMAL(10, 2),
+            roe DECIMAL(8, 4),
+            revenue_growth DECIMAL(10, 4),
+            dividend_yield DECIMAL(8, 4),
+            market_cap_value DECIMAL(15, 2),
+            UNIQUE(wind_code, quarter, stock_code)
+        )""",
+        # Barra 因子暴露表
+        """CREATE TABLE IF NOT EXISTS factor_exposures (
+            id SERIAL PRIMARY KEY,
+            wind_code VARCHAR(20) NOT NULL,
+            quarter VARCHAR(10) NOT NULL,
+            factor_name VARCHAR(50) NOT NULL,
+            exposure DECIMAL(10, 4),
+            factor_return DECIMAL(10, 4),
+            risk_contribution DECIMAL(8, 4),
+            UNIQUE(wind_code, quarter, factor_name)
+        )""",
+        # Brinson 归因表
+        """CREATE TABLE IF NOT EXISTS performance_attributions (
+            id SERIAL PRIMARY KEY,
+            wind_code VARCHAR(20) NOT NULL,
+            benchmark_id VARCHAR(20) NOT NULL,
+            quarter VARCHAR(10) NOT NULL,
+            total_return DECIMAL(10, 4),
+            benchmark_return DECIMAL(10, 4),
+            active_return DECIMAL(10, 4),
+            allocation_effect DECIMAL(10, 4),
+            selection_effect DECIMAL(10, 4),
+            interaction_effect DECIMAL(10, 4),
+            industry_allocation DECIMAL(10, 4),
+            stock_selection DECIMAL(10, 4),
+            residual DECIMAL(10, 4),
+            created_at TIMESTAMP DEFAULT NOW(),
+            UNIQUE(wind_code, quarter)
+        )""",
+        # 基金经理画像表
+        """CREATE TABLE IF NOT EXISTS manager_profiles (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            manager_id VARCHAR(50) UNIQUE NOT NULL,
+            core_philosophy TEXT,
+            stock_selection_logic TEXT,
+            risk_philosophy TEXT,
+            focus_industries TEXT[],
+            competence_advantages TEXT,
+            competence_boundaries TEXT,
+            style_label VARCHAR(50),
+            concentration VARCHAR(20),
+            turnover VARCHAR(20),
+            style_stability INTEGER,
+            philosophy_score INTEGER,
+            competence_score INTEGER,
+            style_score INTEGER,
+            overall_quality_score INTEGER,
+            philosophy_behavior_consistency DECIMAL(5, 2),
+            valuation_consistency INTEGER,
+            quality_consistency INTEGER,
+            industry_consistency INTEGER,
+            key_insights TEXT[],
+            red_flags TEXT[],
+            interviews_analyzed INTEGER DEFAULT 0,
+            last_interview_date DATE,
+            last_updated TIMESTAMP DEFAULT NOW()
+        )""",
+        # 调研报告表 (MongoDB 补充用)
+        """CREATE TABLE IF NOT EXISTS research_reports (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            manager_id VARCHAR(50),
+            fund_ids TEXT[],
+            title VARCHAR(500) NOT NULL,
+            report_date DATE,
+            source VARCHAR(200),
+            content TEXT,
+            summary TEXT,
+            key_points JSONB,
+            tags TEXT[],
+            created_at TIMESTAMP DEFAULT NOW(),
+            updated_at TIMESTAMP DEFAULT NOW()
+        )""",
+        # 调研报告切片表（RAG 证据链）
+        """CREATE TABLE IF NOT EXISTS research_report_chunks (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            report_id UUID NOT NULL REFERENCES research_reports(id) ON DELETE CASCADE,
+            chunk_index INTEGER NOT NULL,
+            content TEXT NOT NULL,
+            token_count INTEGER,
+            embedding_id VARCHAR(200),
+            entities JSONB,
+            metadata JSONB,
+            created_at TIMESTAMP DEFAULT NOW(),
+            updated_at TIMESTAMP DEFAULT NOW(),
+            UNIQUE(report_id, chunk_index)
+        )""",
+        # 筛选条件表
+        """CREATE TABLE IF NOT EXISTS screening_criteria (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            name VARCHAR(200) NOT NULL,
+            description TEXT,
+            criteria JSONB NOT NULL,
+            created_by VARCHAR(100),
+            is_public BOOLEAN DEFAULT FALSE,
+            created_at TIMESTAMP DEFAULT NOW(),
+            updated_at TIMESTAMP DEFAULT NOW()
+        )""",
+        # AI 分析报告表
+        """CREATE TABLE IF NOT EXISTS ai_analysis_reports (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            target_type VARCHAR(20) NOT NULL,
+            target_id VARCHAR(50) NOT NULL,
+            report_type VARCHAR(100),
+            content TEXT,
+            data_sources JSONB,
+            research_reports_used TEXT[],
+            generation_params JSONB,
+            created_at TIMESTAMP DEFAULT NOW()
+        )""",
+        # 基金池表
+        """CREATE TABLE IF NOT EXISTS fund_pools (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            name VARCHAR(200) NOT NULL,
+            description TEXT,
+            created_by VARCHAR(100),
+            is_default BOOLEAN DEFAULT FALSE,
+            created_at TIMESTAMP DEFAULT NOW(),
+            updated_at TIMESTAMP DEFAULT NOW()
+        )""",
+        # 基金池成员表
+        """CREATE TABLE IF NOT EXISTS pool_members (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            pool_id UUID NOT NULL REFERENCES fund_pools(id) ON DELETE CASCADE,
+            fund_id VARCHAR(100) NOT NULL,
+            status VARCHAR(30) NOT NULL,
+            reason TEXT,
+            latest_conclusion TEXT,
+            evidence JSONB,
+            risk_notes TEXT,
+            next_review_date DATE,
+            created_by VARCHAR(100),
+            updated_by VARCHAR(100),
+            created_at TIMESTAMP DEFAULT NOW(),
+            updated_at TIMESTAMP DEFAULT NOW(),
+            UNIQUE(pool_id, fund_id)
+        )""",
+        # 投资决策留痕表
+        """CREATE TABLE IF NOT EXISTS investment_decisions (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            pool_id UUID REFERENCES fund_pools(id) ON DELETE SET NULL,
+            target_type VARCHAR(30) NOT NULL,
+            target_id VARCHAR(100) NOT NULL,
+            decision_type VARCHAR(50) NOT NULL,
+            decision_status VARCHAR(30) NOT NULL,
+            rationale TEXT,
+            evidence JSONB,
+            memo_snapshot JSONB,
+            suitability_profile JSONB,
+            suitability_result JSONB,
+            model_version VARCHAR(200),
+            created_by VARCHAR(100),
+            updated_by VARCHAR(100),
+            reviewed_by VARCHAR(100),
+            review_notes TEXT,
+            reviewed_at TIMESTAMP,
+            approved_at TIMESTAMP,
+            created_at TIMESTAMP DEFAULT NOW(),
+            updated_at TIMESTAMP DEFAULT NOW()
+        )""",
+        # 决策审计事件表
+        """CREATE TABLE IF NOT EXISTS decision_audit_events (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            decision_id UUID NOT NULL REFERENCES investment_decisions(id) ON DELETE CASCADE,
+            event_type VARCHAR(80) NOT NULL,
+            actor VARCHAR(100),
+            from_status VARCHAR(30),
+            to_status VARCHAR(30),
+            payload JSONB,
+            created_at TIMESTAMP DEFAULT NOW()
+        )""",
+        # 数据源快照表
+        """CREATE TABLE IF NOT EXISTS data_source_snapshots (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            source VARCHAR(100) NOT NULL,
+            dataset VARCHAR(100) NOT NULL,
+            status VARCHAR(30) NOT NULL DEFAULT 'running',
+            started_at TIMESTAMP DEFAULT NOW(),
+            finished_at TIMESTAMP,
+            coverage_start DATE,
+            coverage_end DATE,
+            record_count INTEGER,
+            error_message TEXT,
+            metadata JSONB,
+            created_at TIMESTAMP DEFAULT NOW()
+        )""",
+        # 指标快照表
+        """CREATE TABLE IF NOT EXISTS metric_snapshots (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            target_type VARCHAR(30) NOT NULL,
+            target_id VARCHAR(100) NOT NULL,
+            as_of_date DATE NOT NULL,
+            metric_name VARCHAR(100) NOT NULL,
+            metric_value DECIMAL(20, 8) NOT NULL,
+            metric_unit VARCHAR(30),
+            metric_window VARCHAR(30),
+            benchmark_code VARCHAR(50),
+            peer_group_key VARCHAR(100),
+            source_snapshot_id UUID REFERENCES data_source_snapshots(id) ON DELETE SET NULL,
+            details JSONB,
+            created_at TIMESTAMP DEFAULT NOW(),
+            updated_at TIMESTAMP DEFAULT NOW(),
+            CONSTRAINT metric_snapshots_unique_key UNIQUE (
+                target_type, target_id, as_of_date, metric_name, metric_window, benchmark_code, peer_group_key
+            )
+        )""",
+        # 预警规则表
+        """CREATE TABLE IF NOT EXISTS alert_rules (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            name VARCHAR(200) NOT NULL,
+            rule_type VARCHAR(50) NOT NULL,
+            scope_type VARCHAR(50) NOT NULL,
+            scope_id VARCHAR(100),
+            threshold JSONB,
+            enabled BOOLEAN DEFAULT TRUE,
+            created_by VARCHAR(100),
+            created_at TIMESTAMP DEFAULT NOW(),
+            updated_at TIMESTAMP DEFAULT NOW()
+        )""",
+        # 预警事件表
+        """CREATE TABLE IF NOT EXISTS alert_events (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            rule_id UUID REFERENCES alert_rules(id) ON DELETE SET NULL,
+            fund_id VARCHAR(100),
+            pool_member_id VARCHAR(100),
+            event_type VARCHAR(50) NOT NULL,
+            severity VARCHAR(20) NOT NULL,
+            title VARCHAR(200) NOT NULL,
+            message TEXT NOT NULL,
+            status VARCHAR(30) NOT NULL,
+            triggered_at TIMESTAMP DEFAULT NOW(),
+            resolved_at TIMESTAMP,
+            details JSONB,
+            created_at TIMESTAMP DEFAULT NOW()
+        )""",
+    ]
+
+    indexes = [
+        "CREATE INDEX IF NOT EXISTS idx_funds_wind_code ON funds(wind_code)",
+        "CREATE INDEX IF NOT EXISTS idx_funds_name ON funds(name)",
+        "CREATE INDEX IF NOT EXISTS idx_funds_type ON funds(type)",
+        "CREATE INDEX IF NOT EXISTS idx_research_profiles_peer ON fund_research_profiles(peer_group)",
+        "CREATE INDEX IF NOT EXISTS idx_research_profiles_style ON fund_research_profiles(style_label)",
+        "CREATE INDEX IF NOT EXISTS idx_research_profiles_benchmark ON fund_research_profiles(primary_benchmark)",
+        "CREATE INDEX IF NOT EXISTS fund_sales_rules_wind_code_idx ON fund_sales_rules(wind_code)",
+        "CREATE INDEX IF NOT EXISTS idx_nav_wind_code ON fund_nav(wind_code)",
+        "CREATE INDEX IF NOT EXISTS idx_nav_date ON fund_nav(trade_date)",
+        "CREATE INDEX IF NOT EXISTS idx_scores_target ON scores(target_type, target_id)",
+        "CREATE INDEX IF NOT EXISTS idx_scores_dimension ON scores(dimension)",
+        "CREATE INDEX IF NOT EXISTS idx_holdings_wind_code ON holdings(wind_code)",
+        "CREATE INDEX IF NOT EXISTS idx_holdings_quarter ON holdings(quarter)",
+        "CREATE INDEX IF NOT EXISTS idx_holdings_industry ON holdings(industry)",
+        "CREATE INDEX IF NOT EXISTS idx_exposures_wind_code ON factor_exposures(wind_code)",
+        "CREATE INDEX IF NOT EXISTS idx_exposures_quarter ON factor_exposures(quarter)",
+        "CREATE INDEX IF NOT EXISTS idx_attributions_wind_code ON performance_attributions(wind_code)",
+        "CREATE INDEX IF NOT EXISTS idx_managers_name ON managers(name)",
+        "CREATE INDEX IF NOT EXISTS idx_reports_manager ON research_reports(manager_id)",
+        "CREATE INDEX IF NOT EXISTS idx_reports_date ON research_reports(report_date)",
+        "CREATE INDEX IF NOT EXISTS idx_report_chunks_report ON research_report_chunks(report_id)",
+        "CREATE INDEX IF NOT EXISTS idx_report_chunks_embedding ON research_report_chunks(embedding_id)",
+        "CREATE INDEX IF NOT EXISTS idx_data_snapshots_source ON data_source_snapshots(source)",
+        "CREATE INDEX IF NOT EXISTS idx_data_snapshots_dataset ON data_source_snapshots(dataset)",
+        "CREATE INDEX IF NOT EXISTS idx_data_snapshots_status ON data_source_snapshots(status)",
+        "CREATE INDEX IF NOT EXISTS idx_data_snapshots_started ON data_source_snapshots(started_at)",
+        "CREATE INDEX IF NOT EXISTS idx_metric_snapshots_target ON metric_snapshots(target_type, target_id, as_of_date)",
+        "CREATE INDEX IF NOT EXISTS idx_metric_snapshots_name ON metric_snapshots(metric_name)",
+        "CREATE INDEX IF NOT EXISTS idx_metric_snapshots_source ON metric_snapshots(source_snapshot_id)",
+        "CREATE INDEX IF NOT EXISTS idx_fund_pools_name ON fund_pools(name)",
+        "CREATE INDEX IF NOT EXISTS idx_fund_pools_default ON fund_pools(is_default)",
+        "CREATE INDEX IF NOT EXISTS idx_pool_members_pool ON pool_members(pool_id)",
+        "CREATE INDEX IF NOT EXISTS idx_pool_members_fund ON pool_members(fund_id)",
+        "CREATE INDEX IF NOT EXISTS idx_pool_members_status ON pool_members(status)",
+        "CREATE INDEX IF NOT EXISTS idx_pool_members_next_review ON pool_members(next_review_date)",
+        "CREATE INDEX IF NOT EXISTS idx_alert_rules_type ON alert_rules(rule_type)",
+        "CREATE INDEX IF NOT EXISTS idx_alert_rules_scope ON alert_rules(scope_type, scope_id)",
+        "CREATE INDEX IF NOT EXISTS idx_alert_rules_enabled ON alert_rules(enabled)",
+        "CREATE INDEX IF NOT EXISTS idx_alert_events_rule ON alert_events(rule_id)",
+        "CREATE INDEX IF NOT EXISTS idx_alert_events_fund ON alert_events(fund_id)",
+        "CREATE INDEX IF NOT EXISTS idx_alert_events_pool_member ON alert_events(pool_member_id)",
+        "CREATE INDEX IF NOT EXISTS idx_alert_events_status ON alert_events(status)",
+        "CREATE INDEX IF NOT EXISTS idx_alert_events_severity ON alert_events(severity)",
+        "CREATE INDEX IF NOT EXISTS idx_alert_events_triggered ON alert_events(triggered_at)",
+        "CREATE INDEX IF NOT EXISTS idx_investment_decisions_target ON investment_decisions(target_type, target_id)",
+        "CREATE INDEX IF NOT EXISTS idx_investment_decisions_pool ON investment_decisions(pool_id)",
+        "CREATE INDEX IF NOT EXISTS idx_investment_decisions_status ON investment_decisions(decision_status)",
+        "CREATE INDEX IF NOT EXISTS idx_decision_audit_events_decision ON decision_audit_events(decision_id)",
+        "CREATE INDEX IF NOT EXISTS idx_decision_audit_events_type ON decision_audit_events(event_type)",
+    ]
+
+    migrations = [
+        "ALTER TABLE fund_nav ADD COLUMN IF NOT EXISTS unit_nav DECIMAL(10, 4)",
+        "ALTER TABLE fund_nav ADD COLUMN IF NOT EXISTS daily_return DECIMAL(12, 8)",
+        "ALTER TABLE fund_nav ADD COLUMN IF NOT EXISTS benchmark_nav DECIMAL(10, 4)",
+        "ALTER TABLE fund_nav ADD COLUMN IF NOT EXISTS discount_rate DECIMAL(12, 8)",
+        "UPDATE fund_nav SET unit_nav = nav WHERE unit_nav IS NULL AND nav IS NOT NULL",
+    ]
+
+    try:
+        with engine.connect() as conn:
+            for sql in tables:
+                conn.execute(text(sql))
+            for sql in migrations:
+                conn.execute(text(sql))
+            for sql in indexes:
+                conn.execute(text(sql))
+            conn.commit()
+        logger.info(f"Database tables initialized: {len(tables)} tables, {len(indexes)} indexes")
+        return True
+    except Exception as e:
+        logger.error(f"Database init failed: {e}")
+        return False
