@@ -1,5 +1,5 @@
 import { redirect } from 'next/navigation'
 
-export default function ProfessionalResearchOverviewRedirect() {
+export default function FundResearchModuleIndex() {
   redirect('/mod/fund-research/overview')
 }

@@ -1,24 +1,42 @@
 import Link from 'next/link'
-import { TrendingUp, Users, FileText, BarChart3, RefreshCw, Globe2, ClipboardCheck, GitCompareArrows, Filter } from 'lucide-react'
+import { Users, FileText, RefreshCw, ClipboardCheck, GitCompareArrows, Filter, Landmark, ShieldCheck, BookOpenCheck, Radar } from 'lucide-react'
 
 const navigationItems = [
   {
-    href: '/market',
-    icon: Globe2,
-    label: '选基金',
+    href: '/mod/fund-research/overview',
+    icon: Landmark,
+    label: '研究总览',
+    description: '九段式专业流程',
+  },
+  {
+    href: '/mod/fund-research/selection',
+    icon: Filter,
+    label: '准入初筛',
     description: '全市场研究库',
   },
   {
-    href: '/funds',
-    icon: TrendingUp,
-    label: '基金库',
-    description: '基础资料与详情',
+    href: '/mod/fund-research/peer-comparison',
+    icon: GitCompareArrows,
+    label: '同类横评',
+    description: 'Peer、基准与风格',
   },
   {
-    href: '/analysis/comparison',
-    icon: GitCompareArrows,
-    label: '基金对比',
-    description: '同类横评',
+    href: '/mod/fund-research/due-diligence',
+    icon: ShieldCheck,
+    label: '尽调工作台',
+    description: 'People、Process、ODD',
+  },
+  {
+    href: '/mod/fund-research/monitoring',
+    icon: Radar,
+    label: '监控复核',
+    description: '事件触发与论点漂移',
+  },
+  {
+    href: '/mod/fund-research/methodology',
+    icon: BookOpenCheck,
+    label: '方法论',
+    description: '来源、版本与审计',
   },
   {
     href: '/managers',
@@ -39,16 +57,10 @@ const navigationItems = [
     description: '覆盖率与缺口',
   },
   {
-    href: '/analysis',
-    icon: BarChart3,
-    label: '基金研究',
-    description: '单基金分析',
-  },
-  {
     href: '/screening',
     icon: Filter,
-    label: '研究筛选',
-    description: '方法论筛选',
+    label: '筛选工具',
+    description: '旧筛选器与模板',
   },
   {
     href: '/sync',
@@ -86,9 +98,9 @@ export default function DashboardLayout({
         </div>
       </header>
 
-      <div className="flex">
+      <div className="flex min-w-0">
         {/* 侧边栏 */}
-        <aside className="w-64 bg-white border-r border-gray-200 min-h-[calc(100vh-4rem)] sticky top-16">
+        <aside className="sticky top-16 hidden min-h-[calc(100vh-4rem)] w-64 shrink-0 self-start border-r border-gray-200 bg-white lg:block">
           <nav className="p-4 space-y-1">
             {navigationItems.map((item) => {
               const Icon = item.icon
@@ -111,7 +123,7 @@ export default function DashboardLayout({
         </aside>
 
         {/* 主内容区 */}
-        <main className="flex-1 p-8">
+        <main className="min-w-0 flex-1 p-4 sm:p-6 lg:p-8">
           {children}
         </main>
       </div>

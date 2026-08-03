@@ -12,6 +12,11 @@ export type MergedResearchRoute = {
   reason: string
 }
 
+export {
+  PROFESSIONAL_METHODOLOGY_VERSION,
+  professionalResearchStages,
+} from '@/lib/fund-research/methodology'
+
 export const coreResearchModules: CoreResearchModule[] = [
   {
     id: 'research-universe',

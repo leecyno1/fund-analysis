@@ -30,6 +30,7 @@ const allowedFiles = new Set([
   'scripts/research_review_report_methodology_sections_smoke.mjs',
   'scripts/screening_methodology_integration_smoke.mjs',
   'scripts/fund_detail_methodology_focus_smoke.mjs',
+  'scripts/newma_desk_fund_research_compat_smoke.mjs',
 ])
 
 function listFiles(dir) {

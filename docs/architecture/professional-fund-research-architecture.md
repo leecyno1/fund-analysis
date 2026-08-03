@@ -1,4 +1,6 @@
-# 专业基金研究平台架构
+# 专业基金研究平台架构（v1 历史说明）
+
+> 当前规范架构已迁移到 `docs/architecture/professional-fund-research-module-v2.md`。v2 以公开学术研究、CFA Manager Selection、Morningstar 公开方法和中国证监会基金评价原则为基础，采用九段式流程与 `Gates + Pillars + Confidence`，不再以单一综合分数作为决策核心。本文件保留用于解释旧模块合并过程。
 
 本模块定位为机构投资者的基金研究底座，不覆盖交易、购买或风控。页面、数据、工具和 AI 技能只回答三个问题：研究对象是谁、证据是否可信、研究结论如何复核与复用。
 

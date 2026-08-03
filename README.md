@@ -1,5 +1,18 @@
 # 基金经理评价分析系统
 
+> 架构 v2 已升级为“专业基金研究 + Newma-Desk Level 3 模组”。新版以研究范围、证据质量、同类/基准、量化轨迹、持仓风格、投资/运营尽调、决策治理、持续监控和方法审计九个阶段组织能力，不再以单一综合分数作为研究决策核心。
+
+## Newma-Desk 模组
+
+- Suite：`desk/suite.json`
+- 自动发现：`GET /.well-known/newma-desk-suite.json`
+- 独立入口：`/mod/fund-research/overview`（每日基金研究驾驶舱）
+- 驾驶舱：聚合真实证据覆盖、研究清单门槛、复核事件、数据健康和当前基金对象；入口不可用时明确降级，不填充演示结论
+- 兼容性：Manifest 1.1 / Bridge 1.0 / ViewSpec 1.0 / Level 3 Context
+- 验收：`npm run smoke:newma-desk`
+
+专业方法和论文来源见 `docs/research-methodology/sources.md`，规范架构见 `docs/architecture/professional-fund-research-module-v2.md`。
+
 一个面向基金研究的基金筛选、基金分析和基金经理评价系统，集成 Wind API 数据采集、调研报告管理、研究备忘录生成和多维度评分功能。
 
 ## ✨ 核心功能

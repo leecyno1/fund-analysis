@@ -1,0 +1,73 @@
+{
+  "id": "fund-research-data",
+  "name": "专业基金研究数据服务",
+  "description": "通过基金研究应用自身后端提供研究范围、证据覆盖与同类比较能力；不向 Desk 或浏览器暴露上游数据源密钥。",
+  "priority": 20,
+  "baseUrl": "http://127.0.0.1:3001/api",
+  "healthPath": "/newma-desk/health",
+  "transport": "rest",
+  "capabilities": {
+    "fund.universe.query": {
+      "method": "GET",
+      "path": "/funds",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "search": { "type": "string", "maxLength": 80 },
+          "type": { "type": "string", "maxLength": 80 },
+          "page": { "type": "integer", "minimum": 1 },
+          "limit": { "type": "integer", "minimum": 1, "maximum": 100 }
+        },
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "required": ["data", "pagination"],
+        "properties": {
+          "data": { "type": "array" },
+          "pagination": { "type": "object" }
+        },
+        "additionalProperties": true
+      },
+      "permission": "research.read"
+    },
+    "fund.evidence.snapshot": {
+      "method": "GET",
+      "path": "/evidence-coverage",
+      "inputSchema": {
+        "type": "object",
+        "properties": { "symbol": { "type": "string", "maxLength": 24 } },
+        "additionalProperties": false
+      },
+      "outputSchema": { "type": "object", "additionalProperties": true },
+      "permission": "research.read"
+    },
+    "fund.peer.evaluate": {
+      "method": "POST",
+      "path": "/funds/compare-matrix",
+      "inputSchema": {
+        "type": "object",
+        "required": ["windCodes"],
+        "properties": {
+          "windCodes": {
+            "type": "array",
+            "items": { "type": "string", "maxLength": 24 },
+            "minItems": 2,
+            "maxItems": 12
+          },
+          "window": { "enum": ["1y", "3y", "5y"] }
+        },
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "required": ["funds"],
+        "properties": { "funds": { "type": "array" } },
+        "additionalProperties": true
+      },
+      "permission": "research.read"
+    }
+  },
+  "timeoutSeconds": 60,
+  "allowedHosts": ["127.0.0.1", "localhost"]
+}

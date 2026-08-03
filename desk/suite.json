@@ -1,0 +1,301 @@
+{
+  "schemaVersion": "1.0",
+  "id": "professional-fund-research-suite",
+  "name": "专业基金研究",
+  "description": "以每日研究驾驶舱为入口，连接公开基金研究文献、机构经理选择流程、基金准入、同类评价、尽调、决策治理和持续监控。",
+  "version": "0.3.0",
+  "publisher": "leecyno1",
+  "upstream": "https://github.com/leecyno1/fund-analysis",
+  "tags": ["基金研究", "基金选择", "尽调", "监控", "方法论"],
+  "agentWorkspace": { "type": "desk" },
+  "runtime": {
+    "type": "external",
+    "baseUrlEnv": "NEWMA_DESK_FUND_RESEARCH_WEB_URL",
+    "defaultBaseUrl": "http://127.0.0.1:3001"
+  },
+  "manifest": {
+    "schemaVersion": "1.1",
+    "category": "research",
+    "navigation": {
+      "groupLabel": "专业基金研究",
+      "groupOrder": 20,
+      "itemOrder": 100,
+      "project": {
+        "id": "professional-fund-research",
+        "name": "专业基金研究",
+        "order": 22,
+        "description": "从研究范围、证据和同类评价，到投资/运营尽调、决策审计与持续监控。"
+      },
+      "icon": "research"
+    },
+    "compatibility": {
+      "level": 3,
+      "bridgeProtocol": "1.0",
+      "sdkVersion": "fund-research-adapter-0.1.0",
+      "viewSpecVersion": "1.0"
+    },
+    "permissions": ["research.read", "research.local-write"],
+    "dataServices": ["fund-research-data"],
+    "storage": {
+      "mode": "dedicated",
+      "adapter": "fund-research-postgres"
+    },
+    "actions": {
+      "fund.universe.query": {
+        "binding": {
+          "type": "data",
+          "service": "fund-research-data",
+          "capability": "fund.universe.query"
+        },
+        "execution": "request",
+        "permission": "research.read",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "search": { "type": "string", "maxLength": 80 },
+            "type": { "type": "string", "maxLength": 80 },
+            "page": { "type": "integer", "minimum": 1 },
+            "limit": { "type": "integer", "minimum": 1, "maximum": 100 }
+          },
+          "additionalProperties": false
+        },
+        "outputSchema": {
+          "type": "object",
+          "required": ["data", "pagination"],
+          "properties": {
+            "data": { "type": "array" },
+            "pagination": { "type": "object" },
+            "summary": { "type": "object" },
+            "source": { "type": "string" }
+          },
+          "additionalProperties": true
+        },
+        "confirmation": "none",
+        "timeoutSeconds": 30
+      },
+      "fund.evidence.snapshot": {
+        "binding": {
+          "type": "data",
+          "service": "fund-research-data",
+          "capability": "fund.evidence.snapshot"
+        },
+        "execution": "request",
+        "permission": "research.read",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "symbol": { "type": "string", "maxLength": 24 }
+          },
+          "additionalProperties": false
+        },
+        "outputSchema": { "type": "object", "additionalProperties": true },
+        "confirmation": "none",
+        "timeoutSeconds": 30
+      },
+      "fund.peer.evaluate": {
+        "binding": {
+          "type": "data",
+          "service": "fund-research-data",
+          "capability": "fund.peer.evaluate"
+        },
+        "execution": "request",
+        "permission": "research.read",
+        "inputSchema": {
+          "type": "object",
+          "required": ["windCodes"],
+          "properties": {
+            "windCodes": {
+              "type": "array",
+              "items": { "type": "string", "maxLength": 24 },
+              "minItems": 2,
+              "maxItems": 12
+            },
+            "window": { "enum": ["1y", "3y", "5y"] }
+          },
+          "additionalProperties": false
+        },
+        "outputSchema": {
+          "type": "object",
+          "required": ["funds"],
+          "properties": { "funds": { "type": "array" } },
+          "additionalProperties": true
+        },
+        "confirmation": "none",
+        "timeoutSeconds": 60
+      },
+      "fund.due-diligence.evaluate": {
+        "binding": {
+          "type": "agent",
+          "capability": "fund.due-diligence.evaluate",
+          "memoryScope": "user-agent-mod"
+        },
+        "execution": "task",
+        "permission": "research.read",
+        "inputSchema": {
+          "type": "object",
+          "required": ["symbol"],
+          "properties": {
+            "symbol": { "type": "string", "maxLength": 24 },
+            "focus": { "enum": ["people", "process", "parent", "price", "operations", "full"] }
+          },
+          "additionalProperties": false
+        },
+        "outputSchema": { "type": "object", "additionalProperties": true },
+        "confirmation": "none",
+        "timeoutSeconds": 300
+      },
+      "fund.monitoring.review": {
+        "binding": {
+          "type": "agent",
+          "capability": "fund.monitoring.review",
+          "memoryScope": "user-agent-mod"
+        },
+        "execution": "task",
+        "permission": "research.local-write",
+        "inputSchema": {
+          "type": "object",
+          "required": ["symbol", "trigger"],
+          "properties": {
+            "symbol": { "type": "string", "maxLength": 24 },
+            "trigger": { "type": "string", "maxLength": 240 }
+          },
+          "additionalProperties": false
+        },
+        "outputSchema": { "type": "object", "additionalProperties": true },
+        "confirmation": "user",
+        "timeoutSeconds": 300
+      },
+      "fund.methodology.audit": {
+        "binding": {
+          "type": "agent",
+          "capability": "fund.methodology.audit",
+          "memoryScope": "task"
+        },
+        "execution": "task",
+        "permission": "research.read",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "version": { "type": "string", "maxLength": 32 },
+            "scope": { "type": "string", "maxLength": 120 }
+          },
+          "additionalProperties": false
+        },
+        "outputSchema": { "type": "object", "additionalProperties": true },
+        "confirmation": "none",
+        "timeoutSeconds": 300
+      },
+      "fund.research.explain": {
+        "binding": {
+          "type": "agent",
+          "capability": "fund.research.explain",
+          "memoryScope": "user-agent-mod"
+        },
+        "execution": "task",
+        "permission": "research.read",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "symbol": { "type": "string", "maxLength": 24 },
+            "question": { "type": "string", "maxLength": 2000 }
+          },
+          "additionalProperties": false
+        },
+        "outputSchema": { "type": "object", "additionalProperties": true },
+        "confirmation": "none",
+        "timeoutSeconds": 300
+      }
+    },
+    "events": {
+      "emits": ["security.selected"],
+      "accepts": ["security.selected"]
+    },
+    "refresh": { "mode": "manual" }
+  },
+  "pages": [
+    {
+      "id": "fund-research-overview",
+      "name": "每日基金研究驾驶舱",
+      "description": "聚合证据健康、当前研究对象、补证任务、复核事件和九段式研究内核。",
+      "tags": ["基金研究", "驾驶舱", "证据", "复核"],
+      "route": "/mod/fund-research/overview",
+      "navigation": { "itemOrder": 10, "label": "每日驾驶舱" },
+      "defaultInstall": true
+    },
+    {
+      "id": "fund-selection",
+      "name": "基金准入与初筛",
+      "description": "处理研究范围、份额合并、证据覆盖、同类基准与量化准入门槛。",
+      "tags": ["基金选择", "准入", "初筛"],
+      "route": "/mod/fund-research/selection",
+      "navigation": { "itemOrder": 20, "label": "准入初筛" },
+      "defaultInstall": true
+    },
+    {
+      "id": "fund-due-diligence",
+      "name": "基金投资与运营尽调",
+      "description": "围绕 People、Process、Parent、Price、载体与运营完整性开展结构化尽调。",
+      "tags": ["基金尽调", "经理", "运营"],
+      "route": "/mod/fund-research/due-diligence",
+      "navigation": { "itemOrder": 30, "label": "尽调工作台" },
+      "defaultInstall": true
+    },
+    {
+      "id": "fund-peer-comparison",
+      "name": "同类组、基准与风格横评",
+      "description": "在可解释同类组和适配基准中比较滚动表现、风险、风格、主动程度与容量。",
+      "tags": ["同类组", "基准", "风格"],
+      "route": "/mod/fund-research/peer-comparison",
+      "navigation": { "itemOrder": 40, "label": "同类横评" },
+      "defaultInstall": true
+    },
+    {
+      "id": "fund-monitoring",
+      "name": "基金持续监控与复核",
+      "description": "根据经理、持仓、风格、风险、费用和数据变化触发研究复核。",
+      "tags": ["基金监控", "复核", "事件"],
+      "route": "/mod/fund-research/monitoring",
+      "navigation": { "itemOrder": 50, "label": "监控复核" },
+      "manifest": {
+        "permissions": ["research.read", "research.local-write", "storage.read", "storage.write"],
+        "storage": {
+          "mode": "desk-managed",
+          "namespaces": [
+            {
+              "id": "review-index",
+              "scope": "user-workspace",
+              "schemaVersion": 1,
+              "quotaMb": 4,
+              "maxItemKb": 64
+            }
+          ]
+        }
+      },
+      "defaultInstall": true
+    },
+    {
+      "id": "fund-methodology",
+      "name": "基金研究方法论与审计",
+      "description": "公开方法来源、版本、门槛、能力映射与可复现审计要求。",
+      "tags": ["方法论", "审计", "来源"],
+      "route": "/mod/fund-research/methodology",
+      "navigation": { "itemOrder": 60, "label": "方法论", "role": "settings" },
+      "manifest": {
+        "permissions": ["research.read", "research.local-write", "storage.read", "storage.write"],
+        "storage": {
+          "mode": "desk-managed",
+          "namespaces": [
+            {
+              "id": "methodology-preferences",
+              "scope": "user-workspace",
+              "schemaVersion": 1,
+              "quotaMb": 2,
+              "maxItemKb": 64
+            }
+          ]
+        }
+      },
+      "defaultInstall": true
+    }
+  ]
+}
