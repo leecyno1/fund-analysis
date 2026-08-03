@@ -18,9 +18,7 @@ import {
 } from 'lucide-react'
 import type { CamelFund } from '@/lib/backend-api'
 import {
-  buildMarketResearchChecklist,
   buildShareClassInfoByCode,
-  buyReadiness,
   getFeeValue,
   getMarketScreeningScore,
   getMaxDrawdown1y,
@@ -29,10 +27,19 @@ import {
   hasHoldingEvidence,
   holdingCount,
   numberValue,
-  operationStatus,
   textValue,
   type Fund,
 } from '@/lib/fund-research/market/market-workbench'
+import {
+  buildMarketFundResearchDecision,
+  marketReviewEventCode,
+  marketSalesRiskLevelCeiling,
+  type MarketFundResearchDecision,
+  type MarketMaterialGapSnapshot,
+  type MarketMaterialRuleSnapshot,
+  type MarketResearchRiskProfile,
+  type MarketReviewEventSnapshot,
+} from '@/lib/fund-research/decision'
 import { marketCompareBasketEvidenceTool } from '@/lib/research-platform/tools/market-compare-basket-evidence'
 import { marketCompareBasketWinLossTool } from '@/lib/research-platform/tools/market-compare-basket-win-loss'
 import { marketCurrentPageShortlistTool, type MarketShortlistLane } from '@/lib/research-platform/tools/market-current-page-shortlist'
@@ -41,7 +48,7 @@ import { marketPromotionQueueTool, type MarketPromotionLaneKey } from '@/lib/res
 import { materialEvidenceHref, reviewEventsHref } from '@/lib/research-platform/routes'
 
 type PurchasePlan = 'lump_sum' | 'sip'
-type RiskProfile = 'conservative' | 'balanced' | 'aggressive'
+type RiskProfile = MarketResearchRiskProfile
 type InvestmentHorizon = 'lt1y' | '1to3y' | 'gt3y'
 type SalesRiskFilter = '' | 'matched' | 'mismatch' | 'missing' | 'known'
 type ResearchChecklistStatusFilter = '' | 'complete' | 'repair' | 'blocked'
@@ -103,38 +110,6 @@ type MarketSummary = {
   marketResearchChecklist?: MarketResearchChecklistSummary
 }
 
-type MaterialRule = {
-  windCode: string
-  riskLevel: string | null
-  riskLevelSourceBacked: boolean
-  riskLevelEvidenceLabel: string
-  missingItems: string[]
-  missingCount: number
-  executionAmountGate: {
-    status: 'pass' | 'blocked' | 'unknown'
-    label: string
-    detail: string
-  } | null
-}
-
-type MaterialGap = {
-  windCode: string
-  missingItems: string[]
-  missingCount: number
-  nextAction: string
-  executionAmountGate: MaterialRule['executionAmountGate']
-}
-
-type ReviewEvent = {
-  id?: string
-  fund_id?: string | null
-  event_type?: string
-  status?: string
-  title?: string
-  message?: string
-  details?: unknown
-}
-
 type Pool = {
   id: string
   name?: string
@@ -162,11 +137,6 @@ type MarketSuitabilityImpact = {
 const PAGE_SIZE = 30
 const COMPARE_BASKET_LIMIT = 8
 const BATCH_CANDIDATE_LIMIT = 20
-const profileMaxSalesRiskLevel: Record<RiskProfile, number> = {
-  conservative: 2,
-  balanced: 3,
-  aggressive: 5,
-}
 
 const profileLabel: Record<RiskProfile, string> = {
   conservative: '稳健画像',
@@ -254,11 +224,6 @@ function normalizeCode(value: unknown) {
   return textValue(value).toUpperCase()
 }
 
-function reviewEventCode(event: ReviewEvent) {
-  const details = asRecord(event.details)
-  return normalizeCode(details.wind_code || details.fund_code || event.fund_id)
-}
-
 function formatPercent(value: number | null, digits = 2) {
   return value === null ? '待补' : `${(value * 100).toFixed(digits)}%`
 }
@@ -285,11 +250,6 @@ function downloadTsv(filename: string, content: string) {
   link.download = filename
   link.click()
   URL.revokeObjectURL(href)
-}
-
-function toRiskLevel(value: string | null) {
-  const match = String(value || '').match(/[1-5]/)
-  return match ? Number(match[0]) : null
 }
 
 export default function MarketBrowserClient({
@@ -343,9 +303,9 @@ export default function MarketBrowserClient({
   const [candidatePool, setCandidatePool] = useState<Pool | null>(null)
   const [candidatePoolMembers, setCandidatePoolMembers] = useState<PoolMember[]>([])
   const [savingCandidateCodes, setSavingCandidateCodes] = useState<Set<string>>(new Set())
-  const [materialRules, setMaterialRules] = useState<MaterialRule[]>([])
-  const [materialGaps, setMaterialGaps] = useState<MaterialGap[]>([])
-  const [reviewEvents, setReviewEvents] = useState<ReviewEvent[]>([])
+  const [materialRules, setMaterialRules] = useState<MarketMaterialRuleSnapshot[]>([])
+  const [materialGaps, setMaterialGaps] = useState<MarketMaterialGapSnapshot[]>([])
+  const [reviewEvents, setReviewEvents] = useState<MarketReviewEventSnapshot[]>([])
   const [materialLoading, setMaterialLoading] = useState(false)
   const [suitabilityImpact, setSuitabilityImpact] = useState<MarketSuitabilityImpact | null>(null)
   const [promotionLaneFocus, setPromotionLaneFocus] = useState<PromotionLaneFocus>('all')
@@ -382,7 +342,7 @@ export default function MarketBrowserClient({
     const amount = plannedAmount.trim()
     if (amount) params.set('plannedAmount', amount)
     if (salesRiskFilter) params.set('salesRiskFilter', salesRiskFilter)
-    if (salesRiskFilter === 'matched' || salesRiskFilter === 'mismatch') params.set('maxSalesRiskLevel', String(profileMaxSalesRiskLevel[riskProfile]))
+    if (salesRiskFilter === 'matched' || salesRiskFilter === 'mismatch') params.set('maxSalesRiskLevel', String(marketSalesRiskLevelCeiling(riskProfile)))
     if (hasNav) params.set('hasNav', hasNav)
     if (hasPerformance) params.set('hasPerformance', hasPerformance)
     if (hasHoldings) params.set('hasHoldings', hasHoldings)
@@ -520,7 +480,7 @@ export default function MarketBrowserClient({
         setMaterialGaps(Array.isArray(gapsPayload.gaps) ? gapsPayload.gaps : [])
       }
       if (alertsResponse.ok) {
-        const events = Array.isArray(alertsPayload.events) ? alertsPayload.events as ReviewEvent[] : []
+        const events = Array.isArray(alertsPayload.events) ? alertsPayload.events as MarketReviewEventSnapshot[] : []
         setReviewEvents(events.filter((event) => event.event_type === 'sales_rule_evidence' && event.status !== 'resolved'))
       }
       if (impactResponse.ok) setSuitabilityImpact(impactPayload)
@@ -549,79 +509,33 @@ export default function MarketBrowserClient({
   const materialRuleByCode = useMemo(() => new Map(materialRules.map((rule) => [normalizeCode(rule.windCode), rule])), [materialRules])
   const materialGapByCode = useMemo(() => new Map(materialGaps.map((gap) => [normalizeCode(gap.windCode), gap])), [materialGaps])
   const reviewEventsByCode = useMemo(() => {
-    const result = new Map<string, ReviewEvent[]>()
+    const result = new Map<string, MarketReviewEventSnapshot[]>()
     reviewEvents.forEach((event) => {
-      const code = reviewEventCode(event)
+      const code = marketReviewEventCode(event)
       if (!code) return
       result.set(code, [...(result.get(code) || []), event])
     })
     return result
   }, [reviewEvents])
-
-  const getSalesRuleGapStatus = useCallback((windCode: string) => {
-    const code = normalizeCode(windCode)
-    const rule = materialRuleByCode.get(code)
-    const rawGap = materialGapByCode.get(code)
-    const alerts = reviewEventsByCode.get(code) || []
-    const alertMissingItems = alerts.map((event) => `复查队列未解决：${event.title || '销售规则/R1-R5事件'}${event.message ? `（${event.message}）` : ''}`)
-    const missingItems = Array.from(new Set([...(rawGap?.missingItems || rule?.missingItems || []), ...alertMissingItems]))
-    const status: 'complete' | 'gap' | 'unknown' = alerts.length || missingItems.length ? 'gap' : rule ? 'complete' : 'unknown'
-    const activeReviewGateSource = { gateSource: 'local.alert_events.sales_rule_evidence' }
-    return {
-      status,
-      label: status === 'complete' ? '材料核验相对完整' : status === 'gap' ? `材料待补 ${missingItems.length} 项` : '材料尚未扫描',
-      missingItems,
-      missingCount: missingItems.length,
-      executionAmountGate: rawGap?.executionAmountGate || rule?.executionAmountGate || null,
-      riskLevel: rule?.riskLevel || null,
-      riskLevelSourceBacked: rule?.riskLevelSourceBacked === true,
-      riskLevelEvidenceLabel: rule?.riskLevelEvidenceLabel || 'R1-R5 来源待补',
-      gap: rawGap || alerts.length ? {
-        alertsHref: alerts.length ? reviewEventsQueueHref : null,
-        nextAction: alerts.length ? '先处理复查队列，再回到全市场严格重评' : rawGap?.nextAction || '补齐材料核验后重评',
-      } : null,
-      ...(alerts.length ? activeReviewGateSource : { gateSource: 'local.sales_rules' }),
-    }
-  }, [materialRuleByCode, materialGapByCode, reviewEventsByCode, reviewEventsQueueHref])
-
-  const riskSuitabilityStatus = useCallback((fund: Fund) => {
-    const salesGap = getSalesRuleGapStatus(fund.windCode)
-    const riskLevel = toRiskLevel(salesGap.riskLevel)
-    if (riskLevel === null || !salesGap.riskLevelSourceBacked) {
-      return {
-        status: 'missing' as const,
-        label: '风险等级缺失',
-        detail: 'R1-R5 来源未完成可信度闸门，不能推断适当性通过。',
-      }
-    }
-    if (riskLevel > profileMaxSalesRiskLevel[riskProfile]) {
-      return {
-        status: 'mismatch' as const,
-        label: '适当性不匹配',
-        detail: `风险等级超过当前${profileLabel[riskProfile]}上限。`,
-      }
-    }
-    return {
-      status: 'matched' as const,
-      label: '适当性匹配',
-      detail: `${salesGap.riskLevel} 与当前${profileLabel[riskProfile]}匹配。`,
-    }
-  }, [getSalesRuleGapStatus, riskProfile])
-
-  const suitabilityGateAllowsResearch = (fund: Fund) => riskSuitabilityStatus(fund).status === 'matched'
-  const executionAmountGateAllowsResearch = (fund: Fund) => getSalesRuleGapStatus(fund.windCode).executionAmountGate?.status !== 'blocked'
-
-  const formalPurchaseGate = useCallback((fund: Fund) => {
-    const operation = operationStatus(fund)
-    const salesGap = getSalesRuleGapStatus(fund.windCode)
-    const suitability = riskSuitabilityStatus(fund)
-    const amountGate = salesGap.executionAmountGate
-    if (operation.status === 'blocked') return { passed: false, label: '产品状态阻断', reportLabel: '产品状态阻断', reason: operation.reason, actionLabel: '看排除原因' }
-    if (salesGap.status !== 'complete') return { passed: false, label: '材料核验阻断', reportLabel: '材料核验/R1-R5 未清零', reason: salesGap.missingItems.join('、') || '材料核验尚未完成', actionLabel: salesGap.gap?.alertsHref ? '开复查队列' : '补材料核验' }
-    if (amountGate?.status === 'blocked') return { passed: false, label: '金额不匹配', reportLabel: '计划金额门禁阻断', reason: amountGate.detail, actionLabel: '补金额门槛' }
-    if (suitability.status !== 'matched') return { passed: false, label: suitability.label, reportLabel: suitability.label, reason: suitability.detail, actionLabel: '补风险等级' }
-    return { passed: true, label: '正式门禁通过', reportLabel: '可进入研究复核', reason: '材料核验、金额门禁与适当性均未触发结构化阻断。', actionLabel: '看详情' }
-  }, [getSalesRuleGapStatus, riskSuitabilityStatus])
+  const researchDecisionByCode = useMemo(() => {
+    const asOf = new Date().toISOString()
+    return new Map(funds.map((fund) => {
+      const code = normalizeCode(fund.windCode)
+      return [code, buildMarketFundResearchDecision({
+        fund,
+        riskProfile,
+        materialRule: materialRuleByCode.get(code),
+        materialGap: materialGapByCode.get(code),
+        reviewEvents: reviewEventsByCode.get(code),
+        asOf,
+      })] as const
+    }))
+  }, [funds, riskProfile, materialRuleByCode, materialGapByCode, reviewEventsByCode])
+  const researchDecisionFor = useCallback((fund: Fund): MarketFundResearchDecision => {
+    const decision = researchDecisionByCode.get(normalizeCode(fund.windCode))
+    if (!decision) throw new Error(`基金 ${fund.windCode} 缺少统一研究决策`)
+    return decision
+  }, [researchDecisionByCode])
 
   const shareClassInfoByCode = useMemo(() => buildShareClassInfoByCode(funds), [funds])
   const displayFunds = useMemo(() => shareClassDisplayMode === 'expanded'
@@ -632,6 +546,12 @@ export default function MarketBrowserClient({
   const fundDetailHref = useCallback((fund: Fund) => withMarketResearchContext(`/funds/${encodeURIComponent(fund.id || fund.windCode)}`, true), [withMarketResearchContext])
   const salesRulesHrefForCodes = useCallback((codes: string[]) => withMarketPurchasePlan(materialEvidenceHref({ codes: codes.join(',') || undefined })), [withMarketPurchasePlan])
   const buildComparisonHref = useCallback((codes: string[]) => withMarketResearchContext(`/analysis/comparison?codes=${codes.map((code) => encodeURIComponent(code)).join(',')}`, true), [withMarketResearchContext])
+  const materialReviewHrefForDecision = useCallback((researchDecision: MarketFundResearchDecision) => (
+    researchDecision.material.actionKind === 'review-events' ? reviewEventsQueueHref : null
+  ), [reviewEventsQueueHref])
+  const materialActionHrefForDecision = useCallback((researchDecision: MarketFundResearchDecision) => (
+    materialReviewHrefForDecision(researchDecision) || salesRulesHrefForCodes([researchDecision.decision.subjectId])
+  ), [materialReviewHrefForDecision, salesRulesHrefForCodes])
   const batchSalesRulesHref = salesRulesHrefForCodes([])
 
   const toggleCompare = (code: string) => {
@@ -642,9 +562,12 @@ export default function MarketBrowserClient({
 
   const saveFundToCandidatePool = useCallback(async (fund: Fund) => {
     if (candidateMemberCodes.has(fund.windCode.toUpperCase())) return
-    const salesGap = getSalesRuleGapStatus(fund.windCode)
-    const suitability = riskSuitabilityStatus(fund)
-    const gate = formalPurchaseGate(fund)
+    const researchDecision = researchDecisionFor(fund)
+    const { formalGate: gate, material, suitability } = researchDecision
+    if (!gate.passed) {
+      setBannerMessage(`${fund.name} 未加入观察池：${gate.reason}`)
+      return
+    }
     const score = getMarketScreeningScore(fund)
     setSavingCandidateCodes((current) => new Set(current).add(fund.windCode))
     try {
@@ -667,8 +590,9 @@ export default function MarketBrowserClient({
             marketBrowser: { score, selectedAt: new Date().toISOString() },
             investorContext: { riskProfile, investmentHorizon, purchasePlan, plannedAmount: numberValue(plannedAmount) },
             purchaseGate: { level: 'watchlist', evidenceGrade: 'B', blocked: !gate.passed },
+            fundResearchDecision: researchDecision.decision,
             riskSuitability: suitability,
-            salesRuleGap: { checkedCode: fund.windCode, ...salesGap },
+            salesRuleGap: { checkedCode: fund.windCode, ...material },
           },
         }),
       })
@@ -685,12 +609,12 @@ export default function MarketBrowserClient({
         return next
       })
     }
-  }, [candidateMemberCodes, getSalesRuleGapStatus, riskSuitabilityStatus, formalPurchaseGate, ensureDefaultPool, purchasePlan, plannedAmount, riskProfile, investmentHorizon, loadCandidatePoolContext])
+  }, [candidateMemberCodes, researchDecisionFor, ensureDefaultPool, purchasePlan, plannedAmount, riskProfile, investmentHorizon, loadCandidatePoolContext])
 
   const saveCurrentPageToPool = async () => {
     const candidates = displayFunds
       .filter((fund) => !candidateMemberCodes.has(fund.windCode.toUpperCase()))
-      .filter((fund) => formalPurchaseGate(fund).passed)
+      .filter((fund) => researchDecisionFor(fund).formalGate.passed)
       .slice(0, BATCH_CANDIDATE_LIMIT)
     for (const fund of candidates) await saveFundToCandidatePool(fund)
     setBannerMessage(`当前页前 ${candidates.length} 只门禁通过样本已写入默认观察池。`)
@@ -699,22 +623,20 @@ export default function MarketBrowserClient({
   const marketDecisionExplainerInput = {
     items: displayFunds.map((fund) => {
       const score = getMarketScreeningScore(fund)
-      const gate = formalPurchaseGate(fund)
-      const salesGap = getSalesRuleGapStatus(fund.windCode)
-      const suitability = riskSuitabilityStatus(fund)
-      const readiness = buyReadiness(fund, salesGap.status === 'complete')
+      const researchDecision = researchDecisionFor(fund)
+      const { formalGate: gate, material, suitability, readiness, operation } = researchDecision
       return {
         windCode: fund.windCode,
         name: fund.name,
         initialScore: score.total,
         formalGatePassed: gate.passed,
         formalGateLabel: gate.label,
-        materialStatus: salesGap.status,
-        materialReviewHref: salesGap.gap?.alertsHref || null,
-        executionAmountGateStatus: salesGap.executionAmountGate?.status || null,
+        materialStatus: material.status,
+        materialReviewHref: materialReviewHrefForDecision(researchDecision),
+        executionAmountGateStatus: material.executionAmountGate?.status || null,
         suitabilityStatus: suitability.status,
         readinessLevel: readiness.level,
-        operationStatus: operationStatus(fund).status,
+        operationStatus: operation.status,
       }
     }),
     profileLabel: profileLabel[riskProfile],
@@ -740,11 +662,8 @@ export default function MarketBrowserClient({
   const marketShortlistInput = {
     items: displayFunds.map((fund) => {
       const score = getMarketScreeningScore(fund)
-      const gate = formalPurchaseGate(fund)
-      const salesGap = getSalesRuleGapStatus(fund.windCode)
-      const suitability = riskSuitabilityStatus(fund)
-      const readiness = buyReadiness(fund, salesGap.status === 'complete')
-      const checklist = buildMarketResearchChecklist(fund, salesGap.status === 'complete')
+      const researchDecision = researchDecisionFor(fund)
+      const { formalGate: gate, material, suitability, readiness, checklist, operation } = researchDecision
       return {
         windCode: fund.windCode,
         name: fund.name,
@@ -757,20 +676,20 @@ export default function MarketBrowserClient({
         formalGateReportLabel: gate.reportLabel,
         formalGateReason: gate.reason,
         formalGateActionLabel: gate.actionLabel,
-        formalGateActionHref: salesGap.gap?.alertsHref || salesRulesHrefForCodes([fund.windCode]),
+        formalGateActionHref: materialActionHrefForDecision(researchDecision),
         readinessLevel: readiness.level,
         readinessLabel: readiness.label,
         readinessGaps: readiness.gaps,
-        materialStatus: salesGap.status,
-        materialLabel: salesGap.label,
-        materialReviewHref: salesGap.gap?.alertsHref || null,
-        executionAmountGateStatus: salesGap.executionAmountGate?.status || null,
-        executionAmountGateLabel: salesGap.executionAmountGate?.label || null,
-        executionAmountGateDetail: salesGap.executionAmountGate?.detail || null,
+        materialStatus: material.status,
+        materialLabel: material.label,
+        materialReviewHref: materialReviewHrefForDecision(researchDecision),
+        executionAmountGateStatus: material.executionAmountGate?.status || null,
+        executionAmountGateLabel: material.executionAmountGate?.label || null,
+        executionAmountGateDetail: material.executionAmountGate?.detail || null,
         suitabilityStatus: suitability.status,
         suitabilityLabel: suitability.label,
         hasHoldingEvidence: hasHoldingEvidence(fund),
-        operationStatus: operationStatus(fund).status,
+        operationStatus: operation.status,
         researchChecklistLabel: checklist.label,
         researchChecklistLights: checklist.items.map((item) => `${item.label}:${item.status}`).join('；'),
         researchChecklistFirstGap: checklist.firstGap,
@@ -790,31 +709,28 @@ export default function MarketBrowserClient({
   const marketPromotionQueueInput = {
     items: displayFunds.map((fund) => {
       const score = getMarketScreeningScore(fund)
-      const readiness = buyReadiness(fund, getSalesRuleGapStatus(fund.windCode).status === 'complete')
-      const salesGap = getSalesRuleGapStatus(fund.windCode)
-      const suitability = riskSuitabilityStatus(fund)
-      const formalGate = formalPurchaseGate(fund)
-      const checklist = buildMarketResearchChecklist(fund, salesGap.status === 'complete')
+      const researchDecision = researchDecisionFor(fund)
+      const { readiness, material, suitability, formalGate, checklist, operation } = researchDecision
       return {
         windCode: fund.windCode,
         name: fund.name,
         initialScore: score.total,
-        operationStatus: operationStatus(fund).status,
-        operationReason: operationStatus(fund).reason,
+        operationStatus: operation.status,
+        operationReason: operation.reason,
         readinessGaps: readiness.gaps,
-        materialStatus: salesGap.status,
-        materialMissingCount: salesGap.missingCount,
-        materialMissingItems: salesGap.missingItems,
-        materialReviewHref: salesGap.gap?.alertsHref || null,
-        materialNextAction: salesGap.gap?.nextAction || null,
-        executionAmountGateStatus: salesGap.executionAmountGate?.status || null,
-        executionAmountGateDetail: salesGap.executionAmountGate?.detail || null,
+        materialStatus: material.status,
+        materialMissingCount: material.missingCount,
+        materialMissingItems: material.missingItems,
+        materialReviewHref: materialReviewHrefForDecision(researchDecision),
+        materialNextAction: material.nextAction,
+        executionAmountGateStatus: material.executionAmountGate?.status || null,
+        executionAmountGateDetail: material.executionAmountGate?.detail || null,
         suitabilityStatus: suitability.status,
         suitabilityDetail: suitability.detail,
         formalGateReason: formalGate.reason,
         hasHoldingEvidence: hasHoldingEvidence(fund),
         detailHref: fundDetailHref(fund),
-        materialHref: salesRulesHrefForCodes([fund.windCode]),
+        materialHref: materialActionHrefForDecision(researchDecision),
         researchChecklistLabel: checklist.label,
         researchChecklistLights: checklist.items.map((item) => `${item.label}:${item.status}`).join('；'),
         researchChecklistFirstGap: checklist.firstGap,
@@ -852,21 +768,19 @@ export default function MarketBrowserClient({
   const marketPromotionTasksTsv = marketPromotionQueue.tasksTsv
 
   const compareBasketSalesRuleGate = {
-    gapFunds: selectedCompareFunds.filter((fund) => getSalesRuleGapStatus(fund.windCode).status === 'gap').length,
-    missingItems: selectedCompareFunds.reduce((totalCount, fund) => totalCount + getSalesRuleGapStatus(fund.windCode).missingCount, 0),
-    unknownFunds: selectedCompareFunds.filter((fund) => getSalesRuleGapStatus(fund.windCode).status === 'unknown').length,
-    amountBlockedFunds: selectedCompareFunds.filter((fund) => getSalesRuleGapStatus(fund.windCode).executionAmountGate?.status === 'blocked').length,
-    suitabilityMismatchFunds: selectedCompareFunds.filter((fund) => riskSuitabilityStatus(fund).status === 'mismatch').length,
-    suitabilityMissingFunds: selectedCompareFunds.filter((fund) => riskSuitabilityStatus(fund).status === 'missing').length,
+    gapFunds: selectedCompareFunds.filter((fund) => researchDecisionFor(fund).material.status === 'gap').length,
+    missingItems: selectedCompareFunds.reduce((totalCount, fund) => totalCount + researchDecisionFor(fund).material.missingCount, 0),
+    unknownFunds: selectedCompareFunds.filter((fund) => researchDecisionFor(fund).material.status === 'unknown').length,
+    amountBlockedFunds: selectedCompareFunds.filter((fund) => researchDecisionFor(fund).material.executionAmountGate?.status === 'blocked').length,
+    suitabilityMismatchFunds: selectedCompareFunds.filter((fund) => researchDecisionFor(fund).suitability.status === 'mismatch').length,
+    suitabilityMissingFunds: selectedCompareFunds.filter((fund) => researchDecisionFor(fund).suitability.status === 'missing').length,
   }
   const compareBasketFormalActionsBlocked = compareBasketSalesRuleGate.amountBlockedFunds > 0
   const compareBasketEvidenceInput = {
     items: selectedCompareFunds.map((fund) => {
-      const readiness = buyReadiness(fund, getSalesRuleGapStatus(fund.windCode).status === 'complete')
       const score = getMarketScreeningScore(fund)
-      const gate = formalPurchaseGate(fund)
-      const salesGap = getSalesRuleGapStatus(fund.windCode)
-      const suitability = riskSuitabilityStatus(fund)
+      const researchDecision = researchDecisionFor(fund)
+      const { readiness, formalGate: gate, material, suitability } = researchDecision
       const shareClassInfo = shareClassInfoByCode.get(fund.windCode.toUpperCase())
       return {
         windCode: fund.windCode,
@@ -881,22 +795,22 @@ export default function MarketBrowserClient({
         formalGateReason: gate.reason,
         formalGateActionLabel: gate.actionLabel,
         suitabilityLabel: suitability.label,
-        materialLabel: salesGap.label,
-        materialMissingItems: salesGap.missingItems,
-        executionAmountGateLabel: salesGap.executionAmountGate?.label || null,
-        executionAmountGateDetail: salesGap.executionAmountGate?.detail || null,
+        materialLabel: material.label,
+        materialMissingItems: material.missingItems,
+        executionAmountGateLabel: material.executionAmountGate?.label || null,
+        executionAmountGateDetail: material.executionAmountGate?.detail || null,
         readinessLabel: readiness.label,
         readinessGaps: readiness.gaps,
         researchListStatus: candidateMemberCodes.has(fund.windCode.toUpperCase()) ? '已在观察池' : '尚未入池',
         shareClassHint: shareClassInfo?.siblingCount ? `同基金 ${shareClassInfo.siblingCount + 1} 个份额；多份额对比` : '单份额或同类份额待识别',
         fundDetailHref: fundDetailHref(fund),
-        materialHref: salesGap.gap?.alertsHref || salesRulesHrefForCodes([fund.windCode]),
+        materialHref: materialActionHrefForDecision(researchDecision),
       }
     }),
     gate: compareBasketSalesRuleGate,
     readiness: {
-      blocked: selectedCompareFunds.filter((fund) => buyReadiness(fund, getSalesRuleGapStatus(fund.windCode).status === 'complete').level === 'blocked').length,
-      verify: selectedCompareFunds.filter((fund) => buyReadiness(fund, getSalesRuleGapStatus(fund.windCode).status === 'complete').level === 'verify').length,
+      blocked: selectedCompareFunds.filter((fund) => researchDecisionFor(fund).readiness.level === 'blocked').length,
+      verify: selectedCompareFunds.filter((fund) => researchDecisionFor(fund).readiness.level === 'verify').length,
     },
     profileLabel: profileLabel[riskProfile],
     comparisonHref: buildComparisonHref(selectedCompareCodes),
@@ -909,10 +823,8 @@ export default function MarketBrowserClient({
   const compareBasketWinLossInput = {
     items: selectedCompareFunds.map((fund) => {
       const score = getMarketScreeningScore(fund)
-      const gate = formalPurchaseGate(fund)
-      const readiness = buyReadiness(fund, getSalesRuleGapStatus(fund.windCode).status === 'complete')
-      const salesGap = getSalesRuleGapStatus(fund.windCode)
-      const suitability = riskSuitabilityStatus(fund)
+      const researchDecision = researchDecisionFor(fund)
+      const { formalGate: gate, readiness, material, suitability } = researchDecision
       return {
         windCode: fund.windCode,
         name: fund.name,
@@ -924,11 +836,11 @@ export default function MarketBrowserClient({
         formalGateReason: gate.reason,
         readinessLevel: readiness.level,
         readinessGaps: readiness.gaps,
-        materialStatus: salesGap.status,
-        materialLabel: salesGap.label,
-        materialHref: salesGap.gap?.alertsHref || salesRulesHrefForCodes([fund.windCode]),
-        executionAmountGateStatus: salesGap.executionAmountGate?.status || null,
-        executionAmountGateDetail: salesGap.executionAmountGate?.detail || null,
+        materialStatus: material.status,
+        materialLabel: material.label,
+        materialHref: materialActionHrefForDecision(researchDecision),
+        executionAmountGateStatus: material.executionAmountGate?.status || null,
+        executionAmountGateDetail: material.executionAmountGate?.detail || null,
         suitabilityStatus: suitability.status,
         suitabilityLabel: suitability.label,
         suitabilityDetail: suitability.detail,
@@ -948,8 +860,8 @@ export default function MarketBrowserClient({
   const compareBasketWinLossTsv = compareBasketWinLossResult.data?.tsv || ''
 
   const smartCompareCandidates = marketShortlist.shortlistRows.slice(0, COMPARE_BASKET_LIMIT).map((row) => row.windCode)
-  const researchChecklistLights = displayFunds.map((fund) => buildMarketResearchChecklist(fund, getSalesRuleGapStatus(fund.windCode).status === 'complete').items)
-  const researchChecklistFirstGap = displayFunds.map((fund) => buildMarketResearchChecklist(fund, getSalesRuleGapStatus(fund.windCode).status === 'complete').firstGap)
+  const researchChecklistLights = displayFunds.map((fund) => researchDecisionFor(fund).checklist.items)
+  const researchChecklistFirstGap = displayFunds.map((fund) => researchDecisionFor(fund).checklist.firstGap)
 
   const marketChecklistSummary = marketSummary.marketResearchChecklist
   const marketChecklistStatusBuckets = marketChecklistSummary?.statusBuckets || {}
@@ -972,16 +884,16 @@ export default function MarketBrowserClient({
   }
   const marketChecklistWorkOrderRows = displayFunds.map((fund, index) => {
     const score = getMarketScreeningScore(fund)
-    const checklist = buildMarketResearchChecklist(fund, getSalesRuleGapStatus(fund.windCode).status === 'complete')
-    const salesGap = getSalesRuleGapStatus(fund.windCode)
+    const researchDecision = researchDecisionFor(fund)
+    const { checklist, material } = researchDecision
     return {
       index: index + 1,
       fund,
       score,
       checklist,
-      salesGap,
+      material,
       nextAction: checklist.items[0]?.key === 'foundation' && checklist.items[0].status !== 'ready' ? '批量补基础数据' : checklist.firstGap,
-      href: salesGap.gap?.alertsHref || salesRulesHrefForCodes([fund.windCode]),
+      href: materialActionHrefForDecision(researchDecision),
     }
   }).filter((row) => row.checklist.status !== 'complete')
   const marketChecklistWorkOrderTsv = [
@@ -989,30 +901,27 @@ export default function MarketBrowserClient({
     ...marketChecklistWorkOrderRows.map((row) => [
       row.index, row.checklist.firstGap, row.fund.windCode, row.fund.name, row.fund.type, row.score.total,
       row.checklist.backendLabel, row.checklist.label, row.checklist.items.map((item) => `${item.label}:${item.status}`).join('；'),
-      row.salesGap.missingItems.join('、') || row.checklist.firstGap, row.nextAction, row.href, fundDetailHref(row.fund), '体检缺口队列只服务基金研究补证',
+      row.material.missingItems.join('、') || row.checklist.firstGap, row.nextAction, row.href, fundDetailHref(row.fund), '体检缺口队列只服务基金研究补证',
     ]),
   ].map((row) => row.map(tsvCell).join('\t')).join('\n')
 
   const marketExportRows = displayFunds.map((fund) => {
     const score = getMarketScreeningScore(fund)
-    const gate = formalPurchaseGate(fund)
-    const suitability = riskSuitabilityStatus(fund)
-    const salesGap = getSalesRuleGapStatus(fund.windCode)
-    const readiness = buyReadiness(fund, salesGap.status === 'complete')
-    const checklist = buildMarketResearchChecklist(fund, salesGap.status === 'complete')
-    return { fund, score, gate, suitability, salesGap, readiness, checklist }
+    const researchDecision = researchDecisionFor(fund)
+    const { formalGate: gate, suitability, material, readiness, checklist } = researchDecision
+    return { fund, score, gate, suitability, material, readiness, checklist, researchDecision }
   })
   const marketCurrentPageTsv = [
     ['基金代码', '基金名称', '类型', '初筛分', '正式门禁', '门禁原因', '适当性', '销售规则状态', '计划金额门禁', '缺口项', '持仓证据', '研究证据', '研究复核体检', '体检六灯', '体检首要缺口', '后端全市场体检', '份额提示', '下一动作', '基金详情入口', '销售规则入口'],
     ...marketExportRows.map((row) => [
       row.fund.windCode, row.fund.name, row.fund.type, `${row.score.total}/${row.score.grade}/${row.score.label}`,
-      row.gate.reportLabel, row.gate.reason, row.suitability.label, row.salesGap.label,
-      row.salesGap.executionAmountGate ? `${row.salesGap.executionAmountGate.label}：${row.salesGap.executionAmountGate.detail}` : '金额门槛待扫描',
-      row.salesGap.missingItems.join('、') || '无', hasHoldingEvidence(row.fund) ? `持仓 ${holdingCount(row.fund)} 条` : '持仓暴露待补',
+      row.gate.reportLabel, row.gate.reason, row.suitability.label, row.material.label,
+      row.material.executionAmountGate ? `${row.material.executionAmountGate.label}：${row.material.executionAmountGate.detail}` : '金额门槛待扫描',
+      row.material.missingItems.join('、') || '无', hasHoldingEvidence(row.fund) ? `持仓 ${holdingCount(row.fund)} 条` : '持仓暴露待补',
       `${row.readiness.label}${row.readiness.gaps.length ? `：${row.readiness.gaps.join('、')}` : ''}`, row.checklist.label,
       row.checklist.items.map((item) => `${item.label}:${item.status}`).join('；'), row.checklist.firstGap, row.checklist.backendLabel,
       shareClassInfoByCode.get(row.fund.windCode.toUpperCase())?.siblingCount ? '同基金多份额对比' : '单份额',
-      row.gate.actionLabel, fundDetailHref(row.fund), row.salesGap.gap?.alertsHref || salesRulesHrefForCodes([row.fund.windCode]),
+      row.gate.actionLabel, fundDetailHref(row.fund), materialActionHrefForDecision(row.researchDecision),
     ]),
   ].map((row) => row.map(tsvCell).join('\t')).join('\n')
 
@@ -1091,7 +1000,7 @@ export default function MarketBrowserClient({
     { label: '来源日期', matches: (item: string) => item.includes('来源') || item.includes('过期') },
   ].map((guide) => ({
     ...guide,
-    count: displayFunds.filter((fund) => getSalesRuleGapStatus(fund.windCode).missingItems.some(guide.matches)).length,
+    count: displayFunds.filter((fund) => researchDecisionFor(fund).material.missingItems.some(guide.matches)).length,
     href: guide.label === '复查队列' ? reviewEventsQueueHref : salesRulesHrefForCodes(displayFunds.map((fund) => fund.windCode)),
   }))
 
@@ -1188,10 +1097,8 @@ export default function MarketBrowserClient({
               <tbody className="divide-y divide-slate-100">
                 {displayFunds.map((fund) => {
                   const score = getMarketScreeningScore(fund)
-                  const gate = formalPurchaseGate(fund)
-                  const suitability = riskSuitabilityStatus(fund)
-                  const salesGap = getSalesRuleGapStatus(fund.windCode)
-                  const checklist = buildMarketResearchChecklist(fund, salesGap.status === 'complete')
+                  const researchDecision = researchDecisionFor(fund)
+                  const { formalGate: gate, suitability, material, checklist } = researchDecision
                   const shareClassInfo = shareClassInfoByCode.get(fund.windCode.toUpperCase())
                   const inPool = candidateMemberCodes.has(fund.windCode.toUpperCase())
                   const saving = savingCandidateCodes.has(fund.windCode)
@@ -1201,10 +1108,10 @@ export default function MarketBrowserClient({
                     <td className="px-3 py-4"><div className="font-semibold">{score.isAvailable ? score.total : '数据待补'}</div><div className="mt-1 text-xs text-slate-500">{score.grade} · {score.label}</div></td>
                     <td className="px-3 py-4"><div className="font-medium">{formatPercent(getReturn1y(fund))}</div><div className="mt-1 text-xs text-slate-500">回撤 {formatPercent(getMaxDrawdown1y(fund))} · 夏普 {formatNumber(getSharpe1y(fund))}</div></td>
                     <td className="px-3 py-4"><div>{formatAsset(numberValue(fund.totalAsset))}</div><div className="mt-1 text-xs text-slate-500">持仓 {holdingCount(fund) || '待补'} 条</div></td>
-                    <td className="px-3 py-4"><span className={`rounded-full px-2 py-1 text-xs font-semibold ${suitability.status === 'matched' ? 'bg-emerald-50 text-emerald-700' : suitability.status === 'mismatch' ? 'bg-rose-50 text-rose-700' : 'bg-amber-50 text-amber-800'}`}>{suitability.label}</span><div data-testid="market-row-amount-gate" className="mt-2 text-[11px] text-slate-500">{salesGap.executionAmountGate?.label || '金额门槛待扫描'}</div></td>
-                    <td className="px-3 py-4"><div className="text-sm font-medium">{salesGap.label}</div><div className="mt-1 max-w-[220px] text-xs leading-5 text-slate-500">{salesGap.missingItems.slice(0, 2).join('、') || salesGap.riskLevelEvidenceLabel}</div></td>
-                    <td data-testid="market-row-research-checklist" className="px-3 py-4"><div data-testid="market-card-research-checklist" className="flex flex-wrap gap-1">{checklist.items.map((item) => <span key={item.key} title={item.detail} className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${item.status === 'ready' ? 'bg-emerald-50 text-emerald-700' : item.status === 'blocked' ? 'bg-rose-50 text-rose-700' : 'bg-amber-50 text-amber-800'}`}>{item.label}</span>)}</div><div className="mt-2 text-[11px] text-slate-500">全市场底稿：{checklist.backendLabel}</div><div data-testid="market-row-formal-gate" className="mt-1 text-[11px] font-medium text-slate-700">{gate.reportLabel}</div><div data-testid="market-card-formal-gate" className="hidden">{gate.reportLabel}</div><div data-testid="market-card-amount-gate" className="hidden">{salesGap.executionAmountGate?.label || '金额门槛待扫描'}</div></td>
-                    <td className="px-5 py-4 text-right"><div className="flex justify-end gap-2"><button type="button" onClick={() => void saveFundToCandidatePool(fund)} disabled={inPool || saving || !suitabilityGateAllowsResearch(fund) || !executionAmountGateAllowsResearch(fund)} className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-50">{saving ? '保存中' : inPool ? '已在观察池' : '加入观察池'}</button><Link href={fundDetailHref(fund)} className="rounded-lg bg-slate-950 px-3 py-2 text-xs font-semibold text-white">详情</Link></div></td>
+                    <td className="px-3 py-4"><span className={`rounded-full px-2 py-1 text-xs font-semibold ${suitability.status === 'matched' ? 'bg-emerald-50 text-emerald-700' : suitability.status === 'mismatch' ? 'bg-rose-50 text-rose-700' : 'bg-amber-50 text-amber-800'}`}>{suitability.label}</span><div data-testid="market-row-amount-gate" className="mt-2 text-[11px] text-slate-500">{material.executionAmountGate?.label || '金额门槛待扫描'}</div></td>
+                    <td className="px-3 py-4"><div className="text-sm font-medium">{material.label}</div><div className="mt-1 max-w-[220px] text-xs leading-5 text-slate-500">{material.missingItems.slice(0, 2).join('、') || material.riskLevelEvidenceLabel}</div></td>
+                    <td data-testid="market-row-research-checklist" className="px-3 py-4"><div data-testid="market-card-research-checklist" className="flex flex-wrap gap-1">{checklist.items.map((item) => <span key={item.key} title={item.detail} className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${item.status === 'ready' ? 'bg-emerald-50 text-emerald-700' : item.status === 'blocked' ? 'bg-rose-50 text-rose-700' : 'bg-amber-50 text-amber-800'}`}>{item.label}</span>)}</div><div className="mt-2 text-[11px] text-slate-500">全市场底稿：{checklist.backendLabel}</div><div data-testid="market-row-formal-gate" className="mt-1 text-[11px] font-medium text-slate-700">{gate.reportLabel}</div><div data-testid="market-card-formal-gate" className="hidden">{gate.reportLabel}</div><div data-testid="market-card-amount-gate" className="hidden">{material.executionAmountGate?.label || '金额门槛待扫描'}</div></td>
+                    <td className="px-5 py-4 text-right"><div className="flex justify-end gap-2"><button type="button" onClick={() => void saveFundToCandidatePool(fund)} disabled={inPool || saving || !researchDecision.formalGate.passed} className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-50">{saving ? '保存中' : inPool ? '已在观察池' : '加入观察池'}</button><Link href={fundDetailHref(fund)} className="rounded-lg bg-slate-950 px-3 py-2 text-xs font-semibold text-white">详情</Link></div></td>
                   </tr>
                 })}
               </tbody>

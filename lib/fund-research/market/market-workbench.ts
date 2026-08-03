@@ -29,12 +29,6 @@ export type MarketScreeningScore = {
   details: string[]
 }
 
-export type MarketReadiness = {
-  level: 'ready' | 'verify' | 'blocked'
-  label: string
-  gaps: string[]
-}
-
 export type ShareClassInfo = {
   groupKey: string
   groupName: string
@@ -272,17 +266,6 @@ export function getMarketScreeningScore(fund: Fund): MarketScreeningScore {
     isAvailable: true,
     details: ['数据库全市场初筛分', '收益30 / 回撤20 / 夏普20 / 基础证据20 / 费率10'],
   }
-}
-
-export function buyReadiness(fund: Fund, salesRuleComplete = false): MarketReadiness {
-  const operation = operationStatus(fund)
-  const checklist = buildMarketResearchChecklist(fund, salesRuleComplete)
-  const gaps = checklist.items.filter((item) => item.status !== 'ready').map((item) => item.detail)
-  if (operation.status === 'blocked') {
-    return { level: 'blocked', label: '研究路径阻断', gaps: [operation.reason, ...gaps] }
-  }
-  if (gaps.length) return { level: 'verify', label: '证据待补', gaps }
-  return { level: 'ready', label: '可进入研究复核', gaps: [] }
 }
 
 function shareClassGroupName(name: string) {

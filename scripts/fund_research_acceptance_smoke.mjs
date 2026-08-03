@@ -34,6 +34,7 @@ const staticChecks = [
   'scripts/comparison_win_loss_audit_tool_smoke.mjs',
   'scripts/comparison_report_markdown_renderer_smoke.mjs',
   'scripts/comparison_buy_evidence_smoke.mjs',
+  'scripts/market_fund_research_decision_smoke.mjs',
   'scripts/market_compare_basket_evidence_tool_smoke.mjs',
   'scripts/market_compare_basket_win_loss_tool_smoke.mjs',
   'scripts/market_current_page_shortlist_tool_smoke.mjs',
