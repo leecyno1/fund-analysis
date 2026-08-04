@@ -15,6 +15,7 @@ from services.cache_service import (
     invalidate_manager_cache, batch_cache_set, batch_cache_get,
 )
 from services.manager_tenure_metric_service import ManagerTenureMetricService
+from services.fund_classification_ingestion_service import FundClassificationIngestionService
 from services.fund_nav_evidence_service import FundNavDataEnrichmentService
 from services.rolling_metric_service import RollingMetricService
 from repositories import (
@@ -194,6 +195,7 @@ def _sync_fund(
     warnings = []
     rolling_metrics = None
     tenure_metrics = None
+    classification_ingestion = None
     nav_enrichment = {
         "benchmark_data_status": "not_checked",
         "benchmark_observations": 0,
@@ -218,6 +220,18 @@ def _sync_fund(
             "synced_at": datetime.now(UTC).isoformat(),
             "info": fund_info,
         }
+        try:
+            ingestion_service = FundClassificationIngestionService()
+            ingestion_plan = ingestion_service.build_plan([{**fund_info, "wind_code": wind_code}])
+            if ingestion_plan.get("groups"):
+                classification_ingestion = ingestion_service.apply_plan(ingestion_plan)
+            else:
+                classification_ingestion = {
+                    "applied_groups": 0,
+                    "skipped": ingestion_plan.get("skipped") or [],
+                }
+        except Exception as ingestion_error:
+            warnings.append(f"[{wind_code}] 标准化分类写入失败: {ingestion_error}")
     except Exception as e:
         errors.append(f"[{wind_code}] 基金基本信息错误: {e}")
         logger.error(f"Sync fund basic error for {wind_code}: {e}")
@@ -251,10 +265,12 @@ def _sync_fund(
                     end_date=end_date.strftime("%Y-%m-%d"),
                 )
                 nav_data = nav_enrichment["nav_series"]
+                if nav_enrichment.get("nav_data_status") != "valid":
+                    raise ValueError(f"净值质量门禁未通过：{nav_enrichment.get('nav_validation')}")
                 performance_data = fund_payload.get("performance_data") or {}
                 performance_data.update(nav_enrichment.get("performance_facts") or {})
                 fund_payload["performance_data"] = performance_data
-                nav_repo.upsert_nav_series(wind_code, nav_data)
+                nav_repo.upsert_nav_series(wind_code, nav_data, replace_range=True)
         except Exception as e:
             errors.append(f"[{wind_code}] 净值数据错误: {e}")
 
@@ -299,8 +315,13 @@ def _sync_fund(
             "benchmark_code": nav_enrichment.get("benchmark_code"),
             "benchmark_source": nav_enrichment.get("benchmark_source"),
             "benchmark_data_status": nav_enrichment.get("benchmark_data_status"),
+            "benchmark_data_kind": nav_enrichment.get("benchmark_data_kind"),
             "benchmark_observations": nav_enrichment.get("benchmark_observations", 0),
+            "benchmark_nav_observations": nav_enrichment.get("benchmark_nav_observations", 0),
+            "benchmark_rate_observations": nav_enrichment.get("benchmark_rate_observations", 0),
             "money_market_metric_status": nav_enrichment.get("money_market_metric_status"),
+            "nav_data_status": nav_enrichment.get("nav_data_status"),
+            "nav_validation": nav_enrichment.get("nav_validation"),
         }
     raw_data["manager_sync"] = {
         "source": "tushare.fund_manager",
@@ -342,6 +363,7 @@ def _sync_fund(
         "manager_ids": manager_ids,
         "manager_count": len(manager_ids),
         "manager_tenure_start": manager_tenure_start,
+        "classification_ingestion": classification_ingestion,
         "rolling_metrics": rolling_metrics,
         "tenure_metrics": tenure_metrics,
         "errors": errors,

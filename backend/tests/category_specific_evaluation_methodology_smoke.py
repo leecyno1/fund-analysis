@@ -63,6 +63,20 @@ def main() -> int:
     if not any("tracking_error" in item for item in index_gap.get("missing_data", [])):
         raise AssertionError(f"Index tracking gap must be explicit: {index_gap}")
 
+    invalid_index = service.score_from_inputs(
+        {"wind_code": "INDEX.INVALID", "name": "沪深300ETF联接", "type": "指数型"},
+        {"peer_group": "沪深300同指数", "primary_benchmark": "沪深300"},
+        _panel({
+            "1y": {"tracking_error": 0.35, "excess_return": -0.004},
+            "latest": {"expense_ratio": 0.005, "aum": 20.0},
+        }),
+        QUALITY,
+    )
+    if invalid_index.get("status") != "insufficient_evidence":
+        raise AssertionError(f"Implausible index tracking evidence must be blocked: {invalid_index}")
+    if not any("invalid_metric_range:tracking_error" in item for item in invalid_index.get("missing_data", [])):
+        raise AssertionError(f"Invalid index range must remain auditable: {invalid_index}")
+
     money = service.score_from_inputs(
         {
             "wind_code": "MONEY.METHOD",
@@ -77,7 +91,12 @@ def main() -> int:
                 "annualized_volatility": 0.0018,
                 "positive_return_ratio": 0.99,
             },
-            "latest": {"seven_day_annualized_yield": 0.019, "aum": 120.0},
+            "latest": {
+                "seven_day_annualized_yield": 0.019,
+                "benchmark_annualized_rate": 0.015,
+                "benchmark_yield_spread": 0.004,
+                "aum": 120.0,
+            },
         }),
         QUALITY,
     )
@@ -93,6 +112,8 @@ def main() -> int:
         "data_quality",
     }:
         raise AssertionError(f"Money-market dimensions leaked another category's method: {money}")
+    if money.get("metric_scores", {}).get("latest.benchmark_annualized_rate") != 0.015:
+        raise AssertionError(f"Money-market evaluation must expose typed DR007 evidence: {money}")
 
     money_gap = service.score_from_inputs(
         {"wind_code": "MONEY.GAP", "name": "现金管理货币基金", "type": "货币型"},

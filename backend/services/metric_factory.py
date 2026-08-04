@@ -179,7 +179,7 @@ class MetricFactory:
     def _normalize_nav_series(self, nav_series: Iterable[Dict[str, Any]]) -> List[Tuple[date, float]]:
         points: List[Tuple[date, float]] = []
         for item in nav_series:
-            nav_value = item.get("adj_nav") or item.get("accum_nav") or item.get("nav") or item.get("unit_nav")
+            nav_value = item.get("accum_nav") or item.get("adj_nav") or item.get("nav") or item.get("unit_nav")
             item_date = item.get("date") or item.get("trade_date")
             if nav_value is None or item_date is None:
                 continue

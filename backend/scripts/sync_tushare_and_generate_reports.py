@@ -32,6 +32,7 @@ from database import init_database, get_engine
 from repositories import get_fund_repo, get_manager_repo, get_nav_repo
 from services.evidence_report import build_fund_research_report
 from services.ai_report import get_report_generator
+from services.fund_classification_ingestion_service import FundClassificationIngestionService
 from services.fund_nav_evidence_service import FundNavDataEnrichmentService
 from services.tushare_service import TushareDataService
 
@@ -174,6 +175,15 @@ def _sync_one_fund(
         return False
 
     try:
+        ingestion_service = FundClassificationIngestionService()
+        ingestion_plan = ingestion_service.build_plan([{**info, "wind_code": wind_code}])
+        if ingestion_plan.get("groups"):
+            ingestion_service.apply_plan(ingestion_plan)
+    except Exception as ingestion_error:
+        data_quality["classification_ingestion"] = "unavailable"
+        data_quality["classification_ingestion_reason"] = str(ingestion_error)
+
+    try:
         performance = data_service.get_fund_performance(wind_code)
     except Exception as performance_error:
         performance = {}
@@ -209,11 +219,16 @@ def _sync_one_fund(
             end_date=end_date.isoformat(),
         )
         nav_series = enrichment["nav_series"]
-        performance.update(enrichment.get("performance_facts") or {})
-        nav_points = len(nav_series)
-        if nav_series:
-            nav_repo.upsert_nav_series(wind_code, nav_series)
+        if enrichment.get("nav_data_status") != "valid":
+            data_quality["nav_series"] = "invalid"
+            data_quality["nav_series_reason"] = enrichment.get("nav_validation")
+            nav_points = 0
         else:
+            performance.update(enrichment.get("performance_facts") or {})
+            nav_points = len(nav_series)
+        if nav_series and enrichment.get("nav_data_status") == "valid":
+            nav_repo.upsert_nav_series(wind_code, nav_series, replace_range=True)
+        elif enrichment.get("nav_data_status") == "valid":
             data_quality["nav_series"] = "empty"
     except Exception as nav_error:
         data_quality["nav_series"] = "unavailable"
@@ -238,8 +253,13 @@ def _sync_one_fund(
             "benchmark_code": enrichment.get("benchmark_code"),
             "benchmark_source": enrichment.get("benchmark_source"),
             "benchmark_data_status": enrichment.get("benchmark_data_status"),
+            "benchmark_data_kind": enrichment.get("benchmark_data_kind"),
             "benchmark_observations": enrichment.get("benchmark_observations", 0),
+            "benchmark_nav_observations": enrichment.get("benchmark_nav_observations", 0),
+            "benchmark_rate_observations": enrichment.get("benchmark_rate_observations", 0),
             "money_market_metric_status": enrichment.get("money_market_metric_status"),
+            "nav_data_status": enrichment.get("nav_data_status"),
+            "nav_validation": enrichment.get("nav_validation"),
         }
 
     ok = fund_repo.upsert_fund(

@@ -85,9 +85,9 @@ class RollingMetricService:
                 window=window,
             )
             for record in window_records:
-                record["benchmark_code"] = benchmark_code
                 record["details"] = {
                     "calculation_engine": "RollingMetricService",
+                    "evaluation_benchmark_code": benchmark_code,
                     "expected_observations": expected_observations,
                     "actual_observations": len(window_series),
                     "benchmark_observations": len(window_benchmark_series),
@@ -129,9 +129,10 @@ class RollingMetricService:
         except Exception:
             classification_context = {}
         mapped_benchmark = (classification_context.get("benchmark_mapping") or {}).get("benchmark_code")
+        mapped_peer_group = classification_context.get("peer_group_key")
 
         effective_benchmark = benchmark_code or mapped_benchmark or (profile or {}).get("primary_benchmark")
-        effective_peer_group = peer_group_key or (profile or {}).get("peer_group")
+        effective_peer_group = peer_group_key or mapped_peer_group or (profile or {}).get("peer_group")
         nav_series = nav_repo.get_nav_series(fund_code)
         records = self.calculate_for_nav_series(
             nav_series,

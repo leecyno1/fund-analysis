@@ -45,19 +45,21 @@ class PeerComparisonService:
         metric_map = self._metric_map(peer_codes, peer_funds)
         target_profile = target.get("research_profile") or {}
         classification = target.get("classification") or self.classification_service.classify(target, target_profile)
+        evaluation_profile_key = classification.get("evaluation_profile_key")
+        metric_configs = self._peer_metric_configs(evaluation_profile_key)
         minimum_peer_count = self._minimum_peer_count(classification.get("minimum_peer_count"))
         scoring_map = self._fast_peer_score_map(
             peer_codes,
             metric_map,
             window,
-            classification.get("evaluation_profile_key"),
+            evaluation_profile_key,
         )
 
         metrics: Dict[str, Any] = {}
-        for config in self.METRIC_CONFIGS:
+        for config in metric_configs:
             metric_name = config["metric_name"]
             values = [
-                (code, self._to_float(metric_map.get(code, {}).get(window, {}).get(metric_name)))
+                (code, self._peer_metric_value(metric_map.get(code, {}), config, window))
                 for code in peer_codes
             ]
             metrics[metric_name] = self._rank_metric(
@@ -68,6 +70,9 @@ class PeerComparisonService:
                 label=config["label"],
                 unit=config["unit"],
                 minimum_peer_count=minimum_peer_count,
+                metric_window=self._metric_window_label(config, window),
+                required_for_sample=bool(config.get("required_for_sample", True)),
+                source_metric_names=[path[1] for path in config.get("paths") or []],
             )
 
         professional_values = [
@@ -82,7 +87,13 @@ class PeerComparisonService:
             label="专业综合评分",
             unit="score",
             minimum_peer_count=minimum_peer_count,
+            metric_window="composite",
+            required_for_sample=False,
+            source_metric_names=["category_specific_peer_metric_proxy"],
         )
+
+        metric_coverage = self._metric_coverage(metrics)
+        valid_metric_peer_count = self._valid_metric_peer_count(metrics)
 
         return {
             "target_id": target_id,
@@ -94,7 +105,16 @@ class PeerComparisonService:
             "classification": classification,
             "evaluation_scope": "category_relative",
             "peer_count": len(peer_codes),
+            "classified_peer_count": len(peer_codes),
+            "valid_metric_peer_count": valid_metric_peer_count,
             "minimum_valid_peer_count": minimum_peer_count,
+            "peer_metric_profile": evaluation_profile_key,
+            "peer_methodology_version": getattr(
+                getattr(self.scoring_service, "methodology", None),
+                "PEER_METHODOLOGY_VERSION",
+                "category_peer_percentiles_v2",
+            ),
+            "metric_coverage": metric_coverage,
             "usable_metric_count": self._usable_metric_count(metrics),
             "insufficient_metric_count": self._insufficient_metric_count(metrics),
             "peer_metric_gap": self._peer_metric_gap(
@@ -104,6 +124,7 @@ class PeerComparisonService:
                 window,
                 target_id,
                 minimum_peer_count,
+                metric_configs,
             ),
             "sample_status": self._sample_status(metrics),
             "metric_window": window,
@@ -371,6 +392,49 @@ class PeerComparisonService:
     ) -> Optional[float]:
         return self.scoring_service.score_peer_metrics(evaluation_profile_key or "", metrics)
 
+    def _peer_metric_configs(self, evaluation_profile_key: Optional[str]) -> List[Dict[str, Any]]:
+        methodology = getattr(self.scoring_service, "methodology", None)
+        if methodology is None or not hasattr(methodology, "peer_metric_configs"):
+            return [
+                {
+                    **config,
+                    "paths": [("selected", config["metric_name"])],
+                    "required_for_sample": True,
+                }
+                for config in self.METRIC_CONFIGS
+            ]
+        return methodology.peer_metric_configs(evaluation_profile_key or "")
+
+    def _peer_metric_value(
+        self,
+        panel: Dict[str, Dict[str, float]],
+        config: Dict[str, Any],
+        selected_window: str,
+    ) -> Optional[float]:
+        value = None
+        for configured_window, metric_name in config.get("paths") or []:
+            effective_window = selected_window if configured_window == "selected" else configured_window
+            value = self._to_float(panel.get(effective_window, {}).get(metric_name))
+            if value is not None:
+                break
+        if value is not None and config.get("transform") == "absolute":
+            value = abs(value)
+        valid_range = config.get("valid_range")
+        if value is not None and valid_range:
+            lower, upper = valid_range
+            if value < lower or value > upper:
+                return None
+        return value
+
+    @staticmethod
+    def _metric_window_label(config: Dict[str, Any], selected_window: str) -> str:
+        windows = []
+        for configured_window, _ in config.get("paths") or []:
+            effective_window = selected_window if configured_window == "selected" else configured_window
+            if effective_window not in windows:
+                windows.append(effective_window)
+        return "/".join(windows) if windows else selected_window
+
     def _safe_score(self, wind_code: str) -> Dict[str, Any]:
         try:
             return self.scoring_service.score_fund(wind_code)
@@ -386,6 +450,9 @@ class PeerComparisonService:
         label: str,
         unit: str,
         minimum_peer_count: Optional[int] = None,
+        metric_window: Optional[str] = None,
+        required_for_sample: bool = True,
+        source_metric_names: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         minimum = self._minimum_peer_count(minimum_peer_count)
         valid = [(code, value) for code, value in values if value is not None]
@@ -402,6 +469,9 @@ class PeerComparisonService:
                 "sample_status": "insufficient_peer_sample",
                 "unit": unit,
                 "direction": "higher" if higher_is_better else "lower",
+                "metric_window": metric_window,
+                "required_for_sample": required_for_sample,
+                "source_metric_names": source_metric_names or [metric_name],
             }
         if target_value is None:
             return {
@@ -415,6 +485,9 @@ class PeerComparisonService:
                 "sample_status": "target_metric_missing",
                 "unit": unit,
                 "direction": "higher" if higher_is_better else "lower",
+                "metric_window": metric_window,
+                "required_for_sample": required_for_sample,
+                "source_metric_names": source_metric_names or [metric_name],
             }
         sorted_values = sorted(valid, key=lambda item: item[1], reverse=higher_is_better)
         rank = next(index + 1 for index, item in enumerate(sorted_values) if item[0] == target_id)
@@ -431,17 +504,42 @@ class PeerComparisonService:
             "sample_status": "sufficient",
             "unit": unit,
             "direction": "higher" if higher_is_better else "lower",
+            "metric_window": metric_window,
+            "required_for_sample": required_for_sample,
+            "source_metric_names": source_metric_names or [metric_name],
         }
 
     def _sample_status(self, metrics: Dict[str, Any]) -> str:
-        metric_statuses = {metric.get("sample_status") for metric in metrics.values() if isinstance(metric, dict)}
-        if "sufficient" in metric_statuses:
-            return "partial_sufficient" if len(metric_statuses) > 1 else "sufficient"
+        required_metrics = [
+            metric
+            for metric in metrics.values()
+            if isinstance(metric, dict) and metric.get("required_for_sample", True)
+        ]
+        if not required_metrics:
+            return "unavailable"
+        metric_statuses = {metric.get("sample_status") for metric in required_metrics}
         if "insufficient_peer_sample" in metric_statuses:
             return "insufficient_peer_sample"
         if "target_metric_missing" in metric_statuses:
             return "target_metric_missing"
+        if metric_statuses == {"sufficient"}:
+            return "sufficient"
         return "unavailable"
+
+    def _metric_coverage(self, metrics: Dict[str, Any]) -> Dict[str, int]:
+        return {
+            metric_name: int(metric.get("peer_count") or 0)
+            for metric_name, metric in metrics.items()
+            if isinstance(metric, dict)
+        }
+
+    def _valid_metric_peer_count(self, metrics: Dict[str, Any]) -> int:
+        counts = [
+            int(metric.get("peer_count") or 0)
+            for metric in metrics.values()
+            if isinstance(metric, dict) and metric.get("required_for_sample", True)
+        ]
+        return min(counts) if counts else 0
 
     def _usable_metric_count(self, metrics: Dict[str, Any]) -> int:
         return sum(
@@ -468,12 +566,17 @@ class PeerComparisonService:
         window: str = "1y",
         target_id: Optional[str] = None,
         minimum_peer_count: Optional[int] = None,
+        metric_configs: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         minimum = self._minimum_peer_count(minimum_peer_count)
         blocking_metrics = []
         required_more_funds = 0
         for metric_name, metric in metrics.items():
-            if not isinstance(metric, dict) or metric.get("sample_status") != "insufficient_peer_sample":
+            if (
+                not isinstance(metric, dict)
+                or not metric.get("required_for_sample", True)
+                or metric.get("sample_status") != "insufficient_peer_sample"
+            ):
                 continue
             peer_count = int(metric.get("peer_count") or 0)
             missing_count = max(0, minimum - peer_count)
@@ -491,6 +594,7 @@ class PeerComparisonService:
             window,
             target_id,
             max(required_more_funds, 5),
+            metric_configs or [],
         )
         return {
             "required_more_funds": required_more_funds,
@@ -514,19 +618,36 @@ class PeerComparisonService:
         window: str,
         target_id: Optional[str],
         limit: int,
+        metric_configs: List[Dict[str, Any]],
     ) -> List[Dict[str, Any]]:
         if not blocking_metrics:
             return []
         blocking_metric_names = [item["metric_name"] for item in blocking_metrics]
+        config_map = {config.get("metric_name"): config for config in metric_configs}
         candidates = []
         for fund in peer_funds:
             code = fund.get("wind_code")
             if not code or code == target_id:
                 continue
+            raw_data = fund.get("raw_data") if isinstance(fund.get("raw_data"), dict) else {}
+            ranking_status = (
+                raw_data.get("ranking_metrics", {}).get("status")
+                if isinstance(raw_data.get("ranking_metrics"), dict)
+                else None
+            )
+            if ranking_status in {"nav_unavailable", "invalid_nav"}:
+                continue
             missing_metrics = [
                 metric_name
                 for metric_name in blocking_metric_names
-                if self._to_float(metric_map.get(code, {}).get(window, {}).get(metric_name)) is None
+                if self._peer_metric_value(
+                    metric_map.get(code, {}),
+                    config_map.get(metric_name, {
+                        "metric_name": metric_name,
+                        "paths": [("selected", metric_name)],
+                    }),
+                    window,
+                ) is None
             ]
             if not missing_metrics:
                 continue

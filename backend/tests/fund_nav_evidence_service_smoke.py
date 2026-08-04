@@ -28,13 +28,19 @@ class FakeClassificationAdapter:
 
 
 class FakeMarketDataAdapter:
-    def __init__(self, benchmark_series):
+    def __init__(self, benchmark_series, rate_series=None):
         self.benchmark_series = benchmark_series
+        self.rate_series = rate_series or []
         self.calls = []
+        self.rate_calls = []
 
     def get_benchmark_nav(self, benchmark_code: str, start_date: str, end_date: str):
         self.calls.append((benchmark_code, start_date, end_date))
         return list(self.benchmark_series)
+
+    def get_benchmark_rate(self, benchmark_code: str, start_date: str, end_date: str):
+        self.rate_calls.append((benchmark_code, start_date, end_date))
+        return list(self.rate_series)
 
 
 def _money_nav_series():
@@ -71,6 +77,15 @@ def main() -> int:
     if evidence_service.derive_money_market_facts(normal_fund):
         raise AssertionError("Ordinary fund NAV must not be mislabeled as a money-market yield series")
 
+    conflicting_shape = evidence_service.validate_nav_series(
+        _money_nav_series(),
+        fund_type="指数型",
+    )
+    if conflicting_shape.get("status") != "invalid":
+        raise AssertionError(f"Money-like NAV must be rejected for a declared index fund: {conflicting_shape}")
+    if "nav_shape_conflicts_with_declared_fund_type" not in conflicting_shape.get("issues", []):
+        raise AssertionError(f"NAV type conflict must be explicit: {conflicting_shape}")
+
     fund_series = [
         {"date": f"2026-07-{day:02d}", "nav": 1.0 + day / 1000}
         for day in range(1, 11)
@@ -96,6 +111,8 @@ def main() -> int:
         raise AssertionError(f"Benchmark alignment count is not auditable: {enrichment}")
     if any(item.get("benchmark_nav") is None for item in enrichment.get("nav_series", [])):
         raise AssertionError(f"Shared benchmark dates must be attached exactly: {enrichment}")
+    if enrichment.get("nav_data_status") != "valid":
+        raise AssertionError(f"Ordinary index NAV should pass the quality gate: {enrichment}")
 
     no_mapping_market = FakeMarketDataAdapter(benchmark_series)
     no_mapping = FundNavDataEnrichmentService(
@@ -113,7 +130,32 @@ def main() -> int:
     if any(item.get("benchmark_nav") is not None for item in no_mapping.get("nav_series", [])):
         raise AssertionError("Missing mapping must never fabricate benchmark NAV")
 
-    print("OK NAV evidence derives money-market facts and aligns only mapped real benchmarks")
+    rate_market = FakeMarketDataAdapter([], [
+        {"date": "2026-07-01", "annualized_rate": 0.0144, "source": "tushare.repo_daily.DR007.IB.weight_r"},
+        {"date": "2026-07-02", "annualized_rate": 0.0145, "source": "tushare.repo_daily.DR007.IB.weight_r"},
+        {"date": "2026-08-05", "annualized_rate": 0.0200, "source": "tushare.repo_daily.DR007.IB.weight_r"},
+    ])
+    money_enrichment = FundNavDataEnrichmentService(
+        rate_market,
+        classification_adapter=FakeClassificationAdapter("DR007"),
+    ).enrich(
+        wind_code="MONEY.RATE",
+        fund_type="货币型",
+        nav_series=_money_nav_series(),
+        start_date="2026-07-01",
+        end_date="2026-07-31",
+    )
+    if money_enrichment.get("benchmark_data_kind") != "annualized_rate":
+        raise AssertionError(f"DR007 must remain typed as an annualized rate: {money_enrichment}")
+    if any(item.get("benchmark_nav") is not None for item in money_enrichment.get("nav_series", [])):
+        raise AssertionError("DR007 rate levels must never be attached as benchmark NAV")
+    facts = money_enrichment.get("performance_facts") or {}
+    if facts.get("benchmark_annualized_rate") != 0.0145 or facts.get("benchmark_yield_spread") is None:
+        raise AssertionError(f"Money-market facts must retain DR007 rate and yield spread: {money_enrichment}")
+    if facts.get("benchmark_rate_as_of") != "2026-07-02" or facts.get("benchmark_rate_observations") != 2:
+        raise AssertionError(f"DR007 evidence must be truncated to the fund yield as-of date: {money_enrichment}")
+
+    print("OK NAV evidence separates money-market rates from real benchmark NAV")
     return 0
 
 

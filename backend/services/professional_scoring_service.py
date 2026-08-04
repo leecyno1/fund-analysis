@@ -270,6 +270,8 @@ class ProfessionalScoringService:
                 ["seven_day_annualized_yield", "yield_7d", "seven_day_yield"],
             ),
             "income_per_10000": self._first_number(performance, ["income_per_10000", "income_10k"]),
+            "benchmark_annualized_rate": self._first_number(performance, ["benchmark_annualized_rate"]),
+            "benchmark_yield_spread": self._first_number(performance, ["benchmark_yield_spread"]),
         }
         return {
             "1y": {key: value for key, value in one_year.items() if value is not None},

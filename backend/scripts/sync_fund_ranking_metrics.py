@@ -36,9 +36,18 @@ except Exception:
 
 from database import get_engine, init_database
 from repositories import get_fund_repo, get_metric_snapshot_repo, get_nav_repo
+from services.fund_classification_ingestion_service import FundClassificationIngestionService
 from services.fund_nav_evidence_service import FundNavDataEnrichmentService
+from services.peer_comparison_service import PeerComparisonService
 from services.rolling_metric_service import RollingMetricService
 from services.tushare_service import TushareDataService
+
+
+DEFAULT_PEER_COVERAGE_GROUPS = (
+    "peer-money-cash-management",
+    "peer-index-hs300",
+    "peer-index-csi500",
+)
 
 
 def log(message: str) -> None:
@@ -73,10 +82,22 @@ def latest_nav_payload(nav_series: List[Dict[str, Any]]) -> Dict[str, Any]:
     if not nav_series:
         return {}
     latest = nav_series[-1]
+    latest_asset_row = next(
+        (
+            item
+            for item in reversed(nav_series)
+            if number_or_none(item.get("total_netasset") or item.get("net_asset")) is not None
+        ),
+        {},
+    )
     return {
         "nav": number_or_none(latest.get("unit_nav") or latest.get("nav")),
         "nav_date": latest.get("date"),
-        "total_asset": asset_to_yi(latest.get("total_netasset") or latest.get("net_asset")),
+        "total_asset": asset_to_yi(
+            latest_asset_row.get("total_netasset") or latest_asset_row.get("net_asset")
+        ),
+        "total_asset_as_of": latest_asset_row.get("date"),
+        "total_asset_source": "tushare.fund_nav.latest_reported_net_asset" if latest_asset_row else None,
     }
 
 
@@ -106,6 +127,9 @@ def build_fund_metric_payload(panel: List[Dict[str, Any]]) -> Dict[str, Dict[str
         "return_6m": six_month.get("total_return"),
         "sharpe_ratio": one_year.get("sharpe_ratio"),
         "positive_return_ratio": one_year.get("positive_return_ratio"),
+        "benchmark_return_1y": one_year.get("benchmark_return"),
+        "excess_return": one_year.get("excess_return"),
+        "tracking_difference": one_year.get("excess_return"),
         "observations_1y": one_year.get("observations"),
         "updated_at": datetime.now(UTC).isoformat(),
     }
@@ -117,6 +141,8 @@ def build_fund_metric_payload(panel: List[Dict[str, Any]]) -> Dict[str, Dict[str
         "volatility_1y": one_year.get("annualized_volatility"),
         "sortino_ratio_1y": one_year.get("sortino_ratio"),
         "calmar_ratio_1y": one_year.get("calmar_ratio"),
+        "tracking_error": one_year.get("tracking_error"),
+        "information_ratio": one_year.get("information_ratio"),
         "max_drawdown_3y": three_year.get("max_drawdown"),
         "annualized_volatility_3y": three_year.get("annualized_volatility"),
         "updated_at": datetime.now(UTC).isoformat(),
@@ -125,6 +151,68 @@ def build_fund_metric_payload(panel: List[Dict[str, Any]]) -> Dict[str, Dict[str
     clean_performance = {key: value for key, value in performance_data.items() if value is not None}
     clean_risk = {key: value for key, value in risk_metrics.items() if value is not None}
     return {"performance_data": clean_performance, "risk_metrics": clean_risk}
+
+
+def invalidate_nav_derived_evaluation_facts(wind_code: str, validation: Dict[str, Any]) -> None:
+    """移除已被净值质量门禁否定的派生指标，避免旧快照继续参与评分。"""
+    performance_keys = [
+        "annualized_return_1y", "return_1y", "total_return", "annualized_return_3y",
+        "return_3y", "return_6m", "sharpe_ratio", "positive_return_ratio",
+        "benchmark_return_1y", "excess_return", "tracking_difference", "observations_1y",
+        "seven_day_annualized_yield", "income_per_10000", "benchmark_yield_spread",
+    ]
+    risk_keys = [
+        "max_drawdown_1y", "max_drawdown", "annualized_volatility_1y", "volatility_1y",
+        "sortino_ratio_1y", "calmar_ratio_1y", "tracking_error", "information_ratio",
+        "max_drawdown_3y", "annualized_volatility_3y",
+    ]
+    marker = {
+        "ranking_metrics": {
+            "status": "invalid_nav",
+            "validation": validation,
+            "invalidated_at": datetime.now(UTC).isoformat(),
+        }
+    }
+    with get_engine().begin() as conn:
+        conn.execute(text("""
+            DELETE FROM metric_snapshots
+            WHERE target_type = 'fund'
+              AND target_id = :wind_code
+              AND metric_window IN ('3m', '6m', '1y', '3y')
+        """), {"wind_code": wind_code})
+        conn.execute(text("""
+            UPDATE funds
+            SET performance_data = COALESCE(performance_data, '{}'::jsonb) - CAST(:performance_keys AS text[]),
+                risk_metrics = COALESCE(risk_metrics, '{}'::jsonb) - CAST(:risk_keys AS text[]),
+                raw_data = COALESCE(raw_data, '{}'::jsonb) || CAST(:marker AS jsonb),
+                updated_at = NOW()
+            WHERE wind_code = :wind_code
+        """), {
+            "wind_code": wind_code,
+            "performance_keys": performance_keys,
+            "risk_keys": risk_keys,
+            "marker": json.dumps(marker, ensure_ascii=False),
+        })
+
+
+def mark_ranking_sync_unavailable(wind_code: str, reason: str) -> None:
+    marker = {
+        "ranking_metrics": {
+            "status": "nav_unavailable",
+            "reason": str(reason),
+            "attempted_at": datetime.now(UTC).isoformat(),
+        }
+    }
+    with get_engine().begin() as conn:
+        conn.execute(text("""
+            UPDATE funds
+            SET raw_data = COALESCE(raw_data, '{}'::jsonb) || CAST(:marker AS jsonb),
+                updated_at = NOW()
+            WHERE wind_code = :wind_code
+        """), {
+            "wind_code": wind_code,
+            "marker": json.dumps(marker, ensure_ascii=False),
+        })
 
 
 def select_target_codes(
@@ -175,6 +263,99 @@ def select_target_codes(
         return [row.wind_code for row in conn.execute(sql, params).fetchall()]
 
 
+def select_peer_evaluation_coverage_codes(
+    limit: int,
+    peer_group_keys: List[str],
+) -> List[str]:
+    """按类别专属指标缺口选择同类基金，补足可计算分位的最小样本。"""
+    normalized_keys = list(dict.fromkeys(
+        str(key).strip() for key in peer_group_keys if str(key or "").strip()
+    ))
+    if not normalized_keys:
+        return []
+
+    sql = text("""
+        SELECT
+          pg.key AS peer_group_key,
+          candidate.wind_code AS target_wind_code
+        FROM peer_groups pg
+        LEFT JOIN LATERAL (
+          SELECT fsc.wind_code
+          FROM peer_group_members pgm
+          JOIN fund_entities fe ON fe.id = pgm.entity_id
+          JOIN fund_share_classes fsc
+            ON fsc.entity_id = fe.id
+           AND fsc.status = 'active'
+          LEFT JOIN funds f ON f.wind_code = fsc.wind_code
+          WHERE pgm.peer_group_id = pg.id
+            AND pgm.role <> 'excluded'
+          ORDER BY
+            CASE WHEN EXISTS (
+              SELECT 1
+              FROM metric_snapshots ms
+              WHERE ms.target_type = 'fund'
+                AND ms.target_id = fsc.wind_code
+                AND ms.metric_window = '1y'
+                AND ms.metric_name = 'annualized_return'
+            ) THEN 0 ELSE 1 END,
+            f.total_asset DESC NULLS LAST,
+            fsc.is_primary DESC,
+            fsc.wind_code ASC
+          LIMIT 1
+        ) candidate ON TRUE
+        WHERE pg.key = ANY(:peer_group_keys)
+        ORDER BY pg.key
+    """)
+    with get_engine().connect() as conn:
+        groups = [dict(row._mapping) for row in conn.execute(
+            sql,
+            {"peer_group_keys": normalized_keys},
+        ).fetchall()]
+
+    service = PeerComparisonService()
+    selected: List[str] = []
+    for group in groups:
+        target_code = group.get("target_wind_code")
+        if not target_code:
+            log(f"[peer-coverage] {group.get('peer_group_key')} 无可用代表份额")
+            continue
+        result = service.build_peer_percentiles(str(target_code), window="1y")
+        if result.get("sample_status") == "sufficient":
+            log(
+                f"[peer-coverage] {group.get('peer_group_key')} 已满足："
+                f"有效样本 {result.get('valid_metric_peer_count')}"
+            )
+            continue
+
+        metrics = result.get("metrics") or {}
+        target_missing = any(
+            isinstance(metric, dict)
+            and metric.get("required_for_sample", True)
+            and metric.get("value") is None
+            for metric in metrics.values()
+        )
+        candidates = []
+        if target_missing:
+            candidates.append(str(target_code))
+        candidates.extend((result.get("peer_metric_gap") or {}).get("suggested_sync_codes") or [])
+        added = 0
+        for code in candidates:
+            normalized_code = str(code).strip().upper()
+            if normalized_code and normalized_code not in selected:
+                selected.append(normalized_code)
+                added += 1
+                if len(selected) >= max(1, limit):
+                    break
+        log(
+            f"[peer-coverage] {group.get('peer_group_key')}："
+            f"已分类 {result.get('classified_peer_count')}，"
+            f"有效样本 {result.get('valid_metric_peer_count')}，待补 {added}"
+        )
+        if len(selected) >= max(1, limit):
+            break
+    return selected
+
+
 def sync_one_fund(
     data_service: TushareDataService,
     rolling_service: RollingMetricService,
@@ -186,6 +367,10 @@ def sync_one_fund(
     nav_repo = get_nav_repo()
     metric_repo = get_metric_snapshot_repo()
     existing = fund_repo.get_fund(wind_code) or {}
+    ingestion_service = FundClassificationIngestionService()
+    ingestion_plan = ingestion_service.build_plan([existing])
+    if ingestion_plan.get("groups"):
+        ingestion_service.apply_plan(ingestion_plan)
 
     try:
         nav_series = data_service.get_fund_nav(
@@ -194,9 +379,13 @@ def sync_one_fund(
             end_date=end_date.isoformat(),
         )
     except Exception as error:
-        return {"wind_code": wind_code, "status": "skipped", "reason": f"净值不可用：{error}"}
+        reason = f"净值不可用：{error}"
+        mark_ranking_sync_unavailable(wind_code, reason)
+        return {"wind_code": wind_code, "status": "skipped", "reason": reason}
     if len(nav_series) < 20:
-        return {"wind_code": wind_code, "status": "skipped", "reason": f"净值点不足 {len(nav_series)}"}
+        reason = f"净值点不足 {len(nav_series)}"
+        mark_ranking_sync_unavailable(wind_code, reason)
+        return {"wind_code": wind_code, "status": "skipped", "reason": reason}
 
     enrichment = FundNavDataEnrichmentService(data_service).enrich(
         wind_code=wind_code,
@@ -206,7 +395,18 @@ def sync_one_fund(
         end_date=end_date.isoformat(),
     )
     nav_series = enrichment["nav_series"]
-    nav_repo.upsert_nav_series(wind_code, nav_series)
+    if enrichment.get("nav_data_status") != "valid":
+        nav_repo.upsert_nav_series(wind_code, nav_series, replace_range=True)
+        invalidate_nav_derived_evaluation_facts(
+            wind_code,
+            enrichment.get("nav_validation") or {"status": "invalid"},
+        )
+        return {
+            "wind_code": wind_code,
+            "status": "skipped",
+            "reason": f"净值质量门禁：{enrichment.get('nav_validation')}",
+        }
+    nav_repo.upsert_nav_series(wind_code, nav_series, replace_range=True)
     rolling_result = rolling_service.calculate_and_save_for_fund(
         wind_code,
         benchmark_code=enrichment.get("benchmark_code"),
@@ -231,17 +431,25 @@ def sync_one_fund(
             "raw_data": {
                 "source": "tushare",
                 "ranking_metrics": {
+                    "status": "synced",
                     "source": "tushare.fund_nav",
                     "synced_at": datetime.now(UTC).isoformat(),
                     "start_date": start_date.isoformat(),
                     "end_date": end_date.isoformat(),
                     "nav_points": len(nav_series),
+                    "total_asset_as_of": latest_payload.get("total_asset_as_of"),
+                    "total_asset_source": latest_payload.get("total_asset_source"),
                     "saved_metric_snapshots": rolling_result.get("saved", 0),
                     "benchmark_code": enrichment.get("benchmark_code"),
                     "benchmark_source": enrichment.get("benchmark_source"),
                     "benchmark_data_status": enrichment.get("benchmark_data_status"),
+                    "benchmark_data_kind": enrichment.get("benchmark_data_kind"),
                     "benchmark_observations": enrichment.get("benchmark_observations", 0),
+                    "benchmark_nav_observations": enrichment.get("benchmark_nav_observations", 0),
+                    "benchmark_rate_observations": enrichment.get("benchmark_rate_observations", 0),
                     "money_market_metric_status": enrichment.get("money_market_metric_status"),
+                    "nav_data_status": enrichment.get("nav_data_status"),
+                    "nav_validation": enrichment.get("nav_validation"),
                 },
             },
         },
@@ -269,6 +477,16 @@ def main() -> int:
     parser.add_argument("--throttle", type=float, default=0.2, help="每只基金之间的等待秒数")
     parser.add_argument("--include-existing", action="store_true", help="不跳过已有 1Y 指标基金")
     parser.add_argument("--include-exchange-funds", action="store_true", help="自动选样时包含 .SH/.SZ 交易所代码")
+    parser.add_argument(
+        "--peer-evaluation-coverage",
+        action="store_true",
+        help="按标准化同类组和类别专属指标缺口补足最小评价样本",
+    )
+    parser.add_argument(
+        "--peer-group-keys",
+        default=",".join(DEFAULT_PEER_COVERAGE_GROUPS),
+        help="同类组补证范围，逗号分隔 peer_group key",
+    )
     parser.add_argument("--max-errors", type=int, default=10, help="连续或累计错误上限")
     args = parser.parse_args()
 
@@ -278,7 +496,12 @@ def main() -> int:
         raise RuntimeError("Tushare 未连接真实 API。请配置 TUSHARE_TOKEN 后重试。")
 
     codes = [code.strip().upper() for code in args.codes.split(",") if code.strip()]
-    if not codes:
+    if not codes and args.peer_evaluation_coverage:
+        codes = select_peer_evaluation_coverage_codes(
+            limit=max(1, args.limit),
+            peer_group_keys=[key for key in args.peer_group_keys.split(",") if key.strip()],
+        )
+    elif not codes:
         codes = select_target_codes(
             limit=max(1, args.limit),
             fund_type=args.fund_type.strip(),

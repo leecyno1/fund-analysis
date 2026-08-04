@@ -39,6 +39,9 @@ fi
 echo "开始更新 Tushare 全市场基金基础库..."
 "$PYTHON_BIN" backend/scripts/sync_tushare_and_generate_reports.py --sync-universe --universe-only "$@"
 
+echo "开始更新高置信度基金分类、份额、同类组和基准映射..."
+"$PYTHON_BIN" backend/scripts/sync_fund_classification_universe.py --apply
+
 "$PYTHON_BIN" - <<'PY'
 import os
 from sqlalchemy import create_engine, text

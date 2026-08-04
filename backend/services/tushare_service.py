@@ -336,14 +336,30 @@ class TushareDataService:
 
             result = []
             df = df.sort_values("nav_date")
+            minimum_source_rows = max(2, int(len(df) * 0.6))
+            metric_nav_source = next(
+                (
+                    column
+                    for column in ("accum_nav", "adj_nav", "unit_nav")
+                    if column in df.columns
+                    and pd.to_numeric(df[column], errors="coerce").notna().sum() >= minimum_source_rows
+                ),
+                None,
+            )
+            if metric_nav_source is None:
+                self._strict_fail(f"Tushare fund_nav has no consistent NAV column for {wind_code}")
+                return []
             previous_accum_nav = None
             for _, row in df.iterrows():
                 date_str = str(row.get("nav_date", ""))
                 if len(date_str) == 8:
                     date_str = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"
-                unit_nav = _as_float(row.get("unit_nav")) or _as_float(row.get("accum_nav")) or _as_float(row.get("adj_nav"))
+                metric_nav = _as_float(row.get(metric_nav_source))
+                if metric_nav is None or metric_nav <= 0:
+                    continue
+                unit_nav = _as_float(row.get("unit_nav")) or metric_nav
                 adjusted_nav = _as_float(row.get("adj_nav"))
-                accum_nav = adjusted_nav or _as_float(row.get("accum_nav")) or unit_nav
+                accum_nav = metric_nav
                 daily_return = None
                 if previous_accum_nav and accum_nav:
                     daily_return = (accum_nav / previous_accum_nav) - 1
@@ -356,6 +372,7 @@ class TushareDataService:
                     "accum_nav": accum_nav,
                     "adj_nav": adjusted_nav,
                     "reported_accum_nav": _as_float(row.get("accum_nav")),
+                    "metric_nav_source": f"tushare.fund_nav.{metric_nav_source}",
                     "daily_return": daily_return,
                     "net_asset": _as_float(row.get("net_asset")),
                     "total_netasset": _as_float(row.get("total_netasset")),
@@ -396,6 +413,42 @@ class TushareDataService:
             logger.warning("Tushare index_daily unavailable for %s: %s", normalized_code, error)
             return []
 
+    def get_benchmark_rate(self, benchmark_code: str, start_date: str, end_date: str) -> List[Dict[str, Any]]:
+        """获取利率型基准；利率证据与净值序列严格分离。"""
+        normalized_code = str(benchmark_code or "").strip().upper()
+        if self.mock_mode or normalized_code != "DR007":
+            return []
+        try:
+            frame = self.pro.repo_daily(
+                ts_code="DR007.IB",
+                start_date=str(start_date).replace("-", ""),
+                end_date=str(end_date).replace("-", ""),
+                fields="ts_code,trade_date,repo_maturity,weight_r,weight,close",
+            )
+            if frame is None or frame.empty:
+                return []
+            result = []
+            for _, row in frame.sort_values("trade_date").iterrows():
+                trade_date = _format_tushare_date(row.get("trade_date"))
+                reported_rate = (
+                    _as_float(row.get("weight_r"))
+                    or _as_float(row.get("weight"))
+                    or _as_float(row.get("close"))
+                )
+                if trade_date and reported_rate is not None and 0 <= reported_rate <= 100:
+                    result.append({
+                        "date": trade_date,
+                        "annualized_rate": reported_rate / 100.0,
+                        "reported_rate": reported_rate,
+                        "rate_unit": "percent_per_annum",
+                        "benchmark_code": normalized_code,
+                        "source": "tushare.repo_daily.DR007.IB.weight_r",
+                    })
+            return result
+        except Exception as error:
+            logger.warning("Tushare repo_daily unavailable for %s: %s", normalized_code, error)
+            return []
+
     def get_fund_performance(self, wind_code: str) -> Dict[str, Any]:
         """获取基金业绩指标"""
         if self.mock_mode:
@@ -414,7 +467,7 @@ class TushareDataService:
 
             nav_df = nav_df.sort_values("nav_date").copy()
             metric_nav = pd.Series(index=nav_df.index, dtype="float64")
-            for column in ("adj_nav", "accum_nav", "unit_nav"):
+            for column in ("accum_nav", "adj_nav", "unit_nav"):
                 if column in nav_df.columns:
                     metric_nav = metric_nav.combine_first(pd.to_numeric(nav_df[column], errors="coerce"))
             nav_df["metric_nav"] = metric_nav
@@ -444,7 +497,7 @@ class TushareDataService:
             drawdown = (nav_df["metric_nav"] - peak) / peak
             max_dd = drawdown.min()
 
-            daily_returns = nav_df["metric_nav"].pct_change().dropna()
+            daily_returns = nav_df["metric_nav"].pct_change(fill_method=None).dropna()
             if len(daily_returns) > 0:
                 annual_return = daily_returns.mean() * 252
                 annual_vol = daily_returns.std() * (252 ** 0.5)
@@ -499,7 +552,7 @@ class TushareDataService:
             nav_df = nav_df.sort_values("nav_date")
             nav_df["accum_nav"] = nav_df["accum_nav"].ffill()
 
-            daily_returns = nav_df["accum_nav"].pct_change().dropna()
+            daily_returns = nav_df["accum_nav"].pct_change(fill_method=None).dropna()
             vol_1y = daily_returns[-252:].std() * (252 ** 0.5) if len(daily_returns) >= 252 else 0
             vol_2y = daily_returns.std() * (252 ** 0.5)
 
@@ -540,7 +593,7 @@ class TushareDataService:
             if index_nav is None or index_nav.empty:
                 return 1.0
 
-            fund_ret = fund_nav["accum_nav"].pct_change().dropna()
+            fund_ret = fund_nav["accum_nav"].pct_change(fill_method=None).dropna()
             index_ret = index_nav["pct_change"].dropna()
 
             if len(fund_ret) > 5 and len(index_ret) > 5:

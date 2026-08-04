@@ -1,4 +1,6 @@
 """标准化基金分类数据库 Adapter。"""
+import hashlib
+import json
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
@@ -142,7 +144,12 @@ class FundClassificationRepo:
                     pgm.sample_as_of_date,
                     pgm.confidence AS membership_confidence,
                     pgm.source AS membership_source,
-                    COUNT(*) OVER () AS peer_group_membership_count
+                    (
+                        SELECT COUNT(*)
+                        FROM peer_group_members group_member
+                        WHERE group_member.peer_group_id = pg.id
+                          AND group_member.role <> 'excluded'
+                    ) AS peer_group_membership_count
                 FROM peer_group_members pgm
                 JOIN peer_groups pg ON pg.id = pgm.peer_group_id
                 WHERE pgm.entity_id = ss.entity_id
@@ -245,6 +252,316 @@ class FundClassificationRepo:
                 },
             ).fetchall()
         return [_row_to_dict(row) for row in rows]
+
+    def apply_ingestion_plan(
+        self,
+        groups: List[Dict[str, Any]],
+        source: str = "tushare_classification_ingestion",
+    ) -> Dict[str, Any]:
+        """幂等写入高置信度实体、份额、同类组成员关系与基准映射。"""
+        if not groups:
+            return {
+                "applied_groups": 0,
+                "applied_shares": 0,
+                "created_entities": 0,
+                "reused_entities": 0,
+                "conflicts": [],
+            }
+        if not self._schema_ready():
+            raise RuntimeError("标准化基金分类表尚未完整部署")
+
+        from sqlalchemy import text
+
+        applied_groups = 0
+        applied_shares = 0
+        created_entities = 0
+        reused_entities = 0
+        conflicts: List[Dict[str, Any]] = []
+
+        with self.engine.begin() as conn:
+            for group in groups:
+                try:
+                    with conn.begin_nested():
+                        strategy = conn.execute(text("""
+                            SELECT id, key, asset_class, active_passive
+                            FROM strategy_families
+                            WHERE key = :strategy_family_key
+                            LIMIT 1
+                        """), {"strategy_family_key": group.get("strategy_family_key")}).fetchone()
+                        peer_group = conn.execute(text("""
+                            SELECT id, key, benchmark_code
+                            FROM peer_groups
+                            WHERE key = :peer_group_key
+                            LIMIT 1
+                        """), {"peer_group_key": group.get("peer_group_key")}).fetchone()
+                        if not strategy or not peer_group:
+                            raise ValueError("strategy_family_or_peer_group_missing")
+
+                        strategy_row = dict(strategy._mapping)
+                        peer_row = dict(peer_group._mapping)
+                        if strategy_row.get("asset_class") != group.get("asset_class"):
+                            raise ValueError("strategy_family_asset_class_conflict")
+                        if strategy_row.get("active_passive") != group.get("active_passive"):
+                            raise ValueError("strategy_family_active_passive_conflict")
+                        if peer_row.get("benchmark_code") != group.get("benchmark_code"):
+                            raise ValueError("peer_group_benchmark_conflict")
+
+                        share_codes = [str(share.get("wind_code")) for share in group.get("shares") or []]
+                        existing_rows = conn.execute(text("""
+                            SELECT DISTINCT
+                                fe.id,
+                                fe.source,
+                                fe.strategy_family_id,
+                                fe.normalized_name
+                            FROM fund_share_classes fsc
+                            JOIN fund_entities fe ON fe.id = fsc.entity_id
+                            WHERE fsc.wind_code = ANY(:share_codes)
+                        """), {"share_codes": share_codes}).fetchall()
+                        if len(existing_rows) > 1:
+                            raise ValueError("share_codes_resolve_to_multiple_entities")
+
+                        existing = existing_rows[0] if existing_rows else conn.execute(text("""
+                            SELECT id, source, strategy_family_id, normalized_name
+                            FROM fund_entities
+                            WHERE canonical_code = :canonical_code
+                               OR (
+                                    normalized_name = :normalized_name
+                                    AND strategy_family_id = :strategy_family_id
+                               )
+                            ORDER BY CASE WHEN canonical_code = :canonical_code THEN 0 ELSE 1 END
+                            LIMIT 1
+                        """), {
+                            "canonical_code": group.get("canonical_code"),
+                            "normalized_name": group.get("normalized_name"),
+                            "strategy_family_id": strategy_row["id"],
+                        }).fetchone()
+
+                        entity_id = str(existing.id) if existing else str(group.get("entity_id"))
+                        if existing and existing.strategy_family_id not in {None, strategy_row["id"]}:
+                            raise ValueError("existing_entity_strategy_family_conflict")
+                        entity_created = not bool(existing)
+
+                        entity_payload = {
+                            "source": source,
+                            "classificationRule": group.get("mapping_method"),
+                            "classificationConfidence": group.get("classification_confidence"),
+                            "benchmarkConfidence": group.get("benchmark_confidence"),
+                            "evidenceRefs": group.get("evidence_refs") or {},
+                        }
+                        if existing:
+                            if existing.source == source:
+                                conn.execute(text("""
+                                    UPDATE fund_entities
+                                    SET canonical_code = :canonical_code,
+                                        canonical_name = :canonical_name,
+                                        normalized_name = :normalized_name,
+                                        strategy_family_id = :strategy_family_id,
+                                        asset_class = :asset_class,
+                                        active_passive = :active_passive,
+                                        established_at = COALESCE(:established_at, established_at),
+                                        source_updated_at = :source_updated_at,
+                                        raw_data = COALESCE(raw_data, '{}'::jsonb) || CAST(:raw_data AS jsonb),
+                                        updated_at = NOW()
+                                    WHERE id = :entity_id
+                                """), {
+                                    "entity_id": entity_id,
+                                    "canonical_code": group.get("canonical_code"),
+                                    "canonical_name": group.get("canonical_name"),
+                                    "normalized_name": group.get("normalized_name"),
+                                    "strategy_family_id": strategy_row["id"],
+                                    "asset_class": group.get("asset_class"),
+                                    "active_passive": group.get("active_passive"),
+                                    "established_at": group.get("established_at"),
+                                    "source_updated_at": group.get("source_updated_at"),
+                                    "raw_data": json.dumps(entity_payload, ensure_ascii=False),
+                                })
+                        else:
+                            conn.execute(text("""
+                                INSERT INTO fund_entities (
+                                    id, canonical_code, canonical_name, normalized_name,
+                                    strategy_family_id, asset_class, active_passive,
+                                    lifecycle_stage, established_at, source, source_updated_at,
+                                    raw_data, updated_at
+                                ) VALUES (
+                                    :entity_id, :canonical_code, :canonical_name, :normalized_name,
+                                    :strategy_family_id, :asset_class, :active_passive,
+                                    'active', :established_at, :source, :source_updated_at,
+                                    CAST(:raw_data AS jsonb), NOW()
+                                )
+                            """), {
+                                "entity_id": entity_id,
+                                "canonical_code": group.get("canonical_code"),
+                                "canonical_name": group.get("canonical_name"),
+                                "normalized_name": group.get("normalized_name"),
+                                "strategy_family_id": strategy_row["id"],
+                                "asset_class": group.get("asset_class"),
+                                "active_passive": group.get("active_passive"),
+                                "established_at": group.get("established_at"),
+                                "source": source,
+                                "source_updated_at": group.get("source_updated_at"),
+                                "raw_data": json.dumps(entity_payload, ensure_ascii=False),
+                            })
+
+                        group_share_count = 0
+                        for share in group.get("shares") or []:
+                            share_payload = {
+                                "source": "funds",
+                                "fundType": share.get("fund_type"),
+                                "declaredBenchmark": share.get("declared_benchmark"),
+                                "normalizationRule": "trailing_share_class_suffix",
+                            }
+                            share_id = "share-auto-" + hashlib.sha1(
+                                str(share.get("wind_code")).encode("utf-8")
+                            ).hexdigest()[:20]
+                            conn.execute(text("""
+                                INSERT INTO fund_share_classes (
+                                    id, entity_id, fund_id, wind_code, share_class, fee_class,
+                                    currency, is_primary, status, source, source_updated_at,
+                                    raw_data, updated_at
+                                ) VALUES (
+                                    :id, :entity_id, :fund_id, :wind_code, :share_class, NULL,
+                                    :currency, :is_primary, 'active', :source, :source_updated_at,
+                                    CAST(:raw_data AS jsonb), NOW()
+                                )
+                                ON CONFLICT (wind_code) DO UPDATE SET
+                                    entity_id = CASE
+                                        WHEN fund_share_classes.source = :source THEN EXCLUDED.entity_id
+                                        ELSE fund_share_classes.entity_id
+                                    END,
+                                    fund_id = COALESCE(fund_share_classes.fund_id, EXCLUDED.fund_id),
+                                    share_class = COALESCE(fund_share_classes.share_class, EXCLUDED.share_class),
+                                    currency = COALESCE(fund_share_classes.currency, EXCLUDED.currency),
+                                    is_primary = CASE
+                                        WHEN fund_share_classes.source = :source THEN EXCLUDED.is_primary
+                                        ELSE fund_share_classes.is_primary
+                                    END,
+                                    source_updated_at = GREATEST(fund_share_classes.source_updated_at, EXCLUDED.source_updated_at),
+                                    raw_data = COALESCE(fund_share_classes.raw_data, '{}'::jsonb) || EXCLUDED.raw_data,
+                                    updated_at = NOW()
+                            """), {
+                                "id": share_id,
+                                "entity_id": entity_id,
+                                "fund_id": share.get("fund_id"),
+                                "wind_code": share.get("wind_code"),
+                                "share_class": share.get("share_class"),
+                                "currency": share.get("currency") or "CNY",
+                                "is_primary": bool(share.get("is_primary")),
+                                "source": source,
+                                "source_updated_at": share.get("source_updated_at"),
+                                "raw_data": json.dumps(share_payload, ensure_ascii=False),
+                            })
+                            group_share_count += 1
+
+                        curated_membership = conn.execute(text("""
+                            SELECT 1
+                            FROM peer_group_members
+                            WHERE entity_id = :entity_id
+                              AND source <> :source
+                            LIMIT 1
+                        """), {"entity_id": entity_id, "source": source}).fetchone()
+                        if not curated_membership:
+                            member_id = "peer-member-auto-" + hashlib.sha1(
+                                f"{peer_row['id']}|{entity_id}".encode("utf-8")
+                            ).hexdigest()[:20]
+                            matched_rules = {
+                                "strategyFamily": group.get("strategy_family_key"),
+                                "benchmarkCode": group.get("benchmark_code"),
+                                "normalization": "high_confidence_ingestion",
+                                "shareCodes": share_codes,
+                            }
+                            conn.execute(text("""
+                                INSERT INTO peer_group_members (
+                                    id, peer_group_id, entity_id, role, matched_rules,
+                                    excluded_rules, sample_as_of_date, confidence, source, updated_at
+                                ) VALUES (
+                                    :id, :peer_group_id, :entity_id, 'member', CAST(:matched_rules AS jsonb),
+                                    NULL, :sample_as_of_date, :confidence, :source, NOW()
+                                )
+                                ON CONFLICT (peer_group_id, entity_id) DO UPDATE SET
+                                    matched_rules = EXCLUDED.matched_rules,
+                                    sample_as_of_date = EXCLUDED.sample_as_of_date,
+                                    confidence = EXCLUDED.confidence,
+                                    updated_at = NOW()
+                                WHERE peer_group_members.source = :source
+                            """), {
+                                "id": member_id,
+                                "peer_group_id": peer_row["id"],
+                                "entity_id": entity_id,
+                                "matched_rules": json.dumps(matched_rules, ensure_ascii=False),
+                                "sample_as_of_date": group.get("source_updated_at"),
+                                "confidence": group.get("classification_confidence"),
+                                "source": source,
+                            })
+
+                        effective_from = group.get("established_at") or "1900-01-01"
+                        curated_mapping = conn.execute(text("""
+                            SELECT 1
+                            FROM benchmark_mappings
+                            WHERE entity_id = :entity_id
+                              AND status = 'active'
+                              AND source <> :source
+                            LIMIT 1
+                        """), {"entity_id": entity_id, "source": source}).fetchone()
+                        if not curated_mapping:
+                            mapping_id = "benchmark-auto-" + hashlib.sha1(
+                                f"{entity_id}|{group.get('benchmark_code')}|{effective_from}".encode("utf-8")
+                            ).hexdigest()[:20]
+                            conn.execute(text("""
+                                INSERT INTO benchmark_mappings (
+                                    id, entity_id, peer_group_id, benchmark_code, benchmark_name,
+                                    benchmark_type, mapping_method, confidence, rationale,
+                                    evidence_refs, effective_from, effective_to, status, source, updated_at
+                                ) VALUES (
+                                    :id, :entity_id, :peer_group_id, :benchmark_code, :benchmark_name,
+                                    :benchmark_type, :mapping_method, :confidence, :rationale,
+                                    CAST(:evidence_refs AS jsonb), :effective_from, NULL, 'active', :source, NOW()
+                                )
+                                ON CONFLICT (entity_id, benchmark_code, effective_from) DO UPDATE SET
+                                    peer_group_id = EXCLUDED.peer_group_id,
+                                    benchmark_name = EXCLUDED.benchmark_name,
+                                    benchmark_type = EXCLUDED.benchmark_type,
+                                    mapping_method = EXCLUDED.mapping_method,
+                                    confidence = EXCLUDED.confidence,
+                                    rationale = EXCLUDED.rationale,
+                                    evidence_refs = EXCLUDED.evidence_refs,
+                                    status = 'active',
+                                    updated_at = NOW()
+                                WHERE benchmark_mappings.source = :source
+                            """), {
+                                "id": mapping_id,
+                                "entity_id": entity_id,
+                                "peer_group_id": peer_row["id"],
+                                "benchmark_code": group.get("benchmark_code"),
+                                "benchmark_name": group.get("benchmark_name"),
+                                "benchmark_type": group.get("benchmark_type"),
+                                "mapping_method": group.get("mapping_method"),
+                                "confidence": group.get("benchmark_confidence"),
+                                "rationale": group.get("rationale"),
+                                "evidence_refs": json.dumps(group.get("evidence_refs") or {}, ensure_ascii=False),
+                                "effective_from": effective_from,
+                                "source": source,
+                            })
+                        if entity_created:
+                            created_entities += 1
+                        else:
+                            reused_entities += 1
+                        applied_shares += group_share_count
+                        applied_groups += 1
+                except Exception as error:
+                    conflicts.append({
+                        "canonical_code": group.get("canonical_code"),
+                        "normalized_name": group.get("normalized_name"),
+                        "reason": str(error),
+                    })
+
+        self._schema_ready_cache = True
+        return {
+            "applied_groups": applied_groups,
+            "applied_shares": applied_shares,
+            "created_entities": created_entities,
+            "reused_entities": reused_entities,
+            "conflicts": conflicts,
+        }
 
     def _schema_ready(self) -> bool:
         if self._schema_ready_cache:

@@ -52,9 +52,14 @@ class FundEvaluationService:
                 "benchmark_mapping": classification.get("benchmark_mapping"),
                 "source": peer.get("peer_group_source"),
                 "peer_count": peer.get("peer_count", 0),
+                "classified_peer_count": peer.get("classified_peer_count", peer.get("peer_count", 0)),
+                "valid_metric_peer_count": peer.get("valid_metric_peer_count", 0),
                 "minimum_peer_count": peer.get("minimum_valid_peer_count"),
                 "sample_status": peer.get("sample_status"),
                 "metric_window": peer.get("metric_window") or window,
+                "metric_coverage": peer.get("metric_coverage", {}),
+                "peer_metric_profile": peer.get("peer_metric_profile"),
+                "peer_methodology_version": peer.get("peer_methodology_version"),
             },
             "evaluation": {
                 "overall_score": None if evaluation_blocked else scoring.get("overall_score"),
@@ -119,9 +124,13 @@ class FundEvaluationService:
 
         sample_status = peer.get("sample_status")
         if sample_status not in {None, "sufficient"}:
-            peer_count = peer.get("peer_count", 0)
+            classified_count = peer.get("classified_peer_count", peer.get("peer_count", 0))
+            valid_count = peer.get("valid_metric_peer_count", 0)
             minimum = peer.get("minimum_valid_peer_count")
-            items.append(f"同类组样本状态为 {sample_status}（当前 {peer_count}，最低 {minimum}）")
+            items.append(
+                f"同类组样本状态为 {sample_status}"
+                f"（已分类实体 {classified_count}，有效指标样本 {valid_count}，最低 {minimum}）"
+            )
 
         gap = peer.get("peer_metric_gap") or {}
         blocking_metrics = gap.get("blocking_metrics") or []

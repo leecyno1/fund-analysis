@@ -44,8 +44,13 @@ class NavRepo:
             self._engine = _get_engine()
         return self._engine
 
-    def upsert_nav_series(self, wind_code: str, nav_data: List[Dict[str, Any]]) -> bool:
-        """Upsert 基金净值序列"""
+    def upsert_nav_series(
+        self,
+        wind_code: str,
+        nav_data: List[Dict[str, Any]],
+        replace_range: bool = False,
+    ) -> bool:
+        """Upsert 基金净值序列；权威源同步可先替换本次覆盖日期范围。"""
         try:
             from sqlalchemy import text
 
@@ -66,7 +71,22 @@ class NavRepo:
                 discount_rate = EXCLUDED.discount_rate
             """
 
-            with self.engine.connect() as conn:
+            valid_dates = sorted(
+                str(nav.get("date") or "").strip()
+                for nav in nav_data
+                if str(nav.get("date") or "").strip()
+            )
+            with self.engine.begin() as conn:
+                if replace_range and valid_dates:
+                    conn.execute(text("""
+                        DELETE FROM fund_nav
+                        WHERE wind_code = :wind_code
+                          AND trade_date BETWEEN :start_date AND :end_date
+                    """), {
+                        "wind_code": wind_code,
+                        "start_date": valid_dates[0],
+                        "end_date": valid_dates[-1],
+                    })
                 for nav in nav_data:
                     try:
                         nav_value = _clean(nav.get("nav") or nav.get("unit_nav"))
@@ -83,7 +103,6 @@ class NavRepo:
                         conn.execute(text(insert_sql), params)
                     except Exception:
                         continue
-                conn.commit()
             return True
         except Exception as e:
             logger.error(f"upsert_nav_series error for {wind_code}: {e}")

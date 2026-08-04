@@ -69,6 +69,8 @@ class FakePeerComparisonService:
             "primary_benchmark": self.classification.get("primary_benchmark"),
             "peer_group_source": "research_profile_peer_group",
             "peer_count": 12 if percentile is not None else 3,
+            "classified_peer_count": 12,
+            "valid_metric_peer_count": 12 if percentile is not None else 3,
             "minimum_valid_peer_count": 5,
             "sample_status": self.sample_status,
             "metric_window": window,
@@ -114,6 +116,8 @@ def main() -> int:
         raise AssertionError(f"Thin peer sample must be partial, not fabricated: {thin_peer}")
     if not thin_peer.get("missing_items"):
         raise AssertionError(f"Thin peer sample must explain the gap: {thin_peer}")
+    if "已分类实体 12，有效指标样本 3" not in " ".join(thin_peer.get("missing_items", [])):
+        raise AssertionError(f"Thin peer explanation must separate classification from coverage: {thin_peer}")
 
     missing_benchmark = {
         **CLASSIFICATION,

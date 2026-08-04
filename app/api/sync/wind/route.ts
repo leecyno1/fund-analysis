@@ -18,6 +18,12 @@ type SyncDetail = {
   managerCount?: number
   managerIds?: string[]
   managerTenureStart?: string | null
+  classificationIngestion?: {
+    applied_groups?: number
+    applied_shares?: number
+    skipped?: Array<{ wind_code?: string; reason?: string }>
+    conflicts?: Array<{ canonical_code?: string; reason?: string }>
+  } | null
   rollingMetrics?: {
     saved?: number
     windows?: string[]
@@ -82,6 +88,7 @@ async function syncFunds(codes?: string[]) {
         managerCount: Number(payload.manager_count || 0),
         managerIds: payload.manager_ids || [],
         managerTenureStart: payload.manager_tenure_start || null,
+        classificationIngestion: payload.classification_ingestion || null,
         rollingMetrics: payload.rolling_metrics || null,
         tenureMetrics: payload.tenure_metrics || null,
         warnings: payload.warnings || [],

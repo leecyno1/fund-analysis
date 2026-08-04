@@ -32,6 +32,7 @@ from typing import List, Dict, Any, Optional
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from services.tushare_service import TushareDataService
+from services.fund_classification_ingestion_service import FundClassificationIngestionService
 from services.fund_nav_evidence_service import FundNavDataEnrichmentService
 from repositories import get_fund_repo, get_manager_repo, get_nav_repo, get_holding_repo
 from service_registry import init_services
@@ -178,6 +179,10 @@ class BatchSyncOrchestrator:
             # 1. 基本信息
             self.rate_limiter.acquire()
             info = self.data_svc.get_fund_info(wind_code)
+            ingestion_service = FundClassificationIngestionService()
+            ingestion_plan = ingestion_service.build_plan([{**info, "wind_code": wind_code}])
+            if ingestion_plan.get("groups"):
+                ingestion_service.apply_plan(ingestion_plan)
 
             # 2. 净值序列（最近1年）
             self.rate_limiter.acquire()
@@ -192,6 +197,8 @@ class BatchSyncOrchestrator:
                 end_date=end_date,
             )
             nav_data = nav_enrichment["nav_series"]
+            if nav_enrichment.get("nav_data_status") != "valid":
+                raise ValueError(f"净值质量门禁未通过：{nav_enrichment.get('nav_validation')}")
 
             # 3. 业绩指标
             self.rate_limiter.acquire()
@@ -222,8 +229,13 @@ class BatchSyncOrchestrator:
                         "benchmark_code": nav_enrichment.get("benchmark_code"),
                         "benchmark_source": nav_enrichment.get("benchmark_source"),
                         "benchmark_data_status": nav_enrichment.get("benchmark_data_status"),
+                        "benchmark_data_kind": nav_enrichment.get("benchmark_data_kind"),
                         "benchmark_observations": nav_enrichment.get("benchmark_observations", 0),
+                        "benchmark_nav_observations": nav_enrichment.get("benchmark_nav_observations", 0),
+                        "benchmark_rate_observations": nav_enrichment.get("benchmark_rate_observations", 0),
                         "money_market_metric_status": nav_enrichment.get("money_market_metric_status"),
+                        "nav_data_status": nav_enrichment.get("nav_data_status"),
+                        "nav_validation": nav_enrichment.get("nav_validation"),
                     },
                 },
             }
@@ -231,7 +243,7 @@ class BatchSyncOrchestrator:
 
             # 7. 保存净值序列
             if nav_data:
-                self.nav_repo.upsert_nav_series(wind_code, nav_data)
+                self.nav_repo.upsert_nav_series(wind_code, nav_data, replace_range=True)
 
             # 8. 保存持仓
             if holdings:

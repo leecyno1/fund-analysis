@@ -33,6 +33,9 @@ def main() -> int:
             raise AssertionError(f"Benchmark-aware rolling metric missing {metric_name}: {by_name}")
         if by_name[metric_name].get("benchmark_code") != "000300.SH":
             raise AssertionError(f"Relative metric lost benchmark identity: {by_name[metric_name]}")
+    for metric_name in ["annualized_return", "max_drawdown", "sharpe_ratio"]:
+        if by_name[metric_name].get("benchmark_code") is not None:
+            raise AssertionError(f"Absolute metric must not be keyed by a benchmark: {by_name[metric_name]}")
 
     no_benchmark_records = RollingMetricService(windows={"20d": 20}).calculate_for_nav_series(
         [{"date": item["date"], "nav": item["nav"]} for item in series],

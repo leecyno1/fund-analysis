@@ -12,7 +12,10 @@
     "smoke:newma-desk": "node scripts/newma_desk_fund_research_compat_smoke.mjs",
     "research:real-data-report": "node scripts/fund_research_real_data_report.mjs",
     "funds:update-universe": "bash scripts/update_fund_universe.sh",
-    "funds:update-ranking-metrics": "bash scripts/update_fund_ranking_metrics.sh"
+    "funds:update-ranking-metrics": "bash scripts/update_fund_ranking_metrics.sh",
+    "funds:backfill-peer-evaluation": "bash scripts/update_fund_ranking_metrics.sh --peer-evaluation-coverage",
+    "funds:preview-classification": "bash scripts/update_fund_classification.sh",
+    "funds:sync-classification": "bash scripts/update_fund_classification.sh --apply"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.90.0",

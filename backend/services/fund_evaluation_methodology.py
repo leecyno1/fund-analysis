@@ -7,6 +7,7 @@ class FundEvaluationMethodology:
     """集中管理类别专属证据门禁、维度、阈值和同类代理评分。"""
 
     METHODOLOGY_VERSION = "category_evaluation_methodology_v1"
+    PEER_METHODOLOGY_VERSION = "category_peer_percentiles_v2"
 
     PROFILES: Dict[str, Dict[str, Any]] = {
         "active_equity": {
@@ -26,6 +27,41 @@ class FundEvaluationMethodology:
             "required_evidence": ["seven_day_annualized_yield", "annualized_return", "max_drawdown", "aum"],
         },
     }
+
+    PEER_METRIC_CONFIGS: Dict[str, List[Dict[str, Any]]] = {
+        "active_equity": [
+            {"metric_name": "annualized_return", "label": "1Y 年化收益", "unit": "percent", "higher_is_better": True, "paths": [("selected", "annualized_return")], "required_for_sample": True},
+            {"metric_name": "max_drawdown", "label": "1Y 最大回撤", "unit": "percent", "higher_is_better": True, "paths": [("selected", "max_drawdown")], "required_for_sample": True},
+            {"metric_name": "sharpe_ratio", "label": "1Y 夏普比率", "unit": "number", "higher_is_better": True, "paths": [("selected", "sharpe_ratio")], "required_for_sample": True},
+            {"metric_name": "annualized_volatility", "label": "1Y 年化波动", "unit": "percent", "higher_is_better": False, "paths": [("selected", "annualized_volatility")], "required_for_sample": False},
+            {"metric_name": "calmar_ratio", "label": "1Y Calmar", "unit": "number", "higher_is_better": True, "paths": [("selected", "calmar_ratio")], "required_for_sample": False},
+            {"metric_name": "positive_return_ratio", "label": "1Y 正收益占比", "unit": "percent", "higher_is_better": True, "paths": [("selected", "positive_return_ratio")], "required_for_sample": False},
+        ],
+        "fixed_income": [
+            {"metric_name": "annualized_return", "label": "1Y 年化收益", "unit": "percent", "higher_is_better": True, "paths": [("selected", "annualized_return")], "required_for_sample": True},
+            {"metric_name": "max_drawdown", "label": "1Y 最大回撤", "unit": "percent", "higher_is_better": True, "paths": [("selected", "max_drawdown")], "required_for_sample": True},
+            {"metric_name": "sharpe_ratio", "label": "1Y 夏普比率", "unit": "number", "higher_is_better": True, "paths": [("selected", "sharpe_ratio")], "required_for_sample": True},
+            {"metric_name": "annualized_volatility", "label": "1Y 年化波动", "unit": "percent", "higher_is_better": False, "paths": [("selected", "annualized_volatility")], "required_for_sample": False},
+            {"metric_name": "positive_return_ratio", "label": "1Y 正收益占比", "unit": "percent", "higher_is_better": True, "paths": [("selected", "positive_return_ratio")], "required_for_sample": False},
+        ],
+        "index_fund": [
+            {"metric_name": "tracking_error", "label": "1Y 跟踪误差", "unit": "percent", "higher_is_better": False, "paths": [("selected", "tracking_error")], "valid_range": (0.0, 0.10), "required_for_sample": True},
+            {"metric_name": "absolute_tracking_difference", "label": "1Y 跟踪差异绝对值", "unit": "percent", "higher_is_better": False, "paths": [("selected", "tracking_difference"), ("selected", "excess_return")], "transform": "absolute", "valid_range": (0.0, 0.25), "required_for_sample": True},
+            {"metric_name": "expense_ratio", "label": "综合费率", "unit": "percent", "higher_is_better": False, "paths": [("latest", "expense_ratio"), ("selected", "expense_ratio")], "valid_range": (0.0, 0.05), "required_for_sample": True},
+            {"metric_name": "aum", "label": "基金规模", "unit": "cny_100m", "higher_is_better": True, "paths": [("latest", "aum"), ("selected", "aum")], "valid_range": (0.000001, 1000000.0), "required_for_sample": True},
+        ],
+        "money_market": [
+            {"metric_name": "seven_day_annualized_yield", "label": "七日年化收益率", "unit": "percent", "higher_is_better": True, "paths": [("latest", "seven_day_annualized_yield"), ("selected", "seven_day_annualized_yield")], "valid_range": (0.0, 0.20), "required_for_sample": True},
+            {"metric_name": "annualized_return", "label": "1Y 年化收益", "unit": "percent", "higher_is_better": True, "paths": [("selected", "annualized_return")], "valid_range": (-0.05, 0.20), "required_for_sample": True},
+            {"metric_name": "max_drawdown", "label": "1Y 最大回撤", "unit": "percent", "higher_is_better": True, "paths": [("selected", "max_drawdown")], "valid_range": (-0.20, 0.01), "required_for_sample": True},
+            {"metric_name": "aum", "label": "基金规模", "unit": "cny_100m", "higher_is_better": True, "paths": [("latest", "aum"), ("selected", "aum")], "valid_range": (0.000001, 1000000.0), "required_for_sample": True},
+            {"metric_name": "benchmark_yield_spread", "label": "相对 DR007 收益利差", "unit": "percent", "higher_is_better": True, "paths": [("latest", "benchmark_yield_spread")], "required_for_sample": False},
+        ],
+    }
+
+    def peer_metric_configs(self, profile_key: str) -> List[Dict[str, Any]]:
+        """返回与类别评价方法一致的同类分位指标，不跨类别复用风险收益模板。"""
+        return [dict(config) for config in self.PEER_METRIC_CONFIGS.get(profile_key, [])]
 
     def evaluate(
         self,
@@ -132,6 +168,17 @@ class FundEvaluationMethodology:
         gaps = [f"core_metric:{name}" for name, value in values.items() if value is None]
         if gaps:
             return self._unavailable("insufficient_evidence", gaps, "index_fund")
+        invalid_ranges = []
+        if tracking_error < 0 or tracking_error > 0.10:
+            invalid_ranges.append("invalid_metric_range:tracking_error")
+        if abs(tracking_difference) > 0.25:
+            invalid_ranges.append("invalid_metric_range:tracking_difference")
+        if expense_ratio < 0 or expense_ratio > 0.05:
+            invalid_ranges.append("invalid_metric_range:expense_ratio")
+        if aum <= 0:
+            invalid_ranges.append("invalid_metric_range:aum")
+        if invalid_ranges:
+            return self._unavailable("insufficient_evidence", invalid_ranges, "index_fund")
 
         dimensions = {
             "tracking_quality": self._dimension(
@@ -181,17 +228,33 @@ class FundEvaluationMethodology:
         gaps = [f"core_metric:{name}" for name, value in values.items() if value is None]
         if gaps:
             return self._unavailable("insufficient_evidence", gaps, "money_market")
+        invalid_ranges = []
+        if seven_day_yield < 0 or seven_day_yield > 0.20:
+            invalid_ranges.append("invalid_metric_range:seven_day_annualized_yield")
+        if annualized_return < -0.05 or annualized_return > 0.20:
+            invalid_ranges.append("invalid_metric_range:annualized_return")
+        if max_drawdown < -0.20 or max_drawdown > 0.01:
+            invalid_ranges.append("invalid_metric_range:max_drawdown")
+        if aum <= 0:
+            invalid_ranges.append("invalid_metric_range:aum")
+        if invalid_ranges:
+            return self._unavailable("insufficient_evidence", invalid_ranges, "money_market")
 
         volatility = self._first(metrics, [("1y", "annualized_volatility")])
         positive_ratio = self._first(metrics, [("1y", "positive_return_ratio")])
+        benchmark_rate = self._rate(self._first(metrics, [("latest", "benchmark_annualized_rate")]))
+        benchmark_spread = self._first(metrics, [("latest", "benchmark_yield_spread")])
         stability_gap = abs(seven_day_yield - annualized_return)
+        income_evidence = ["七日年化收益率与近一年收益共同描述收益中枢"]
+        if benchmark_rate is not None and benchmark_spread is not None:
+            income_evidence.append("DR007 作为利率型参照单独披露收益利差，不转换为净值或跟踪误差")
         dimensions = {
             "income_competitiveness": self._dimension(
                 self._average([
                     self._normalize(seven_day_yield, 0.01, 0.035),
                     self._normalize(annualized_return, 0.01, 0.035),
                 ]),
-                ["七日年化收益率与近一年收益共同描述收益中枢"],
+                income_evidence,
             ),
             "capital_preservation": self._dimension(
                 self._average([
@@ -218,6 +281,8 @@ class FundEvaluationMethodology:
             missing.append("optional_metric:1y.annualized_volatility")
         if positive_ratio is None:
             missing.append("optional_metric:1y.positive_return_ratio")
+        if benchmark_rate is None:
+            missing.append("optional_metric:latest.benchmark_annualized_rate")
         missing.extend(f"quality:{issue}" for issue in quality.get("issues", []))
         return self._finalize(
             "money_market",
@@ -324,6 +389,7 @@ class FundEvaluationMethodology:
             "calmar_ratio", "positive_return_ratio", "tenure_days", "tracking_error",
             "tracking_difference", "excess_return", "expense_ratio", "aum",
             "seven_day_annualized_yield", "income_per_10000",
+            "benchmark_annualized_rate", "benchmark_yield_spread",
         }
         return {
             f"{window}.{metric_name}": value

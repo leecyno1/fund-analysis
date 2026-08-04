@@ -10,6 +10,11 @@ from typing import Any, Dict, List, Optional
 class DataQualityService:
     """按基金基础信息、研究画像、净值覆盖和指标快照评估可信度。"""
 
+    MANAGER_TENURE_NOT_APPLICABLE = {"index_broad", "cash_management"}
+
+    def __init__(self, classification_adapter: Optional[Any] = None):
+        self._classification_adapter = classification_adapter
+
     def evaluate_fund(self, fund_code: str) -> Dict[str, Any]:
         from repositories import get_fund_repo, get_metric_snapshot_repo, get_nav_repo, get_research_profile_repo
 
@@ -23,11 +28,19 @@ class DataQualityService:
         profile = profile_repo.get_profile(wind_code) or {}
         nav_series = nav_repo.get_nav_series(wind_code)
         metric_panel = metric_repo.get_latest_panel("fund", wind_code)
+        try:
+            classification_context = self._get_classification_adapter().get_classification_context(wind_code) or {}
+        except Exception:
+            classification_context = {}
+        strategy_family_key = classification_context.get("strategy_family_key")
 
         checks = {
             "fund_base": self._check_fund_base(fund),
-            "research_profile": self._check_research_profile(profile),
-            "manager_tenure_start": self._check_required(profile.get("manager_tenure_start"), "已配置现任经理任期起点", "缺少现任经理任期起点"),
+            "research_profile": self._check_research_context(profile, classification_context),
+            "manager_tenure_start": self._check_manager_tenure(
+                profile.get("manager_tenure_start"),
+                strategy_family_key,
+            ),
             "nav_coverage": self._check_nav_coverage(nav_series),
             "metric_snapshots": self._check_metric_snapshots(metric_panel),
         }
@@ -54,6 +67,8 @@ class DataQualityService:
             "checks": checks,
             "issues": issues,
             "summary": self._summary(status, score, issues),
+            "classification_context_status": classification_context.get("status"),
+            "strategy_family_key": strategy_family_key,
         }
 
     def _check_fund_base(self, fund: Dict[str, Any]) -> Dict[str, Any]:
@@ -73,6 +88,58 @@ class DataQualityService:
             "message": "研究画像字段完整" if not missing else f"研究画像字段缺失：{', '.join(missing)}",
             "missing_fields": missing,
         }
+
+    def _check_research_context(
+        self,
+        profile: Dict[str, Any],
+        classification_context: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        if classification_context.get("status") == "resolved":
+            benchmark_code = (classification_context.get("benchmark_mapping") or {}).get("benchmark_code")
+            required = {
+                "strategy_family_key": classification_context.get("strategy_family_key"),
+                "peer_group_key": classification_context.get("peer_group_key"),
+                "benchmark_code": benchmark_code,
+            }
+            missing = [field for field, value in required.items() if not value]
+            return {
+                "passed": not missing,
+                "message": (
+                    "标准化分类、同类组与基准上下文完整"
+                    if not missing
+                    else f"标准化研究上下文缺失：{', '.join(missing)}"
+                ),
+                "missing_fields": missing,
+                "source": "standardized_classification",
+            }
+        result = self._check_research_profile(profile)
+        result["source"] = "fund_research_profiles"
+        return result
+
+    def _check_manager_tenure(
+        self,
+        manager_tenure_start: Any,
+        strategy_family_key: Optional[str],
+    ) -> Dict[str, Any]:
+        if strategy_family_key in self.MANAGER_TENURE_NOT_APPLICABLE:
+            return {
+                "passed": True,
+                "message": "该类别评价方法不使用基金经理任期指标",
+                "value": manager_tenure_start,
+                "not_applicable": True,
+            }
+        return self._check_required(
+            manager_tenure_start,
+            "已配置现任经理任期起点",
+            "缺少现任经理任期起点",
+        )
+
+    def _get_classification_adapter(self):
+        if self._classification_adapter is None:
+            from repositories import get_fund_classification_repo
+
+            self._classification_adapter = get_fund_classification_repo()
+        return self._classification_adapter
 
     def _check_required(self, value: Any, success_message: str, failure_message: str) -> Dict[str, Any]:
         return {
