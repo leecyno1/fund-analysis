@@ -53,14 +53,15 @@ try {
     const postgres = (await import('postgres')).default
     const sql = postgres(${JSON.stringify(databaseUrl)}, { max: 1 })
     const cases = [
-      ['bond', '债券 固收', 'active', 'fixed_income'],
-      ['index', '指数 ETF', 'passive', 'index_fund'],
-      ['qdii', '全球 QDII', 'active', 'qdii'],
-      ['fof', 'FOF 养老', 'active', 'fof'],
-      ['quant', '量化 指数增强', 'active', 'quant_fund'],
+      ['bond', '债券 固收', 'active', 'fixed_income', 6],
+      ['index', '指数 ETF', 'passive', 'index_fund', 6],
+      ['money', '货币 现金管理', 'active', 'money_market', 5],
+      ['qdii', '全球 QDII', 'active', 'qdii', 6],
+      ['fof', 'FOF 养老', 'active', 'fof', 6],
+      ['quant', '量化 指数增强', 'active', 'quant_fund', 6],
     ]
     const outputs = []
-    for (const [fundType, assetClass, activePassive, expected] of cases) {
+    for (const [fundType, assetClass, activePassive, expected, expectedDimensions] of cases) {
       const rows = await sql\`
         SELECT
           t.key,
@@ -86,6 +87,7 @@ try {
       \`
       outputs.push({
         expected,
+        expectedDimensions,
         actual: rows[0]?.key,
         source: rows[0]?.source,
         dimensions: rows[0]?.dimensions,
@@ -100,7 +102,7 @@ try {
   for (const output of outputs) {
     assertEqual(output.source, 'methodology_seed', `${output.expected} template source`)
     assertEqual(output.actual, output.expected, `${output.expected} template resolution`)
-    assertEqual(output.dimensions, 6, `${output.expected} dimensions`)
+    assertEqual(output.dimensions, output.expectedDimensions, `${output.expected} dimensions`)
     if (output.score <= 0) throw new Error(`${output.expected} should match by seeded database rules`)
   }
 

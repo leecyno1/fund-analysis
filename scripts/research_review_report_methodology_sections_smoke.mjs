@@ -27,6 +27,7 @@ assertIncludes(reportLib, '## 2. 方法论模板与章节重点', 'research repo
 assertIncludes(reportLib, '主动权益基金研究模板', 'report supports active equity template')
 assertIncludes(reportLib, '固收基金研究模板', 'report supports fixed income template')
 assertIncludes(reportLib, '指数基金研究模板', 'report supports index template')
+assertIncludes(reportLib, '货币基金研究模板', 'report supports money-market template')
 assertIncludes(reportLib, 'QDII 基金研究模板', 'report supports QDII template')
 assertIncludes(reportLib, 'FOF 基金研究模板', 'report supports FOF template')
 assertIncludes(reportLib, '量化基金研究模板', 'report supports quant template')

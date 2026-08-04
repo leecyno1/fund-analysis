@@ -43,6 +43,7 @@ for (const templateKey of [
   'active_equity',
   'fixed_income',
   'index_fund',
+  'money_market',
   'qdii',
   'fof',
   'quant_fund',
@@ -57,6 +58,8 @@ for (const dimension of [
   '基金经理',
   '基金公司',
   '费用与跟踪误差',
+  '收益竞争力',
+  '本金保护',
   '信用暴露',
   '汇率与区域暴露',
   '底层基金穿透',
@@ -66,6 +69,11 @@ for (const dimension of [
 }
 
 assertIncludes(tool, 'methodology-config', 'tool declares methodology-config manifest')
+assertIncludes(tool, 'unclassifiedMethodologyOutput', 'tool exposes an explicit unclassified gate')
+assertIncludes(tool, "templateKey: 'unclassified'", 'unknown classifications do not borrow a category template')
+assertIncludes(tool, 'matched.categoryScore > 0', 'active/passive metadata alone cannot choose a category')
+assertIncludes(tool, '未确认基金分类时不选择任何评价模板', 'unknown classifications stop methodology selection')
+assertNotIncludes(tool, '默认进入主动权益模板', 'unknown classifications must not default to active equity')
 assertIncludes(tool, 'FUND_RESEARCH_GUARDRAILS.noTradingDirective', 'tool keeps research-only guardrail')
 assertIncludes(tool, '不能用同一套评价维度覆盖所有基金类型', 'tool blocks one-size-fits-all evaluation')
 assertNotIncludes(tool, '投委会', 'tool must not include investment committee workflow')

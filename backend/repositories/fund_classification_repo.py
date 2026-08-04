@@ -212,8 +212,10 @@ class FundClassificationRepo:
                     COALESCE(f.wind_code, fsc.wind_code) AS wind_code,
                     COALESCE(f.name, fe.canonical_name) AS name,
                     COALESCE(f.type, fe.asset_class) AS type,
+                    f.total_asset,
                     f.performance_data,
                     f.risk_metrics,
+                    f.raw_data,
                     fe.id AS entity_id,
                     fe.canonical_code,
                     fsc.share_class
@@ -221,7 +223,7 @@ class FundClassificationRepo:
                 JOIN peer_groups pg ON pg.id = pgm.peer_group_id
                 JOIN fund_entities fe ON fe.id = pgm.entity_id
                 JOIN fund_share_classes fsc ON fsc.entity_id = fe.id AND fsc.status = 'active'
-                LEFT JOIN funds f ON f.id = fsc.fund_id
+                LEFT JOIN funds f ON f.wind_code = fsc.wind_code
                 WHERE pgm.peer_group_id = :peer_group_id
                   AND pgm.role <> 'excluded'
                 ORDER BY

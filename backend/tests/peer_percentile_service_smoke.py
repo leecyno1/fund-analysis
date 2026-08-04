@@ -21,11 +21,18 @@ def main() -> int:
         metric = metrics.get(metric_name)
         if not metric:
             raise AssertionError(f"Missing percentile metric {metric_name}: {result}")
-        percentile = metric.get("percentile")
-        if percentile is None or percentile < 0 or percentile > 100:
-            raise AssertionError(f"Invalid percentile for {metric_name}: {metric}")
+        if metric.get("sample_status") != "insufficient_peer_sample":
+            raise AssertionError(f"Explicit small peer group must remain insufficient: {metric}")
+        if metric.get("percentile") is not None:
+            raise AssertionError(f"Small peer group must not fabricate a percentile: {metric}")
 
-    print("OK peer percentile service returns same-peer ranks")
+    gap = result.get("peer_metric_gap", {})
+    if gap.get("next_action") != "sync_peer_nav_and_rolling_metrics":
+        raise AssertionError(f"Small peer group must expose a metric evidence gap: {gap}")
+    if result.get("peer_group_source") != "standardized_peer_group_membership":
+        raise AssertionError(f"Peer comparison must retain the explicit membership source: {result}")
+
+    print("OK peer percentile service stops ranking when the explicit peer sample is insufficient")
     return 0
 
 

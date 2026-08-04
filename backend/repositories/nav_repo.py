@@ -112,7 +112,7 @@ class NavRepo:
             where_sql = " AND ".join(where_clauses)
 
             sql = f"""
-                SELECT trade_date, COALESCE(unit_nav, nav) AS unit_nav, accum_nav, daily_return
+                SELECT trade_date, COALESCE(unit_nav, nav) AS unit_nav, accum_nav, daily_return, benchmark_nav
                 FROM fund_nav
                 WHERE {where_sql}
                 ORDER BY trade_date ASC
@@ -126,6 +126,7 @@ class NavRepo:
                         "nav": r.unit_nav,
                         "accum_nav": r.accum_nav,
                         "daily_return": r.daily_return,
+                        "benchmark_nav": r.benchmark_nav,
                     }
                     for r in result.fetchall()
                 ]

@@ -5,9 +5,12 @@ export type MethodologyTemplateKey =
   | 'active_equity'
   | 'fixed_income'
   | 'index_fund'
+  | 'money_market'
   | 'qdii'
   | 'fof'
   | 'quant_fund'
+
+export type MethodologyResolutionKey = MethodologyTemplateKey | 'unclassified'
 
 export type MethodologyConfigInput = {
   fundType?: string | null
@@ -28,7 +31,8 @@ export type MethodologyDimension = {
 }
 
 export type MethodologyConfigOutput = {
-  templateKey: MethodologyTemplateKey
+  resolutionStatus: 'matched' | 'unclassified'
+  templateKey: MethodologyResolutionKey
   templateName: string
   matchRationale: string
   dimensions: MethodologyDimension[]
@@ -93,6 +97,19 @@ const templates: Record<MethodologyTemplateKey, {
       { key: 'company', name: '基金公司', weight: 8, hardGate: false, evidenceFields: ['index_product_line', 'operations_capability'], reason: '被动产品更关注运营和产品线能力。' },
     ],
   },
+  money_market: {
+    name: '货币基金研究模板',
+    aliases: ['货币', '现金管理', 'money_market'],
+    assetHints: ['money', 'money_market', '货币', '现金管理'],
+    activePassiveHints: ['active', '主动'],
+    dimensions: [
+      { key: 'income_competitiveness', name: '收益竞争力', weight: 35, hardGate: true, evidenceFields: ['seven_day_annualized_yield', 'annualized_return'], reason: '货币基金需同时观察七日年化收益率和较长窗口收益中枢。' },
+      { key: 'capital_preservation', name: '本金保护', weight: 30, hardGate: true, evidenceFields: ['max_drawdown'], reason: '净值回撤是货币基金稳定性评价的硬证据。' },
+      { key: 'income_stability', name: '收益稳定性', weight: 15, hardGate: false, evidenceFields: ['annualized_volatility', 'positive_return_ratio'], reason: '波动和正收益比例用于识别收益中枢是否稳定。' },
+      { key: 'liquidity_scale', name: '规模与流动性', weight: 10, hardGate: true, evidenceFields: ['aum'], reason: '规模是流动性管理和赎回承接能力的代理证据。' },
+      { key: 'data_quality', name: '数据质量', weight: 10, hardGate: false, evidenceFields: ['source_freshness'], reason: '短周期收益指标必须保留来源与时点。' },
+    ],
+  },
   qdii: {
     name: 'QDII 基金研究模板',
     aliases: ['QDII', '海外', '全球', '港股', '美股', 'qdii'],
@@ -145,30 +162,50 @@ function normalizedEvidence(input: MethodologyConfigInput) {
   return new Set((Array.isArray(input.availableEvidence) ? input.availableEvidence : []).map((item) => normalizeText(item).toLowerCase()).filter(Boolean))
 }
 
-function inferTemplate(input: MethodologyConfigInput): { key: MethodologyTemplateKey; rationale: string } {
+function inferTemplate(input: MethodologyConfigInput): { key: MethodologyTemplateKey | null; rationale: string } {
   const requested = normalizeText(input.requestedTemplateKey) as MethodologyTemplateKey
   if (requested in templates) return { key: requested, rationale: `按指定模板 ${requested} 匹配。` }
 
-  const text = [
+  const categoryText = [
     input.fundType,
     input.assetClass,
-    input.activePassive,
     input.strategyFamilyKey,
   ].map(normalizeText).join(' ').toLowerCase()
+  const activePassiveText = normalizeText(input.activePassive).toLowerCase()
 
   const matched = (Object.entries(templates) as Array<[MethodologyTemplateKey, typeof templates[MethodologyTemplateKey]]>)
     .map(([key, template]) => ({
       key,
-      score: [
+      categoryScore: [
         ...template.aliases,
         ...template.assetHints,
-        ...template.activePassiveHints,
-      ].reduce((sum, hint) => sum + (text.includes(hint.toLowerCase()) ? 1 : 0), 0),
+      ].reduce((sum, hint) => sum + (categoryText.includes(hint.toLowerCase()) ? 1 : 0), 0),
+      activePassiveScore: template.activePassiveHints.reduce(
+        (sum, hint) => sum + (activePassiveText.includes(hint.toLowerCase()) ? 1 : 0),
+        0,
+      ),
     }))
-    .sort((left, right) => right.score - left.score)[0]
+    .sort((left, right) => right.categoryScore - left.categoryScore || right.activePassiveScore - left.activePassiveScore)[0]
 
-  if (matched && matched.score > 0) return { key: matched.key, rationale: `按基金类型/资产类别/主被动标签匹配 ${matched.key}。` }
-  return { key: 'active_equity', rationale: '未识别到清晰类型，默认进入主动权益模板并要求补充分类证据。' }
+  if (matched && matched.categoryScore > 0) return { key: matched.key, rationale: `按基金类型、资产类别或策略族谱匹配 ${matched.key}，主被动信息仅用于同类匹配校验。` }
+  return { key: null, rationale: '未识别到清晰基金分类，停止方法论匹配并要求补充分类证据。' }
+}
+
+export function unclassifiedMethodologyOutput(rationale: string): MethodologyConfigOutput {
+  return {
+    resolutionStatus: 'unclassified',
+    templateKey: 'unclassified',
+    templateName: '基金分类待确认',
+    matchRationale: rationale,
+    dimensions: [],
+    hardGateDimensions: ['基金分类'],
+    missingEvidenceFields: ['fund_classification'],
+    readyForFormalReview: false,
+    policy: {
+      hardBoundary: '未确认基金分类时不选择任何评价模板；只输出分类证据缺口，不输出默认综合评分。',
+      requiredFundTypes: ['active_equity', 'fixed_income', 'index_fund', 'money_market', 'qdii', 'fof', 'quant_fund'],
+    },
+  }
 }
 
 export const methodologyConfigTool: ResearchTool<MethodologyConfigInput, MethodologyConfigOutput> = {
@@ -176,7 +213,7 @@ export const methodologyConfigTool: ResearchTool<MethodologyConfigInput, Methodo
     name: toolName,
     version,
     domain: 'fund',
-    purpose: '为主动权益、固收、指数、QDII、FOF、量化基金选择差异化研究模板，输出评价维度、硬门槛和证据缺口。',
+    purpose: '为主动权益、固收、指数、货币、QDII、FOF、量化基金选择差异化研究模板，输出评价维度、硬门槛和证据缺口。',
     inputSchema: 'MethodologyConfigInput',
     outputSchema: 'MethodologyConfigOutput',
     evidencePolicy: 'derived_metric',
@@ -191,6 +228,29 @@ export const methodologyConfigTool: ResearchTool<MethodologyConfigInput, Methodo
   },
   run(input) {
     const match = inferTemplate(input)
+    if (!match.key) {
+      const output = unclassifiedMethodologyOutput(match.rationale)
+      return createToolResult(toolName, version, input, output, {
+        ok: false,
+        hardBlocks: ['基金分类证据不足，不能选择评价方法。'],
+        evidence: [],
+        gaps: [{
+          key: 'methodology-config:unclassified:fund_classification',
+          label: '基金分类待补',
+          severity: 'hard_block',
+          subjectId: normalizeText(input.strategyFamilyKey) || normalizeText(input.fundType) || undefined,
+          reason: '需要资产类别、策略族谱、主动/被动或跟踪标的等分类证据。',
+          requiredBeforeFormalReview: true,
+        }],
+        nextActions: [{
+          key: 'methodology-config:unclassified:fund_classification',
+          label: '补齐基金分类证据',
+          href: '/analysis',
+          priority: 'high',
+          reason: '分类是选择类别专属评价方法的硬门禁。',
+        }],
+      })
+    }
     const template = templates[match.key]
     const evidence = normalizedEvidence(input)
     const missingEvidenceFields = Array.from(new Set(
@@ -201,6 +261,7 @@ export const methodologyConfigTool: ResearchTool<MethodologyConfigInput, Methodo
       .filter((dimension) => dimension.hardGate)
       .flatMap((dimension) => dimension.evidenceFields.filter((field) => !evidence.has(field.toLowerCase())))
     const output: MethodologyConfigOutput = {
+      resolutionStatus: 'matched',
       templateKey: match.key,
       templateName: template.name,
       matchRationale: match.rationale,
@@ -210,7 +271,7 @@ export const methodologyConfigTool: ResearchTool<MethodologyConfigInput, Methodo
       readyForFormalReview: hardGateMissing.length === 0,
       policy: {
         hardBoundary: '研究模板只定义基金研究评价口径；证据不完整时只能输出补证清单和研究假设，不输出申赎执行、资产配置或审批流程。',
-        requiredFundTypes: ['active_equity', 'fixed_income', 'index_fund', 'qdii', 'fof', 'quant_fund'],
+        requiredFundTypes: ['active_equity', 'fixed_income', 'index_fund', 'money_market', 'qdii', 'fof', 'quant_fund'],
       },
     }
 

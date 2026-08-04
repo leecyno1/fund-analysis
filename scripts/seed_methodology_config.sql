@@ -150,6 +150,26 @@ INSERT INTO research_methodology_templates (
     now()
   ),
   (
+    'methodology-template-money-market',
+    'money_market',
+    '货币基金研究模板',
+    'money',
+    'money_market',
+    'active',
+    '方法论模板只决定研究口径；货币基金重点评价收益中枢、本金保护、收益稳定性、规模流动性和数据时点，不输出交易执行或组合动作。',
+    '["seven_day_annualized_yield","annualized_return","max_drawdown","annualized_volatility","positive_return_ratio","aum","source_freshness","peer_group_policy"]'::jsonb,
+    '{"primary":"资金利率与货币基金收益中枢","checks":["七日年化收益率","收益稳定性","流动性"]}'::jsonb,
+    '{"layers":["货币基金","份额类型","规模","流动性"],"explainable":true}'::jsonb,
+    '{"sources":["票息与再投资收益","费用","流动性管理"],"frequency":"weekly"}'::jsonb,
+    '{"focus":["剩余期限","高流动性资产","信用等级"]}'::jsonb,
+    '{"focus":["流动性管理经验","信用事件处理"]}'::jsonb,
+    '{"focus":["现金管理产品线","流动性支持","信用研究平台"]}'::jsonb,
+    'methodology_seed',
+    '1.0.0',
+    true,
+    now()
+  ),
+  (
     'methodology-template-qdii',
     'qdii',
     'QDII 基金研究模板',
@@ -250,6 +270,12 @@ WITH dimension_rows(template_key, id, dimension_key, name, weight, evidence_fiel
     ('index_fund','methodology-dimension-index-peer','peer_group','同类池',10.00,ARRAY['same_index_peers','share_class'],'{"reason":"指数产品优先同指数横评。"}'::jsonb,true,50),
     ('index_fund','methodology-dimension-index-company','company','基金公司',8.00,ARRAY['index_product_line','operations_capability'],'{"reason":"被动产品更关注运营和产品线能力。"}'::jsonb,false,60),
 
+    ('money_market','methodology-dimension-money-income','income_competitiveness','收益竞争力',35.00,ARRAY['seven_day_annualized_yield','annualized_return'],'{"reason":"货币基金需同时观察七日年化收益率和较长窗口收益中枢。"}'::jsonb,true,10),
+    ('money_market','methodology-dimension-money-preservation','capital_preservation','本金保护',30.00,ARRAY['max_drawdown'],'{"reason":"净值回撤是货币基金稳定性评价的硬证据。"}'::jsonb,true,20),
+    ('money_market','methodology-dimension-money-stability','income_stability','收益稳定性',15.00,ARRAY['annualized_volatility','positive_return_ratio'],'{"reason":"波动和正收益比例用于识别收益中枢是否稳定。"}'::jsonb,false,30),
+    ('money_market','methodology-dimension-money-liquidity','liquidity_scale','规模与流动性',10.00,ARRAY['aum'],'{"reason":"规模是流动性管理和赎回承接能力的代理证据。"}'::jsonb,true,40),
+    ('money_market','methodology-dimension-money-quality','data_quality','数据质量',10.00,ARRAY['source_freshness'],'{"reason":"短周期收益指标必须保留来源与时点。"}'::jsonb,false,50),
+
     ('qdii','methodology-dimension-qdii-region-currency','region_currency','汇率与区域暴露',22.00,ARRAY['region_exposure','currency_exposure','fx_policy'],'{"reason":"QDII 必须把区域市场和汇率暴露拆开。"}'::jsonb,true,10),
     ('qdii','methodology-dimension-qdii-benchmark','benchmark_attribution','基准与归因',18.00,ARRAY['global_benchmark','local_market_return','fx_return'],'{"reason":"海外基金超额要区分市场、汇率和主动贡献。"}'::jsonb,true,20),
     ('qdii','methodology-dimension-qdii-holding','holding_lookthrough','持仓穿透',18.00,ARRAY['overseas_holdings','sector_exposure','country_exposure'],'{"reason":"海外持仓穿透决定主题和区域风险解释。"}'::jsonb,true,30),
@@ -303,6 +329,7 @@ WITH mapping_rows(template_key, id, fund_type, asset_class, active_passive, matc
     ('active_equity','methodology-mapping-active-equity-hybrid','hybrid','equity','active','{"aliases":["混合","偏股","灵活配置","平衡混合"],"styleRequired":true}'::jsonb,20),
     ('fixed_income','methodology-mapping-fixed-income-bond','bond','fixed_income','active','{"aliases":["固收","债券","纯债","短债","二级债","fixed_income"],"riskBuckets":["duration","credit"]}'::jsonb,10),
     ('index_fund','methodology-mapping-index-fund-index','index','index','passive','{"aliases":["指数","ETF","被动","联接","index_fund"],"sameIndexFirst":true}'::jsonb,10),
+    ('money_market','methodology-mapping-money-market-money','money','money_market','active','{"aliases":["货币","现金管理","money_market"],"liquidityEvidenceRequired":true}'::jsonb,10),
     ('qdii','methodology-mapping-qdii-global','qdii','global',null,'{"aliases":["QDII","海外","全球","港股","美股","区域"],"requiresCurrencyExposure":true}'::jsonb,10),
     ('fof','methodology-mapping-fof-multi-asset','fof','multi_asset','active','{"aliases":["FOF","基金中基金","养老","目标日期","目标风险"],"requiresUnderlyingFunds":true}'::jsonb,10),
     ('quant_fund','methodology-mapping-quant-equity','quant','equity_quant','active','{"aliases":["量化","指数增强","市场中性","多因子","quant_fund"],"requiresModelEvidence":true}'::jsonb,10),

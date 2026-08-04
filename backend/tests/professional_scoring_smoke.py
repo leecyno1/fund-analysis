@@ -57,7 +57,7 @@ def main() -> int:
     ManagerTenureMetricService().calculate_and_save_for_fund(fund_code)
 
     result = ProfessionalScoringService().score_fund(fund_code)
-    if result.get("calculation_method") != "professional_metric_snapshot_v2":
+    if result.get("calculation_method") != "category_evaluation_methodology_v1:active_equity":
         raise AssertionError(f"Unexpected calculation method: {result}")
     if result.get("fund_type_profile") != "active_equity":
         raise AssertionError(f"Expected active_equity profile, got {result}")

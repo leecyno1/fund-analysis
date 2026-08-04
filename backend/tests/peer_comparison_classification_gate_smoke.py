@@ -90,6 +90,39 @@ def main() -> int:
     if unsupported_index_score is not None:
         raise AssertionError(f"Index fund must not reuse active-equity proxy score: {unsupported_index_score}")
 
+    index_score_map = index_service._fast_peer_score_map(
+        ["INDEX.TEST"],
+        {
+            "INDEX.TEST": {
+                "1y": {"tracking_error": 0.006, "excess_return": -0.004},
+                "latest": {"expense_ratio": 0.006, "aum": 45.0},
+            },
+        },
+        "1y",
+        "index_fund",
+    )
+    if index_score_map["INDEX.TEST"]["overall_score"] is None:
+        raise AssertionError(f"Index peer proxy must combine window and latest facts: {index_score_map}")
+
+    money_score_map = index_service._fast_peer_score_map(
+        ["MONEY.TEST"],
+        {
+            "MONEY.TEST": {
+                "1y": {
+                    "annualized_return": 0.021,
+                    "max_drawdown": -0.0004,
+                    "annualized_volatility": 0.0018,
+                    "positive_return_ratio": 0.99,
+                },
+                "latest": {"seven_day_annualized_yield": 0.019, "aum": 120.0},
+            },
+        },
+        "1y",
+        "money_market",
+    )
+    if money_score_map["MONEY.TEST"]["overall_score"] is None:
+        raise AssertionError(f"Money-market peer proxy must combine window and latest facts: {money_score_map}")
+
     fixed_income_score = index_service._fast_peer_score(
         {
             "annualized_return": 0.045,

@@ -1,5 +1,12 @@
 import postgres from 'postgres'
-import { methodologyConfigTool, type MethodologyConfigInput, type MethodologyConfigOutput, type MethodologyDimension, type MethodologyTemplateKey } from './tools'
+import {
+  methodologyConfigTool,
+  unclassifiedMethodologyOutput,
+  type MethodologyConfigInput,
+  type MethodologyConfigOutput,
+  type MethodologyDimension,
+  type MethodologyTemplateKey,
+} from './tools'
 
 type JsonRecord = Record<string, unknown>
 
@@ -65,6 +72,7 @@ const supportedMethodologyTemplateKeys: MethodologyTemplateKey[] = [
   'active_equity',
   'fixed_income',
   'index_fund',
+  'money_market',
   'qdii',
   'fof',
   'quant_fund',
@@ -113,6 +121,7 @@ function fallbackOutputForKey(key: MethodologyTemplateKey): MethodologyConfigOut
     availableEvidence: ['asset_class', 'strategy_type'],
   })
   return result.data || {
+    resolutionStatus: 'matched',
     templateKey: key,
     templateName: '研究模板待识别',
     matchRationale: '默认模板回退',
@@ -182,12 +191,12 @@ function matchMethodologyTemplateFromRows(
   const requestedKey = normalizeText(input.requestedTemplateKey)
   const templates = repository.templates.filter((row) => row.is_active !== false)
   const mappings = repository.mappings.slice().sort((left, right) => left.priority - right.priority)
-  const text = [
+  const categoryText = [
     input.fundType,
     input.assetClass,
-    input.activePassive,
     input.strategyFamilyKey,
   ].map(normalizeText).join(' ')
+  const activePassiveText = normalizeText(input.activePassive)
 
   const requestedMatch = requestedKey
     ? templates.find((template) => template.key === requestedKey)
@@ -209,39 +218,49 @@ function matchMethodologyTemplateFromRows(
         template.name,
         template.fund_type,
         template.asset_class || '',
-        template.active_passive || '',
         ...asStringArray(rules.aliases),
         String(rules.strategyFamilyKey || rules.strategy_family_key || ''),
         String(rules.fundType || rules.fund_type || mapping.fund_type || ''),
         String(rules.assetClass || rules.asset_class || mapping.asset_class || ''),
+      ].filter(Boolean)
+      const activePassiveAliases = [
+        template.active_passive || '',
         String(rules.activePassive || rules.active_passive || mapping.active_passive || ''),
       ].filter(Boolean)
-      const score = scoreTextMatch(text, aliases)
       return {
         template,
-        score,
+        categoryScore: scoreTextMatch(categoryText, aliases),
+        activePassiveScore: scoreTextMatch(activePassiveText, activePassiveAliases),
         priority: mapping.priority,
       }
     })
-    .filter((item): item is { template: MethodologyTemplateRow; score: number; priority: number } => item !== null)
-    .sort((left, right) => right.score - left.score || left.priority - right.priority)
+    .filter((item): item is {
+      template: MethodologyTemplateRow
+      categoryScore: number
+      activePassiveScore: number
+      priority: number
+    } => item !== null)
+    .sort((left, right) => (
+      right.categoryScore - left.categoryScore
+      || right.activePassiveScore - left.activePassiveScore
+      || left.priority - right.priority
+    ))
 
-  if (mappingCandidates[0] && mappingCandidates[0].score > 0) {
+  if (mappingCandidates[0] && mappingCandidates[0].categoryScore > 0) {
     return {
       template: mappingCandidates[0].template,
-      rationale: `按数据库映射优先级匹配 ${mappingCandidates[0].template.key}。`,
+      rationale: `按数据库分类映射匹配 ${mappingCandidates[0].template.key}，主被动信息仅用于同类校验。`,
     }
   }
 
   const rowCandidates = templates
     .map((template) => ({
       template,
-      score: scoreTextMatch(text, [
+      score: scoreTextMatch(categoryText, [
         template.key,
         template.name,
         template.fund_type,
         template.asset_class || '',
-        template.active_passive || '',
       ]),
     }))
     .sort((left, right) => right.score - left.score)
@@ -254,8 +273,8 @@ function matchMethodologyTemplateFromRows(
   }
 
   return {
-    template: templates[0] || null,
-    rationale: '未识别到数据库映射，回退默认模板。',
+    template: null,
+    rationale: '未识别到数据库分类映射，停止方法论匹配并要求补充分类证据。',
   }
 }
 
@@ -276,9 +295,13 @@ function dimensionsForTemplate(repository: MethodologyMappingRepositoryData, tem
 function resolveFromRepository(input: MethodologyConfigInput, repository: MethodologyMappingRepositoryData): MethodologyConfigOutput {
   const match = matchMethodologyTemplateFromRows(input, repository)
   if (!match.template) {
-    return fallbackOutputForKey('active_equity')
+    return unclassifiedMethodologyOutput(match.rationale)
   }
-  const defaultOutput = fallbackOutputForKey(match.template.key as MethodologyTemplateKey)
+  const templateKey = match.template.key as MethodologyTemplateKey
+  if (!supportedMethodologyTemplateKeys.includes(templateKey)) {
+    return unclassifiedMethodologyOutput(`数据库模板 ${match.template.key} 未纳入可审计方法论清单，停止评价。`)
+  }
+  const defaultOutput = fallbackOutputForKey(templateKey)
   const dimensions = dimensionsForTemplate(repository, match.template.id)
   const chosenDimensions = dimensions.length ? dimensions : defaultOutput.dimensions
   const evidence = new Set((Array.isArray(input.availableEvidence) ? input.availableEvidence : []).map((item) => normalizeText(item)).filter(Boolean))
@@ -291,7 +314,8 @@ function resolveFromRepository(input: MethodologyConfigInput, repository: Method
     .flatMap((dimension) => dimension.evidenceFields.filter((field) => !evidence.has(normalizeText(field))))
 
   return {
-    templateKey: match.template.key as MethodologyTemplateKey,
+    resolutionStatus: 'matched',
+    templateKey,
     templateName: match.template.name,
     matchRationale: match.rationale,
     dimensions: chosenDimensions,
@@ -390,7 +414,7 @@ export function resolveMethodologyConfigFromDataSync(
 ): MethodologyConfigOutput {
   if (!repository || !repository.templates.length) {
     const fallback = methodologyConfigTool.run(input)
-    return fallback.data || fallbackOutputForKey('active_equity')
+    return fallback.data || unclassifiedMethodologyOutput('方法论数据不可用，且无法确认基金分类。')
   }
   return resolveFromRepository(input, repository)
 }

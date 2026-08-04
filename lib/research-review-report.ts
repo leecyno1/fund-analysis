@@ -375,6 +375,7 @@ const supportedMethodologyTemplateNames = [
   '主动权益基金研究模板',
   '固收基金研究模板',
   '指数基金研究模板',
+  '货币基金研究模板',
   'QDII 基金研究模板',
   'FOF 基金研究模板',
   '量化基金研究模板',
@@ -439,22 +440,24 @@ function buildReportMethodologySections(
   })
   const dimensions = (data.dimensions || []).slice(0, 6)
   const methodologySectionLines = [
-    `- 研究模板：${data.templateName || supportedMethodologyTemplateNames[0]}`,
-    `- 匹配依据：${data.matchRationale || '基金类型证据待补，暂按默认模板检查。'}`,
+    `- 研究模板：${data.templateName || '基金分类待确认'}`,
+    `- 匹配依据：${data.matchRationale || '基金分类证据待补，暂不选择评价模板。'}`,
     `- 核心研究维度：${dimensions.map((dimension) => `${dimension.name}（权重 ${dimension.weight}）`).join('；') || '待补'}`,
     `- 方法论缺口：${data.missingEvidenceFields?.length ? data.missingEvidenceFields.join('、') : '无'}`,
     ...dimensions.map((dimension) => `- 章节重点：${dimension.name}；${dimension.reason}；${dimensionReportAnchor(dimension)}`),
     '- 方法论模板只决定研究口径；证据不完整时只能输出补证方向，不输出申赎执行、资产配置或审批动作。',
   ]
   return {
-    templateKey: data.templateKey || 'active_equity',
-    templateName: data.templateName || supportedMethodologyTemplateNames[0],
+    templateKey: data.templateKey,
+    templateName: data.templateName || '基金分类待确认',
     dimensions,
     missingEvidenceFields: data.missingEvidenceFields || [],
     readyForFormalReview: Boolean(data.readyForFormalReview),
     methodologySectionLines,
     supportedMethodologyTemplateNames,
-    hardBlocks: data.readyForFormalReview ? [] : [`${data.templateName} 方法论硬门槛证据待补`],
+    hardBlocks: data.readyForFormalReview ? [] : [data.resolutionStatus === 'unclassified'
+      ? '基金分类证据待补，不能选择评价模板'
+      : `${data.templateName} 方法论硬门槛证据待补`],
   }
 }
 

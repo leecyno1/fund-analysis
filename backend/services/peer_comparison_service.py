@@ -328,28 +328,8 @@ class PeerComparisonService:
                     target[metric_name] = value
         return merged
 
-    def _first_metric(self, source: Dict[str, Any], keys: List[str]) -> Optional[float]:
-        for key in keys:
-            value = self._to_float(source.get(key))
-            if value is not None:
-                return value
-        return None
-
     def _fund_fallback_metrics(self, fund: Dict[str, Any]) -> Dict[str, Dict[str, float]]:
-        performance = fund.get("performance_data") or fund.get("performance") or {}
-        risk = fund.get("risk_metrics") or {}
-        one_year = {
-            "annualized_return": self._first_metric(performance, ["annualized_return_1y", "return_1y", "annual_return"]),
-            "max_drawdown": self._first_metric(risk, ["max_drawdown_1y", "max_drawdown_2y", "max_drawdown"])
-                or self._first_metric(performance, ["max_drawdown"]),
-            "annualized_volatility": self._first_metric(risk, ["annualized_volatility_1y", "volatility"])
-                or self._first_metric(performance, ["volatility"]),
-            "sharpe_ratio": self._first_metric(performance, ["sharpe_ratio", "sharpe"]),
-            "calmar_ratio": self._first_metric(performance, ["calmar_ratio"]),
-            "positive_return_ratio": self._first_metric(performance, ["positive_return_ratio", "win_rate_1y"]),
-        }
-        cleaned = {key: value for key, value in one_year.items() if value is not None}
-        return {"1y": cleaned} if cleaned else {}
+        return self.scoring_service.metric_facts_from_fund(fund)
 
     def _metrics_by_window(self, panel: List[Dict[str, Any]]) -> Dict[str, Dict[str, float]]:
         metrics: Dict[str, Dict[str, float]] = {}
@@ -374,7 +354,10 @@ class PeerComparisonService:
         return {
             code: {
                 "overall_score": self._fast_peer_score(
-                    metric_map.get(code, {}).get(window, {}),
+                    {
+                        **metric_map.get(code, {}).get("latest", {}),
+                        **metric_map.get(code, {}).get(window, {}),
+                    },
                     evaluation_profile_key,
                 )
             }
@@ -386,54 +369,7 @@ class PeerComparisonService:
         metrics: Dict[str, Any],
         evaluation_profile_key: Optional[str],
     ) -> Optional[float]:
-        rule_profile = self.scoring_service.TYPE_PROFILES.get(evaluation_profile_key or "")
-        if not rule_profile:
-            return None
-        return_low, return_high = rule_profile["return_range"]
-        drawdown_low, drawdown_high = rule_profile["drawdown_range"]
-        volatility_high, volatility_low = rule_profile["volatility_range"]
-        pieces = [
-            self._normalize_score(self._to_float(metrics.get("annualized_return")), return_low, return_high),
-            self._normalize_score(self._drawdown_for_score(metrics.get("max_drawdown")), drawdown_low, drawdown_high),
-            self._normalize_score(
-                self._to_float(metrics.get("annualized_volatility")),
-                volatility_high,
-                volatility_low,
-                higher_is_better=False,
-            ),
-            self._normalize_score(self._to_float(metrics.get("sharpe_ratio")), 0.0, 2.0),
-            self._normalize_score(self._to_float(metrics.get("positive_return_ratio")), 0.45, 0.70),
-        ]
-        valid = [piece for piece in pieces if piece is not None]
-        if len(valid) < 2:
-            return None
-        return round(sum(valid) / len(valid), 2)
-
-    def _drawdown_for_score(self, value: Any) -> Optional[float]:
-        drawdown = self._to_float(value)
-        if drawdown is None:
-            return None
-        return -abs(drawdown)
-
-    def _normalize_score(
-        self,
-        value: Optional[float],
-        low: float,
-        high: float,
-        higher_is_better: bool = True,
-    ) -> Optional[float]:
-        if value is None:
-            return None
-        if low == high:
-            return None
-        minimum = min(low, high)
-        maximum = max(low, high)
-        clipped = min(max(value, minimum), maximum)
-        if higher_is_better:
-            ratio = (clipped - low) / (high - low)
-        else:
-            ratio = (low - clipped) / (low - high)
-        return max(0.0, min(100.0, ratio * 100.0))
+        return self.scoring_service.score_peer_metrics(evaluation_profile_key or "", metrics)
 
     def _safe_score(self, wind_code: str) -> Dict[str, Any]:
         try:

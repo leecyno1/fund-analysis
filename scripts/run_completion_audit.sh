@@ -79,21 +79,19 @@ else
 fi
 
 printf '\n[4/5] 执行 DB-backed smoke tests ...\n'
-run_py_smoke "$BACKEND_DIR/tests/fund_pool_repo_smoke.py"
-run_py_smoke "$BACKEND_DIR/tests/alert_repo_smoke.py"
 run_py_smoke "$BACKEND_DIR/tests/data_snapshot_repo_smoke.py"
 run_py_smoke "$BACKEND_DIR/tests/metric_snapshot_repo_smoke.py"
 run_py_smoke "$BACKEND_DIR/tests/report_chunk_repo_smoke.py"
-run_py_smoke "$BACKEND_DIR/tests/alert_scan_smoke.py"
-run_py_smoke "$BACKEND_DIR/tests/alert_scan_enhanced_smoke.py"
 run_py_smoke "$BACKEND_DIR/tests/research_profile_repo_smoke.py"
 run_py_smoke "$BACKEND_DIR/tests/rolling_metric_service_smoke.py"
+run_py_smoke "$BACKEND_DIR/tests/rolling_metric_benchmark_input_smoke.py"
 run_py_smoke "$BACKEND_DIR/tests/tenure_data_quality_smoke.py"
 run_py_smoke "$BACKEND_DIR/tests/professional_scoring_smoke.py"
 run_py_smoke "$BACKEND_DIR/tests/fund_classification_service_smoke.py"
 run_py_smoke "$BACKEND_DIR/tests/fund_classification_repo_smoke.py"
 run_py_smoke "$BACKEND_DIR/tests/standardized_classification_adapter_smoke.py"
 run_py_smoke "$BACKEND_DIR/tests/professional_scoring_classification_scope_smoke.py"
+run_py_smoke "$BACKEND_DIR/tests/category_specific_evaluation_methodology_smoke.py"
 run_py_smoke "$BACKEND_DIR/tests/peer_comparison_classification_gate_smoke.py"
 run_py_smoke "$BACKEND_DIR/tests/fund_evaluation_service_smoke.py"
 run_py_smoke "$BACKEND_DIR/tests/fund_evaluation_route_contract_smoke.py"
@@ -106,41 +104,23 @@ run_py_smoke "$BACKEND_DIR/tests/comparison_matrix_service_smoke.py"
 run_py_smoke "$BACKEND_DIR/tests/investment_analysis_route_import_smoke.py"
 run_py_smoke "$BACKEND_DIR/tests/advanced_investment_service_smoke.py"
 
-printf '\n[5/5] 完成度验收建议 ...\n'
+printf '\n[5/5] 执行静态范围与方法论 smoke ...\n'
 printf '\n>>> 运行基金研究模块边界 smoke\n'
 node "$ROOT_DIR/scripts/fund_research_scope_smoke.mjs"
 
 printf '\n>>> 运行高级基金研究前端 smoke\n'
 node "$ROOT_DIR/scripts/advanced_analysis_frontend_smoke.mjs"
 
-printf '\n>>> 运行投资者选基前端 smoke\n'
-node "$ROOT_DIR/scripts/investor_selection_smoke.mjs"
+printf '\n>>> 运行方法论配置与数据映射 smoke\n'
+node "$ROOT_DIR/scripts/methodology_config_foundation_smoke.mjs"
+node "$ROOT_DIR/scripts/methodology_mapping_repository_smoke.mjs"
+node "$ROOT_DIR/scripts/methodology_seed_data_smoke.mjs"
+node "$ROOT_DIR/scripts/methodology_database_resolution_smoke.mjs"
+node "$ROOT_DIR/scripts/research_review_report_methodology_sections_smoke.mjs"
 
-LOCAL_APP_URL="${LOCAL_APP_URL:-http://127.0.0.1:3001}"
-LOCAL_REAL_FLOW_STATUS="skipped"
-if curl -fsS "$LOCAL_APP_URL/api/funds?limit=1" >/dev/null 2>&1; then
-  printf '\n>>> 运行本地真实买前链路 smoke (%s)\n' "$LOCAL_APP_URL"
-  LOCAL_APP_URL="$LOCAL_APP_URL" node "$ROOT_DIR/scripts/local_real_flow_smoke.mjs"
-  LOCAL_REAL_FLOW_STATUS="passed"
-else
-  printf '\n>>> 本地前端服务未检测到，跳过真实页面/API 联调 smoke (%s)\n' "$LOCAL_APP_URL"
-fi
-
-if [[ "$LOCAL_REAL_FLOW_STATUS" == "passed" ]]; then
-  cat <<'TEXT'
-所有 smoke 通过后，核心后端、前端静态边界和本地真实 API 链路已完成自动验收。
-如需继续做人工验收，请只补浏览器视觉层：
-1. 打开全市场浏览器，确认买前任务分流与销售规则阻断提示
-2. 打开基金池，确认已有观察池成员可读可编辑
-3. 打开预警中心，确认扫描结果与事件列表可读
-4. 打开基金详情/横评页，确认真实数据、同类分位和买前证据展示
+cat <<'TEXT'
+所有 smoke 通过后，基金实体归一、基金分类、同类组与基准映射、分类内基金评价和解释证据已完成自动验收。
+个性化投资处置、适当性、购买门禁和观察池不属于本项目验收范围。
 TEXT
-else
-  cat <<'TEXT'
-所有 smoke 通过后，核心后端和前端静态边界已完成自动验收。
-本地真实 API 链路未运行；如需补齐，请启动前端服务后运行：
-  node scripts/local_real_flow_smoke.mjs
-TEXT
-fi
 
 printf '\n== 验收脚本执行完成 ==\n'

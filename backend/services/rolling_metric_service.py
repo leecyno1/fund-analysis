@@ -46,6 +46,15 @@ class RollingMetricService:
         effective_as_of = as_of_date or points[-1][0]
         records: List[Dict[str, Any]] = []
         normalized_series = [{"date": item_date, "nav": nav} for item_date, nav in points]
+        benchmark_points = self.metric_factory._normalize_nav_series([
+            {
+                "date": item.get("date") or item.get("trade_date"),
+                "nav": item.get("benchmark_nav"),
+            }
+            for item in nav_series
+            if item.get("benchmark_nav") is not None
+        ])
+        benchmark_by_date = {item_date: nav for item_date, nav in benchmark_points}
 
         for window, expected_observations in self.windows.items():
             minimum_observations = max(2, int(expected_observations * self.min_observation_ratio))
@@ -55,12 +64,23 @@ class RollingMetricService:
             window_series = normalized_series[-expected_observations:]
             if len(window_series) < minimum_observations:
                 continue
+            window_benchmark_series = [
+                {"date": item["date"], "nav": benchmark_by_date[item["date"]]}
+                for item in window_series
+                if item["date"] in benchmark_by_date
+            ]
+            usable_benchmark_series = (
+                window_benchmark_series
+                if benchmark_code and len(window_benchmark_series) >= minimum_observations
+                else None
+            )
 
             window_records = self.metric_factory.build_metric_records(
                 target_type=target_type,
                 target_id=target_id,
                 as_of_date=effective_as_of,
                 nav_series=window_series,
+                benchmark_series=usable_benchmark_series,
                 benchmark_code=benchmark_code,
                 window=window,
             )
@@ -70,6 +90,7 @@ class RollingMetricService:
                     "calculation_engine": "RollingMetricService",
                     "expected_observations": expected_observations,
                     "actual_observations": len(window_series),
+                    "benchmark_observations": len(window_benchmark_series),
                     "window_start_date": window_series[0]["date"],
                     "window_end_date": window_series[-1]["date"],
                 }

@@ -103,11 +103,12 @@ export type {
 } from './market-promotion-queue'
 export { materialEvidenceGateTool } from './material-evidence-gate'
 export type { MaterialEvidenceGateInput, MaterialEvidenceGateOutput } from './material-evidence-gate'
-export { methodologyConfigTool } from './methodology-config'
+export { methodologyConfigTool, unclassifiedMethodologyOutput } from './methodology-config'
 export type {
   MethodologyConfigInput,
   MethodologyConfigOutput,
   MethodologyDimension,
+  MethodologyResolutionKey,
   MethodologyTemplateKey,
 } from './methodology-config'
 export { peerGroupBenchmarkTool } from './peer-group-benchmark'

@@ -703,9 +703,9 @@ function buildFundDetailMethodologyFocus(fund: Fund) {
   const data = result.data
   const dimensions = (data?.dimensions || []).slice(0, 6)
   return {
-    templateName: data?.templateName || '研究模板待识别',
-    templateKey: data?.templateKey || 'active_equity',
-    matchRationale: data?.matchRationale || '基金类型证据待补，暂按默认模板检查。',
+    templateName: data?.templateName || '基金分类待确认',
+    templateKey: data?.templateKey || 'unclassified',
+    matchRationale: data?.matchRationale || '基金分类证据待补，暂不选择评价模板。',
     dimensions,
     hardGateDimensions: data?.hardGateDimensions || [],
     methodologyMissingEvidenceFields: data?.missingEvidenceFields || [],
@@ -713,7 +713,7 @@ function buildFundDetailMethodologyFocus(fund: Fund) {
     hardBlocks: result.hardBlocks,
     boundary: '方法论模板只决定研究口径；证据不完整时只能输出补证方向，不输出申赎执行、资产配置或审批动作。',
     tsvRows: [
-      ['研究模板', data?.templateName || '研究模板待识别', data?.templateKey || 'active_equity', data?.matchRationale || '基金类型证据待补'],
+      ['研究模板', data?.templateName || '基金分类待确认', data?.templateKey || 'unclassified', data?.matchRationale || '基金分类证据待补'],
       ...dimensions.map((dimension: MethodologyDimension) => [
         '核心研究维度',
         dimension.name,
