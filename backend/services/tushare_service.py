@@ -2,6 +2,7 @@
 Tushare 数据服务 - 替代 Wind API 获取基金和经理数据
 """
 import os
+import re
 import time
 import logging
 import hashlib
@@ -10,9 +11,12 @@ from datetime import datetime, timedelta
 from dataclasses import dataclass
 import pandas as pd
 
+from services.fund_nav_evidence_service import FundNavEvidenceService
+
 logger = logging.getLogger(__name__)
 
 TUSHARE_NO_PROXY_HOSTS = ("api.tushare.pro", "tushare.pro", "waditu.com", "api.waditu.com")
+TUSHARE_INDEX_CODE_PATTERN = re.compile(r"^[0-9A-Z]{6}\.(SH|SZ|CSI)$", re.IGNORECASE)
 
 # Tushare SDK
 try:
@@ -351,6 +355,7 @@ class TushareDataService:
                     "unit_nav": unit_nav,
                     "accum_nav": accum_nav,
                     "adj_nav": adjusted_nav,
+                    "reported_accum_nav": _as_float(row.get("accum_nav")),
                     "daily_return": daily_return,
                     "net_asset": _as_float(row.get("net_asset")),
                     "total_netasset": _as_float(row.get("total_netasset")),
@@ -360,6 +365,36 @@ class TushareDataService:
             logger.error(f"Tushare get_fund_nav error for {wind_code}: {e}")
             self._strict_fail(f"Tushare get_fund_nav failed for {wind_code}: {e}")
             return self._normalize_nav_series(self._mock_nav_series(wind_code, start_date, end_date))
+
+    def get_benchmark_nav(self, benchmark_code: str, start_date: str, end_date: str) -> List[Dict[str, Any]]:
+        """获取可核验的指数基准序列；不支持的基准代码显式返回空集。"""
+        normalized_code = str(benchmark_code or "").strip().upper()
+        if self.mock_mode or not TUSHARE_INDEX_CODE_PATTERN.fullmatch(normalized_code):
+            return []
+        try:
+            frame = self.pro.index_daily(
+                ts_code=normalized_code,
+                start_date=str(start_date).replace("-", ""),
+                end_date=str(end_date).replace("-", ""),
+                fields="ts_code,trade_date,close",
+            )
+            if frame is None or frame.empty:
+                return []
+            result = []
+            for _, row in frame.sort_values("trade_date").iterrows():
+                trade_date = _format_tushare_date(row.get("trade_date"))
+                close = _as_float(row.get("close"))
+                if trade_date and close and close > 0:
+                    result.append({
+                        "date": trade_date,
+                        "nav": close,
+                        "benchmark_code": normalized_code,
+                        "source": "tushare.index_daily",
+                    })
+            return result
+        except Exception as error:
+            logger.warning("Tushare index_daily unavailable for %s: %s", normalized_code, error)
+            return []
 
     def get_fund_performance(self, wind_code: str) -> Dict[str, Any]:
         """获取基金业绩指标"""
@@ -377,31 +412,39 @@ class TushareDataService:
                 self._strict_fail(f"Tushare fund_nav returned insufficient performance rows for {wind_code}")
                 return self._mock_performance(wind_code)
 
-            nav_df = nav_df.sort_values("nav_date")
-            nav_df["accum_nav"] = nav_df["accum_nav"].ffill()
+            nav_df = nav_df.sort_values("nav_date").copy()
+            metric_nav = pd.Series(index=nav_df.index, dtype="float64")
+            for column in ("adj_nav", "accum_nav", "unit_nav"):
+                if column in nav_df.columns:
+                    metric_nav = metric_nav.combine_first(pd.to_numeric(nav_df[column], errors="coerce"))
+            nav_df["metric_nav"] = metric_nav
+            nav_df = nav_df[nav_df["metric_nav"].notna() & (nav_df["metric_nav"] > 0)]
+            if len(nav_df) < 10:
+                self._strict_fail(f"Tushare fund_nav returned insufficient usable performance rows for {wind_code}")
+                return self._mock_performance(wind_code)
 
             nav_1y = nav_df[nav_df["nav_date"] >= start_1y]
             if len(nav_1y) >= 2:
-                nav_start = float(nav_1y.iloc[0]["accum_nav"])
-                nav_end = float(nav_1y.iloc[-1]["accum_nav"])
+                nav_start = float(nav_1y.iloc[0]["metric_nav"])
+                nav_end = float(nav_1y.iloc[-1]["metric_nav"])
                 ret_1y = (nav_end / nav_start - 1) if nav_start > 0 else 0
             else:
                 ret_1y = 0
 
             if len(nav_df) >= 2:
-                nav_start_3y = float(nav_df.iloc[0]["accum_nav"])
-                nav_end_3y = float(nav_df.iloc[-1]["accum_nav"])
+                nav_start_3y = float(nav_df.iloc[0]["metric_nav"])
+                nav_end_3y = float(nav_df.iloc[-1]["metric_nav"])
                 ret_3y = (nav_end_3y / nav_start_3y - 1) if nav_start_3y > 0 else 0
                 years = (datetime.strptime(end_date, "%Y%m%d") - datetime.strptime(nav_df.iloc[0]["nav_date"], "%Y%m%d")).days / 365
                 ret_3y_annualized = ((1 + ret_3y) ** (1 / max(years, 0.1)) - 1) if years > 0 else 0
             else:
                 ret_3y_annualized = 0
 
-            peak = nav_df["accum_nav"].cummax()
-            drawdown = (nav_df["accum_nav"] - peak) / peak
+            peak = nav_df["metric_nav"].cummax()
+            drawdown = (nav_df["metric_nav"] - peak) / peak
             max_dd = drawdown.min()
 
-            daily_returns = nav_df["accum_nav"].pct_change().dropna()
+            daily_returns = nav_df["metric_nav"].pct_change().dropna()
             if len(daily_returns) > 0:
                 annual_return = daily_returns.mean() * 252
                 annual_vol = daily_returns.std() * (252 ** 0.5)
@@ -411,7 +454,7 @@ class TushareDataService:
                 sharpe = 0
                 volatility = 0
 
-            return {
+            performance = {
                 "annualized_return_1y": round(ret_1y, 4),
                 "annualized_return_3y": round(ret_3y_annualized, 4),
                 "max_drawdown": round(max_dd, 4),
@@ -421,6 +464,17 @@ class TushareDataService:
                 "calmar_ratio": round(abs(ret_1y / max_dd), 4) if max_dd != 0 else 0,
                 "win_rate_1y": round((daily_returns > 0).sum() / len(daily_returns), 4) if len(daily_returns) > 0 else 0,
             }
+            performance.update(FundNavEvidenceService().derive_money_market_facts([
+                {
+                    "date": row.get("nav_date"),
+                    "unit_nav": _as_float(row.get("unit_nav")),
+                    "accum_nav": _as_float(row.get("adj_nav")) or _as_float(row.get("accum_nav")),
+                    "adj_nav": _as_float(row.get("adj_nav")),
+                    "reported_accum_nav": _as_float(row.get("accum_nav")),
+                }
+                for _, row in nav_df.iterrows()
+            ]))
+            return performance
         except Exception as e:
             logger.error(f"Tushare get_fund_performance error for {wind_code}: {e}")
             self._strict_fail(f"Tushare get_fund_performance failed for {wind_code}: {e}")

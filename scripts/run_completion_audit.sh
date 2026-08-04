@@ -81,10 +81,13 @@ fi
 printf '\n[4/5] 执行 DB-backed smoke tests ...\n'
 run_py_smoke "$BACKEND_DIR/tests/data_snapshot_repo_smoke.py"
 run_py_smoke "$BACKEND_DIR/tests/metric_snapshot_repo_smoke.py"
+run_py_smoke "$BACKEND_DIR/tests/fund_repo_evaluation_fact_merge_smoke.py"
 run_py_smoke "$BACKEND_DIR/tests/report_chunk_repo_smoke.py"
 run_py_smoke "$BACKEND_DIR/tests/research_profile_repo_smoke.py"
 run_py_smoke "$BACKEND_DIR/tests/rolling_metric_service_smoke.py"
 run_py_smoke "$BACKEND_DIR/tests/rolling_metric_benchmark_input_smoke.py"
+run_py_smoke "$BACKEND_DIR/tests/fund_nav_evidence_service_smoke.py"
+run_py_smoke "$BACKEND_DIR/tests/tushare_benchmark_adapter_smoke.py"
 run_py_smoke "$BACKEND_DIR/tests/tenure_data_quality_smoke.py"
 run_py_smoke "$BACKEND_DIR/tests/professional_scoring_smoke.py"
 run_py_smoke "$BACKEND_DIR/tests/fund_classification_service_smoke.py"
@@ -117,6 +120,7 @@ node "$ROOT_DIR/scripts/methodology_mapping_repository_smoke.mjs"
 node "$ROOT_DIR/scripts/methodology_seed_data_smoke.mjs"
 node "$ROOT_DIR/scripts/methodology_database_resolution_smoke.mjs"
 node "$ROOT_DIR/scripts/research_review_report_methodology_sections_smoke.mjs"
+node "$ROOT_DIR/scripts/data_sync_rolling_metrics_smoke.mjs"
 
 cat <<'TEXT'
 所有 smoke 通过后，基金实体归一、基金分类、同类组与基准映射、分类内基金评价和解释证据已完成自动验收。

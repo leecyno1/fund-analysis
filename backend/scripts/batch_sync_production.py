@@ -32,7 +32,7 @@ from typing import List, Dict, Any, Optional
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from services.tushare_service import TushareDataService
-from services.scoring_engine import FundScoringEngine
+from services.fund_nav_evidence_service import FundNavDataEnrichmentService
 from repositories import get_fund_repo, get_manager_repo, get_nav_repo, get_holding_repo
 from service_registry import init_services
 
@@ -162,8 +162,7 @@ class BatchSyncOrchestrator:
     """批量同步编排器"""
 
     def __init__(self, max_workers=8):
-        self.data_svc = TushareDataService()
-        self.scoring_engine = FundScoringEngine()
+        self.data_svc = TushareDataService(strict_no_mock=True)
         self.fund_repo = get_fund_repo()
         self.manager_repo = get_manager_repo()
         self.nav_repo = get_nav_repo()
@@ -185,10 +184,19 @@ class BatchSyncOrchestrator:
             start_date = (datetime.now() - timedelta(days=365)).strftime("%Y-%m-%d")
             end_date = datetime.now().strftime("%Y-%m-%d")
             nav_data = self.data_svc.get_fund_nav(wind_code, start_date=start_date, end_date=end_date)
+            nav_enrichment = FundNavDataEnrichmentService(self.data_svc).enrich(
+                wind_code=wind_code,
+                fund_type=info.get("type"),
+                nav_series=nav_data,
+                start_date=start_date,
+                end_date=end_date,
+            )
+            nav_data = nav_enrichment["nav_series"]
 
             # 3. 业绩指标
             self.rate_limiter.acquire()
             perf = self.data_svc.get_fund_performance(wind_code)
+            perf.update(nav_enrichment.get("performance_facts") or {})
 
             # 4. 风险指标
             self.rate_limiter.acquire()
@@ -201,23 +209,31 @@ class BatchSyncOrchestrator:
             except Exception:
                 holdings = []
 
-            # 6. 计算评分
-            style = {}
-            scoring = self.scoring_engine.score_fund(perf, risk, style)
-
-            # 7. 保存到数据库
+            # 6. 保存到数据库；分类内评价由统一评价服务读取已持久化事实后执行。
             fund_data = {
                 **info,
                 "performance_data": perf,
                 "risk_metrics": risk,
+                "raw_data": {
+                    "source": "tushare",
+                    "synced_at": datetime.now().isoformat(),
+                    "info": info,
+                    "nav_evidence": {
+                        "benchmark_code": nav_enrichment.get("benchmark_code"),
+                        "benchmark_source": nav_enrichment.get("benchmark_source"),
+                        "benchmark_data_status": nav_enrichment.get("benchmark_data_status"),
+                        "benchmark_observations": nav_enrichment.get("benchmark_observations", 0),
+                        "money_market_metric_status": nav_enrichment.get("money_market_metric_status"),
+                    },
+                },
             }
             self.fund_repo.upsert_fund(wind_code, fund_data)
 
-            # 8. 保存净值序列
+            # 7. 保存净值序列
             if nav_data:
                 self.nav_repo.upsert_nav_series(wind_code, nav_data)
 
-            # 9. 保存持仓
+            # 8. 保存持仓
             if holdings:
                 quarter = datetime.now().strftime("%YQ%m")
                 self.holding_repo.upsert_holdings(wind_code, quarter, holdings)

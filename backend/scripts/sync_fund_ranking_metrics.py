@@ -36,6 +36,7 @@ except Exception:
 
 from database import get_engine, init_database
 from repositories import get_fund_repo, get_metric_snapshot_repo, get_nav_repo
+from services.fund_nav_evidence_service import FundNavDataEnrichmentService
 from services.rolling_metric_service import RollingMetricService
 from services.tushare_service import TushareDataService
 
@@ -75,8 +76,19 @@ def latest_nav_payload(nav_series: List[Dict[str, Any]]) -> Dict[str, Any]:
     return {
         "nav": number_or_none(latest.get("unit_nav") or latest.get("nav")),
         "nav_date": latest.get("date"),
-        "total_asset": number_or_none(latest.get("total_netasset") or latest.get("net_asset")),
+        "total_asset": asset_to_yi(latest.get("total_netasset") or latest.get("net_asset")),
     }
+
+
+def asset_to_yi(value: Any) -> Optional[float]:
+    parsed = number_or_none(value)
+    if parsed is None or parsed <= 0:
+        return None
+    if parsed >= 1_000_000:
+        return round(parsed / 100_000_000, 4)
+    if parsed >= 100:
+        return round(parsed / 10_000, 4)
+    return round(parsed, 4)
 
 
 def build_fund_metric_payload(panel: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
@@ -152,7 +164,7 @@ def select_target_codes(
         WHERE {" AND ".join(where)}
         ORDER BY
           CASE
-            WHEN type IN ('股票型', '混合型', '债券型', '指数型') THEN 0
+            WHEN type IN ('股票型', '混合型', '债券型', '指数型', '货币型') THEN 0
             ELSE 1
           END,
           establishment_date ASC NULLS LAST,
@@ -173,6 +185,7 @@ def sync_one_fund(
     fund_repo = get_fund_repo()
     nav_repo = get_nav_repo()
     metric_repo = get_metric_snapshot_repo()
+    existing = fund_repo.get_fund(wind_code) or {}
 
     try:
         nav_series = data_service.get_fund_nav(
@@ -185,12 +198,23 @@ def sync_one_fund(
     if len(nav_series) < 20:
         return {"wind_code": wind_code, "status": "skipped", "reason": f"净值点不足 {len(nav_series)}"}
 
+    enrichment = FundNavDataEnrichmentService(data_service).enrich(
+        wind_code=wind_code,
+        fund_type=existing.get("type"),
+        nav_series=nav_series,
+        start_date=start_date.isoformat(),
+        end_date=end_date.isoformat(),
+    )
+    nav_series = enrichment["nav_series"]
     nav_repo.upsert_nav_series(wind_code, nav_series)
-    rolling_result = rolling_service.calculate_and_save_for_fund(wind_code)
+    rolling_result = rolling_service.calculate_and_save_for_fund(
+        wind_code,
+        benchmark_code=enrichment.get("benchmark_code"),
+    )
     panel = metric_repo.get_latest_panel("fund", wind_code)
     metric_payload = build_fund_metric_payload(panel)
+    metric_payload["performance_data"].update(enrichment.get("performance_facts") or {})
     latest_payload = latest_nav_payload(nav_series)
-    existing = fund_repo.get_fund(wind_code) or {}
 
     ok = fund_repo.upsert_fund(
         wind_code,
@@ -213,6 +237,11 @@ def sync_one_fund(
                     "end_date": end_date.isoformat(),
                     "nav_points": len(nav_series),
                     "saved_metric_snapshots": rolling_result.get("saved", 0),
+                    "benchmark_code": enrichment.get("benchmark_code"),
+                    "benchmark_source": enrichment.get("benchmark_source"),
+                    "benchmark_data_status": enrichment.get("benchmark_data_status"),
+                    "benchmark_observations": enrichment.get("benchmark_observations", 0),
+                    "money_market_metric_status": enrichment.get("money_market_metric_status"),
                 },
             },
         },

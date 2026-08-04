@@ -15,6 +15,7 @@ from services.cache_service import (
     invalidate_manager_cache, batch_cache_set, batch_cache_get,
 )
 from services.manager_tenure_metric_service import ManagerTenureMetricService
+from services.fund_nav_evidence_service import FundNavDataEnrichmentService
 from services.rolling_metric_service import RollingMetricService
 from repositories import (
     get_fund_repo, get_manager_repo, get_holding_repo, get_nav_repo, get_research_profile_repo,
@@ -193,6 +194,11 @@ def _sync_fund(
     warnings = []
     rolling_metrics = None
     tenure_metrics = None
+    nav_enrichment = {
+        "benchmark_data_status": "not_checked",
+        "benchmark_observations": 0,
+        "money_market_metric_status": "not_checked",
+    }
     fund_repo = get_fund_repo()
     holding_repo = get_holding_repo()
     nav_repo = get_nav_repo()
@@ -207,6 +213,11 @@ def _sync_fund(
             return {"success": False, "errors": errors}
 
         fund_payload = fund_info.copy()
+        fund_payload["raw_data"] = {
+            "source": "tushare",
+            "synced_at": datetime.now(UTC).isoformat(),
+            "info": fund_info,
+        }
     except Exception as e:
         errors.append(f"[{wind_code}] 基金基本信息错误: {e}")
         logger.error(f"Sync fund basic error for {wind_code}: {e}")
@@ -232,6 +243,17 @@ def _sync_fund(
                 end_date=end_date.strftime("%Y%m%d"),
             )
             if nav_data:
+                nav_enrichment = FundNavDataEnrichmentService(data_svc).enrich(
+                    wind_code=wind_code,
+                    fund_type=fund_info.get("type"),
+                    nav_series=nav_data,
+                    start_date=start_date.strftime("%Y-%m-%d"),
+                    end_date=end_date.strftime("%Y-%m-%d"),
+                )
+                nav_data = nav_enrichment["nav_series"]
+                performance_data = fund_payload.get("performance_data") or {}
+                performance_data.update(nav_enrichment.get("performance_facts") or {})
+                fund_payload["performance_data"] = performance_data
                 nav_repo.upsert_nav_series(wind_code, nav_data)
         except Exception as e:
             errors.append(f"[{wind_code}] 净值数据错误: {e}")
@@ -272,6 +294,14 @@ def _sync_fund(
     warnings.extend(manager_warnings)
 
     raw_data = fund_payload.get("raw_data") or {}
+    if nav_enrichment.get("benchmark_data_status") != "not_checked":
+        raw_data["nav_evidence"] = {
+            "benchmark_code": nav_enrichment.get("benchmark_code"),
+            "benchmark_source": nav_enrichment.get("benchmark_source"),
+            "benchmark_data_status": nav_enrichment.get("benchmark_data_status"),
+            "benchmark_observations": nav_enrichment.get("benchmark_observations", 0),
+            "money_market_metric_status": nav_enrichment.get("money_market_metric_status"),
+        }
     raw_data["manager_sync"] = {
         "source": "tushare.fund_manager",
         "synced_at": datetime.now(UTC).isoformat(),
@@ -289,7 +319,10 @@ def _sync_fund(
             warnings.append(f"[{wind_code}] 研究画像/经理任期起点维护失败: {e}")
         if include_nav:
             try:
-                rolling_metrics = RollingMetricService().calculate_and_save_for_fund(wind_code)
+                rolling_metrics = RollingMetricService().calculate_and_save_for_fund(
+                    wind_code,
+                    benchmark_code=nav_enrichment.get("benchmark_code"),
+                )
                 if rolling_metrics.get("saved", 0) == 0:
                     warnings.append(f"[{wind_code}] 净值已同步，但滚动指标样本不足")
             except Exception as e:

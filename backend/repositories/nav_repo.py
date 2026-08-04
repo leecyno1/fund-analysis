@@ -62,7 +62,7 @@ class NavRepo:
                 unit_nav = EXCLUDED.unit_nav,
                 accum_nav = EXCLUDED.accum_nav,
                 daily_return = EXCLUDED.daily_return,
-                benchmark_nav = EXCLUDED.benchmark_nav,
+                benchmark_nav = COALESCE(EXCLUDED.benchmark_nav, fund_nav.benchmark_nav),
                 discount_rate = EXCLUDED.discount_rate
             """
 

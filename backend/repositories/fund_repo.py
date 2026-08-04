@@ -146,14 +146,8 @@ class FundRepo:
                 nav_date = COALESCE(EXCLUDED.nav_date, funds.nav_date),
                 total_asset = COALESCE(EXCLUDED.total_asset, funds.total_asset),
                 establishment_date = COALESCE(EXCLUDED.establishment_date, funds.establishment_date),
-                performance_data = CASE
-                    WHEN EXCLUDED.performance_data = '{}'::jsonb THEN funds.performance_data
-                    ELSE EXCLUDED.performance_data
-                END,
-                risk_metrics = CASE
-                    WHEN EXCLUDED.risk_metrics = '{}'::jsonb THEN funds.risk_metrics
-                    ELSE EXCLUDED.risk_metrics
-                END,
+                performance_data = COALESCE(funds.performance_data, '{}'::jsonb) || EXCLUDED.performance_data,
+                risk_metrics = COALESCE(funds.risk_metrics, '{}'::jsonb) || EXCLUDED.risk_metrics,
                 raw_data = CASE
                     WHEN EXCLUDED.raw_data = '{}'::jsonb THEN funds.raw_data
                     ELSE COALESCE(funds.raw_data, '{}'::jsonb) || EXCLUDED.raw_data

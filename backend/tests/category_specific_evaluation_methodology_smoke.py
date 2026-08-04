@@ -122,6 +122,16 @@ def main() -> int:
     if index_from_fund_facts.get("overall_score") is None:
         raise AssertionError(f"Fund facts should adapt into index methodology metrics: {index_from_fund_facts}")
 
+    fee_facts = service.metric_facts_from_fund({
+        "raw_data": {
+            "source": "tushare",
+            "universe": {"management_fee": 0.15, "custodian_fee": 0.05},
+        },
+    })
+    expense_ratio = fee_facts.get("latest", {}).get("expense_ratio")
+    if expense_ratio is None or abs(expense_ratio - 0.002) > 1e-12:
+        raise AssertionError(f"Tushare percentage-point fees must normalize to decimal rates: {fee_facts}")
+
     index_peer_score = service.score_peer_metrics(
         "index_fund",
         {"tracking_error": 0.006, "excess_return": -0.004, "expense_ratio": 0.006, "aum": 45.0},

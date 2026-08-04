@@ -106,7 +106,12 @@ class RollingMetricService:
         peer_group_key: Optional[str] = None,
         source_snapshot_id: Optional[str] = None,
     ) -> Dict[str, Any]:
-        from repositories import get_metric_snapshot_repo, get_nav_repo, get_research_profile_repo
+        from repositories import (
+            get_fund_classification_repo,
+            get_metric_snapshot_repo,
+            get_nav_repo,
+            get_research_profile_repo,
+        )
 
         nav_repo = get_nav_repo()
         metric_repo = get_metric_snapshot_repo()
@@ -118,7 +123,14 @@ class RollingMetricService:
         except Exception:
             profile = None
 
-        effective_benchmark = benchmark_code or (profile or {}).get("primary_benchmark")
+        classification_context = {}
+        try:
+            classification_context = get_fund_classification_repo().get_classification_context(fund_code) or {}
+        except Exception:
+            classification_context = {}
+        mapped_benchmark = (classification_context.get("benchmark_mapping") or {}).get("benchmark_code")
+
+        effective_benchmark = benchmark_code or mapped_benchmark or (profile or {}).get("primary_benchmark")
         effective_peer_group = peer_group_key or (profile or {}).get("peer_group")
         nav_series = nav_repo.get_nav_series(fund_code)
         records = self.calculate_for_nav_series(

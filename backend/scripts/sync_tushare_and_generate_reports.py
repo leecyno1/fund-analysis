@@ -32,6 +32,7 @@ from database import init_database, get_engine
 from repositories import get_fund_repo, get_manager_repo, get_nav_repo
 from services.evidence_report import build_fund_research_report
 from services.ai_report import get_report_generator
+from services.fund_nav_evidence_service import FundNavDataEnrichmentService
 from services.tushare_service import TushareDataService
 
 
@@ -187,6 +188,11 @@ def _sync_one_fund(
         data_quality["risk_reason"] = str(risk_error)
 
     nav_points = 0
+    enrichment = {
+        "benchmark_data_status": "not_checked",
+        "benchmark_observations": 0,
+        "money_market_metric_status": "not_checked",
+    }
     try:
         end_date = datetime.now(UTC).date()
         start_date = end_date - timedelta(days=365 * 3)
@@ -195,6 +201,15 @@ def _sync_one_fund(
             start_date=start_date.isoformat(),
             end_date=end_date.isoformat(),
         )
+        enrichment = FundNavDataEnrichmentService(data_service).enrich(
+            wind_code=wind_code,
+            fund_type=info.get("type"),
+            nav_series=nav_series,
+            start_date=start_date.isoformat(),
+            end_date=end_date.isoformat(),
+        )
+        nav_series = enrichment["nav_series"]
+        performance.update(enrichment.get("performance_facts") or {})
         nav_points = len(nav_series)
         if nav_series:
             nav_repo.upsert_nav_series(wind_code, nav_series)
@@ -206,6 +221,26 @@ def _sync_one_fund(
 
     manager_ids = sync_fund_managers(data_service, wind_code)
     data_quality["manager"] = "ok" if manager_ids else "unavailable"
+
+    raw_data = {
+        "source": "tushare",
+        "synced_at": datetime.now(UTC).isoformat(),
+        "data_quality": data_quality,
+        "nav_points": nav_points,
+        "info": info,
+    }
+    if performance:
+        raw_data["performance"] = performance
+    if risk:
+        raw_data["risk"] = risk
+    if enrichment.get("benchmark_data_status") != "not_checked":
+        raw_data["nav_evidence"] = {
+            "benchmark_code": enrichment.get("benchmark_code"),
+            "benchmark_source": enrichment.get("benchmark_source"),
+            "benchmark_data_status": enrichment.get("benchmark_data_status"),
+            "benchmark_observations": enrichment.get("benchmark_observations", 0),
+            "money_market_metric_status": enrichment.get("money_market_metric_status"),
+        }
 
     ok = fund_repo.upsert_fund(
         wind_code,
@@ -220,15 +255,7 @@ def _sync_one_fund(
             "management_company": info.get("management_company", ""),
             "performance_data": performance,
             "risk_metrics": risk,
-            "raw_data": {
-                "source": "tushare",
-                "synced_at": datetime.now(UTC).isoformat(),
-                "data_quality": data_quality,
-                "nav_points": nav_points,
-                "info": info,
-                "performance": performance,
-                "risk": risk,
-            },
+            "raw_data": raw_data,
         },
     )
     if throttle_seconds > 0:

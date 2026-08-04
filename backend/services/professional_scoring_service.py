@@ -215,13 +215,27 @@ class ProfessionalScoringService:
         raw_data = fund.get("raw_data") or {}
         info = raw_data.get("info") if isinstance(raw_data, dict) else {}
         info = info if isinstance(info, dict) else {}
+        universe = raw_data.get("universe") if isinstance(raw_data, dict) else {}
+        universe = universe if isinstance(universe, dict) else {}
 
+        management_fee_source = "fund"
         management_fee = self._first_number(fund, ["management_fee"])
         if management_fee is None:
             management_fee = self._first_number(info, ["management_fee", "m_fee"])
+            management_fee_source = "tushare_info"
+        if management_fee is None:
+            management_fee = self._first_number(universe, ["management_fee", "m_fee"])
+            management_fee_source = "tushare_universe"
+        custodian_fee_source = "fund"
         custodian_fee = self._first_number(fund, ["custodian_fee"])
         if custodian_fee is None:
             custodian_fee = self._first_number(info, ["custodian_fee", "c_fee"])
+            custodian_fee_source = "tushare_info"
+        if custodian_fee is None:
+            custodian_fee = self._first_number(universe, ["custodian_fee", "c_fee"])
+            custodian_fee_source = "tushare_universe"
+        management_fee = self._fee_rate(management_fee, management_fee_source.startswith("tushare_"))
+        custodian_fee = self._fee_rate(custodian_fee, custodian_fee_source.startswith("tushare_"))
         expense_ratio = None
         if management_fee is not None or custodian_fee is not None:
             expense_ratio = (management_fee or 0.0) + (custodian_fee or 0.0)
@@ -272,6 +286,12 @@ class ProfessionalScoringService:
             except Exception:
                 continue
         return None
+
+    def _fee_rate(self, value: Optional[float], percentage_points: bool) -> Optional[float]:
+        """Tushare m_fee/c_fee 使用百分数单位；评价层统一转为小数比率。"""
+        if value is None:
+            return None
+        return value / 100.0 if percentage_points or abs(value) >= 0.05 else value
 
     def _positive_factors(self, dimensions: Dict[str, Any], quality: Dict[str, Any]) -> List[str]:
         factors = [f"{name} 维度得分较高" for name, item in dimensions.items() if item.get("score", 0) >= 75]
