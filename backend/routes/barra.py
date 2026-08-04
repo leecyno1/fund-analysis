@@ -144,69 +144,26 @@ async def get_risk_decomposition(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/score/{fund_code}")
+@router.get("/score/{fund_code}", deprecated=True)
 async def get_barra_score(
     fund_code: str,
     quarter: str = Query(None),
 ):
-    """获取 Barra 风险评分"""
-    try:
-        from lib.barra.factor_calculation import BarraCalculator
-        from service_registry import get_data_service
-
-        data_svc = get_data_service()
-        calculator = BarraCalculator()
-
-        if quarter is None:
-            year = datetime.now().year
-            q = (datetime.now().month - 1) // 3 + 1
-            quarter = f"{year}Q{q}"
-
-        holdings = data_svc.get_fund_holdings(fund_code, quarter)
-        style_factors = data_svc.get_fund_style(fund_code)
-        result = calculator.get_exposure_result(holdings, style_factors, quarter)
-        if result.get("status") == "insufficient_evidence":
-            return {
-                "fund_code": fund_code,
-                "quarter": quarter,
-                "status": "insufficient_evidence",
-                "source": "evidence_gate",
-                "overall_score": None,
-                "grade": "insufficient_evidence",
-                "dimensions": {},
-                "details": {},
-                "missing_items": result.get("missing_items", []),
-            }
-
-        r_sq = result.get("r_squared", 0.5)
-        r2_score = max(0, min(100, (r_sq - 0.3) / 0.5 * 100))
-
-        num_industries = len(result.get("industry_exposures", {}))
-        industry_score = min(100, num_industries * 12.5)
-
-        max_risk = max((r["risk_contribution"] for r in result.get("risk_contributions", [])), default=0)
-        concentration_score = max(0, 100 - max_risk * 300)
-        volatility_score = 70
-
-        barra_score = round(r2_score * 0.30 + industry_score * 0.25 + concentration_score * 0.25 + volatility_score * 0.20, 1)
-
-        return {
-            "fund_code": fund_code,
-            "quarter": quarter,
-            "overall_score": barra_score,
-            "grade": "A+" if barra_score >= 90 else "A" if barra_score >= 80 else "B+" if barra_score >= 70 else "B" if barra_score >= 60 else "C",
-            "dimensions": {
-                "r_squared_score": round(r2_score, 1),
-                "industry_diversity_score": round(industry_score, 1),
-                "risk_concentration_score": round(concentration_score, 1),
-                "volatility_control_score": round(volatility_score, 1),
-            },
-            "details": {
-                "r_squared": result.get("r_squared", 0),
-                "num_industries": num_industries,
-                "max_factor_risk": round(max_risk, 4),
-            },
-        }
-    except Exception as e:
-        logger.error(f"Barra score error for {fund_code}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    """兼容旧调用方：Barra 不再生成基金评价分数。"""
+    return {
+        "fund_code": fund_code,
+        "quarter": quarter,
+        "status": "deprecated",
+        "source": "methodology_scope",
+        "role": "explanatory_evidence",
+        "included_in_fund_evaluation_score": False,
+        "overall_score": None,
+        "grade": "not_applicable",
+        "dimensions": {},
+        "details": {},
+        "replacement_endpoint": f"/api/funds/{fund_code}/evaluation",
+        "missing_items": [
+            "Barra 只用于解释风格暴露和风险来源，不单独判断基金优劣",
+            "旧版手工加权 Barra 分数已停止输出",
+        ],
+    }

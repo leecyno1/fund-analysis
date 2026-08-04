@@ -12,6 +12,7 @@ from .report_chunk_repo import ReportChunkRepo
 from .fund_pool_repo import FundPoolRepo
 from .alert_repo import AlertRepo
 from .research_profile_repo import ResearchProfileRepo
+from .fund_classification_repo import FundClassificationRepo
 
 # 全局单例
 _fund_repo = None
@@ -25,6 +26,7 @@ _report_chunk_repo = None
 _fund_pool_repo = None
 _alert_repo = None
 _research_profile_repo = None
+_fund_classification_repo = None
 
 
 def get_fund_repo() -> FundRepo:
@@ -102,3 +104,10 @@ def get_research_profile_repo() -> ResearchProfileRepo:
     if _research_profile_repo is None:
         _research_profile_repo = ResearchProfileRepo()
     return _research_profile_repo
+
+
+def get_fund_classification_repo() -> FundClassificationRepo:
+    global _fund_classification_repo
+    if _fund_classification_repo is None:
+        _fund_classification_repo = FundClassificationRepo()
+    return _fund_classification_repo

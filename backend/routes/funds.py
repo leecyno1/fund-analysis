@@ -549,6 +549,19 @@ async def get_fund_peer_percentiles(wind_code: str, window: str = Query("1y")):
         raise HTTPException(status_code=500, detail=str(exc))
 
 
+@router.get("/{wind_code}/evaluation")
+async def get_fund_evaluation(wind_code: str, window: str = Query("1y")):
+    """获取分类、同类组、基准、专业评分和同类分位组成的基金评价快照。"""
+    try:
+        from services.fund_evaluation_service import FundEvaluationService
+
+        result = FundEvaluationService().evaluate_fund(wind_code, window=window)
+        return _clean_nan(result)
+    except Exception as exc:
+        logger.error(f"Get fund evaluation error for {wind_code}: {exc}")
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
 @router.get("/{wind_code}")
 async def get_fund_detail(wind_code: str):
     """获取基金详细信息"""

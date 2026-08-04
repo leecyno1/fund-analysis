@@ -6,6 +6,7 @@
 from decimal import Decimal
 from typing import Any, Dict, List, Optional, Tuple
 
+from services.fund_classification_service import FundClassificationService
 from services.professional_scoring_service import ProfessionalScoringService
 
 
@@ -23,16 +24,34 @@ class PeerComparisonService:
         {"metric_name": "positive_return_ratio", "label": "1Y 正收益占比", "unit": "percent", "higher_is_better": True},
     ]
 
-    def __init__(self, scoring_service: Optional[ProfessionalScoringService] = None):
+    def __init__(
+        self,
+        scoring_service: Optional[ProfessionalScoringService] = None,
+        classification_service: Optional[FundClassificationService] = None,
+        classification_adapter: Optional[Any] = None,
+        fund_repo: Optional[Any] = None,
+        profile_repo: Optional[Any] = None,
+    ):
         self.scoring_service = scoring_service or ProfessionalScoringService()
+        self.classification_service = classification_service or FundClassificationService()
+        self._classification_adapter = classification_adapter
+        self._fund_repo_adapter = fund_repo
+        self._profile_repo_adapter = profile_repo
 
     def build_peer_percentiles(self, wind_code: str, window: str = "1y") -> Dict[str, Any]:
         target, peer_funds, peer_group_source = self._peer_universe(wind_code)
         target_id = target.get("wind_code") or wind_code
         peer_codes = [fund["wind_code"] for fund in peer_funds if fund.get("wind_code")]
         metric_map = self._metric_map(peer_codes, peer_funds)
-        scoring_map = self._fast_peer_score_map(peer_codes, metric_map, window)
         target_profile = target.get("research_profile") or {}
+        classification = target.get("classification") or self.classification_service.classify(target, target_profile)
+        minimum_peer_count = self._minimum_peer_count(classification.get("minimum_peer_count"))
+        scoring_map = self._fast_peer_score_map(
+            peer_codes,
+            metric_map,
+            window,
+            classification.get("evaluation_profile_key"),
+        )
 
         metrics: Dict[str, Any] = {}
         for config in self.METRIC_CONFIGS:
@@ -48,6 +67,7 @@ class PeerComparisonService:
                 metric_name=metric_name,
                 label=config["label"],
                 unit=config["unit"],
+                minimum_peer_count=minimum_peer_count,
             )
 
         professional_values = [
@@ -61,23 +81,38 @@ class PeerComparisonService:
             metric_name="professional_score",
             label="专业综合评分",
             unit="score",
+            minimum_peer_count=minimum_peer_count,
         )
 
         return {
             "target_id": target_id,
             "name": target.get("name"),
             "fund_type": target.get("type"),
-            "peer_group": target_profile.get("peer_group"),
-            "primary_benchmark": target_profile.get("primary_benchmark"),
+            "peer_group": classification.get("peer_group") or target_profile.get("peer_group"),
+            "primary_benchmark": classification.get("primary_benchmark") or target_profile.get("primary_benchmark"),
             "peer_group_source": peer_group_source,
+            "classification": classification,
+            "evaluation_scope": "category_relative",
             "peer_count": len(peer_codes),
-            "minimum_valid_peer_count": self.MIN_VALID_PEERS,
+            "minimum_valid_peer_count": minimum_peer_count,
             "usable_metric_count": self._usable_metric_count(metrics),
             "insufficient_metric_count": self._insufficient_metric_count(metrics),
-            "peer_metric_gap": self._peer_metric_gap(metrics, peer_funds, metric_map, window, target_id),
+            "peer_metric_gap": self._peer_metric_gap(
+                metrics,
+                peer_funds,
+                metric_map,
+                window,
+                target_id,
+                minimum_peer_count,
+            ),
             "sample_status": self._sample_status(metrics),
             "metric_window": window,
-            "professional_score_source": "fast_peer_metric_proxy",
+            "professional_score_source": "category_specific_peer_metric_proxy",
+            "product_scope": {
+                "fund_classification": "core",
+                "fund_evaluation": "core",
+                "investment_decision": "excluded",
+            },
             "metrics": metrics,
         }
 
@@ -92,10 +127,10 @@ class PeerComparisonService:
         if len(codes) > 10:
             raise ValueError("单次最多对比 10 只基金")
 
-        from repositories import get_fund_repo, get_metric_snapshot_repo, get_research_profile_repo
+        from repositories import get_metric_snapshot_repo
 
-        fund_repo = get_fund_repo()
-        profile_repo = get_research_profile_repo()
+        fund_repo = self._get_fund_repo()
+        profile_repo = self._get_profile_repo()
         metric_repo = get_metric_snapshot_repo()
 
         funds = []
@@ -112,13 +147,14 @@ class PeerComparisonService:
             )
             scoring = self._safe_score(wind_code)
             percentiles = self.build_peer_percentiles(wind_code, window=window)
+            classification = percentiles.get("classification") or scoring.get("classification") or {}
             percentile_map[wind_code] = percentiles
             funds.append({
                 "wind_code": wind_code,
                 "name": fund.get("name"),
                 "type": fund.get("type"),
-                "peer_group": profile.get("peer_group"),
-                "primary_benchmark": profile.get("primary_benchmark"),
+                "peer_group": classification.get("peer_group") or profile.get("peer_group"),
+                "primary_benchmark": classification.get("primary_benchmark") or profile.get("primary_benchmark"),
                 "peer_count": percentiles.get("peer_count"),
                 "metrics": panel.get(window, {}),
                 "professional_score": scoring.get("overall_score"),
@@ -137,6 +173,7 @@ class PeerComparisonService:
             "higher_is_better": True,
             "source": "professional_scoring",
         }, funds, window))
+        observations = self._evaluation_observations(funds, rows)
 
         return {
             "metric_window": window,
@@ -154,31 +191,51 @@ class PeerComparisonService:
                 for fund in funds
             ],
             "matrix_rows": rows,
-            "recommendations": self._recommendations(funds, rows),
+            "evaluation_observations": observations,
+            # 兼容旧前端字段；内容只描述评价事实，不输出候选、观察池或尽调处置。
+            "recommendations": observations,
+            "product_scope": {
+                "fund_evaluation": "core",
+                "investment_decision": "excluded",
+            },
         }
 
     def _peer_universe(self, wind_code: str) -> Tuple[Dict[str, Any], List[Dict[str, Any]], str]:
-        from repositories import get_fund_repo, get_research_profile_repo
-
-        fund_repo = get_fund_repo()
-        profile_repo = get_research_profile_repo()
+        fund_repo = self._get_fund_repo()
+        profile_repo = self._get_profile_repo()
         target = fund_repo.get_fund_by_identifier(wind_code) or {"wind_code": wind_code}
         target_code = target.get("wind_code") or wind_code
         target_profile = profile_repo.get_profile(target_code) or {}
         target["research_profile"] = target_profile
+        standardized_context = self._get_classification_adapter().get_classification_context(target_code)
+        target["standardized_classification"] = standardized_context
+        classification = self.classification_service.classify(target, target_profile, standardized_context)
+        target["classification"] = classification
 
-        peer_group = target_profile.get("peer_group")
-        peers = self._query_peer_funds_by_profile(peer_group) if peer_group else []
-        source = "research_profile_peer_group"
+        if standardized_context.get("status") == "resolved":
+            peer_group_id = classification.get("peer_group_id")
+            if classification.get("status") == "classified" and peer_group_id:
+                peers = self._get_classification_adapter().list_peer_funds(
+                    peer_group_id,
+                    target_wind_code=target_code,
+                )
+                source = "standardized_peer_group_membership"
+            else:
+                peers = []
+                source = "standardized_peer_group_missing"
+        else:
+            peer_group = target_profile.get("peer_group")
+            peers = self._query_peer_funds_by_profile(peer_group) if peer_group else []
+            source = "research_profile_peer_group"
 
-        if len(peers) < self.MIN_VALID_PEERS:
-            fund_type = target.get("type")
-            peers = self._query_peer_funds_by_types([fund_type] if fund_type else [])
-            source = "fund_type_fallback"
-
-        if len(peers) < self.MIN_VALID_PEERS or not self._has_min_core_metric_coverage(peers):
-            peers = self._query_peer_funds_by_types(self._broad_type_values(target.get("type"), peer_group))
-            source = "broad_asset_bucket_fallback"
+            if len(peers) < self.MIN_VALID_PEERS:
+                compatible_types = classification.get("compatible_fund_types") or []
+                if classification.get("status") == "classified" and compatible_types:
+                    peers = self._query_peer_funds_by_types(compatible_types)
+                    source = "classification_fund_type_fallback"
+                else:
+                    peers = []
+                    source = "classification_insufficient_evidence"
 
         if not any(fund.get("wind_code") == target_code for fund in peers):
             peers.append(target)
@@ -189,10 +246,16 @@ class PeerComparisonService:
 
         return target, peers, source
 
+    def _get_classification_adapter(self):
+        if self._classification_adapter is None:
+            from repositories import get_fund_classification_repo
+
+            self._classification_adapter = get_fund_classification_repo()
+        return self._classification_adapter
+
     def _query_peer_funds_by_profile(self, peer_group: str) -> List[Dict[str, Any]]:
         if not peer_group:
             return []
-        from repositories import get_fund_repo
         from sqlalchemy import text
 
         sql = """
@@ -203,7 +266,7 @@ class PeerComparisonService:
             ORDER BY f.wind_code ASC
             LIMIT 2000
         """
-        with get_fund_repo().engine.connect() as conn:
+        with self._get_fund_repo().engine.connect() as conn:
             rows = conn.execute(text(sql), {"peer_group": peer_group}).fetchall()
         return [dict(row._mapping) for row in rows]
 
@@ -211,7 +274,6 @@ class PeerComparisonService:
         normalized_types = [str(item).strip() for item in fund_types if str(item or "").strip()]
         if not normalized_types:
             return []
-        from repositories import get_fund_repo
         from sqlalchemy import text
 
         sql = """
@@ -221,40 +283,23 @@ class PeerComparisonService:
             ORDER BY wind_code ASC
             LIMIT 2000
         """
-        with get_fund_repo().engine.connect() as conn:
+        with self._get_fund_repo().engine.connect() as conn:
             rows = conn.execute(text(sql), {"fund_types": normalized_types}).fetchall()
         return [dict(row._mapping) for row in rows]
 
-    def _broad_type_values(self, fund_type: Optional[str], peer_group: Optional[str]) -> List[str]:
-        text = f"{fund_type or ''} {peer_group or ''}".lower()
-        if any(token in text for token in ["stock", "equity", "股票", "主动权益"]):
-            return ["stock", "hybrid", "股票型", "普通股票型", "混合型", "偏股混合型", "灵活配置型"]
-        if any(token in text for token in ["hybrid", "混合", "偏股"]):
-            return ["hybrid", "stock", "混合型", "偏股混合型", "灵活配置型", "股票型"]
-        if any(token in text for token in ["bond", "债"]):
-            return ["bond", "债券型", "中长期纯债型", "混合债券型", "短期纯债型"]
-        if any(token in text for token in ["index", "指数"]):
-            return ["index", "指数型", "被动指数型", "增强指数型"]
-        if any(token in text for token in ["money", "货币"]):
-            return ["money", "货币型"]
-        if any(token in text for token in ["qdii", "全球", "海外"]):
-            return ["qdii", "QDII", "国际(QDII)"]
-        return [fund_type] if fund_type else []
+    def _get_fund_repo(self):
+        if self._fund_repo_adapter is None:
+            from repositories import get_fund_repo
 
-    def _has_min_core_metric_coverage(self, peers: List[Dict[str, Any]]) -> bool:
-        peer_codes = [fund.get("wind_code") for fund in peers if fund.get("wind_code")]
-        if len(peer_codes) < self.MIN_VALID_PEERS:
-            return False
-        metric_map = self._metric_map(peer_codes, peers)
-        for metric_name in ["annualized_return", "max_drawdown", "sharpe_ratio"]:
-            valid_count = sum(
-                1
-                for code in peer_codes
-                if self._to_float(metric_map.get(code, {}).get("1y", {}).get(metric_name)) is not None
-            )
-            if valid_count < self.MIN_VALID_PEERS:
-                return False
-        return True
+            self._fund_repo_adapter = get_fund_repo()
+        return self._fund_repo_adapter
+
+    def _get_profile_repo(self):
+        if self._profile_repo_adapter is None:
+            from repositories import get_research_profile_repo
+
+            self._profile_repo_adapter = get_research_profile_repo()
+        return self._profile_repo_adapter
 
     def _metric_map(self, wind_codes: List[str], fund_rows: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Dict[str, Dict[str, float]]]:
         from repositories import get_metric_snapshot_repo
@@ -324,17 +369,38 @@ class PeerComparisonService:
         peer_codes: List[str],
         metric_map: Dict[str, Dict[str, Dict[str, float]]],
         window: str,
+        evaluation_profile_key: Optional[str],
     ) -> Dict[str, Dict[str, Any]]:
         return {
-            code: {"overall_score": self._fast_peer_score(metric_map.get(code, {}).get(window, {}))}
+            code: {
+                "overall_score": self._fast_peer_score(
+                    metric_map.get(code, {}).get(window, {}),
+                    evaluation_profile_key,
+                )
+            }
             for code in peer_codes
         }
 
-    def _fast_peer_score(self, metrics: Dict[str, Any]) -> Optional[float]:
+    def _fast_peer_score(
+        self,
+        metrics: Dict[str, Any],
+        evaluation_profile_key: Optional[str],
+    ) -> Optional[float]:
+        rule_profile = self.scoring_service.TYPE_PROFILES.get(evaluation_profile_key or "")
+        if not rule_profile:
+            return None
+        return_low, return_high = rule_profile["return_range"]
+        drawdown_low, drawdown_high = rule_profile["drawdown_range"]
+        volatility_high, volatility_low = rule_profile["volatility_range"]
         pieces = [
-            self._normalize_score(self._to_float(metrics.get("annualized_return")), -0.10, 0.25),
-            self._normalize_score(self._drawdown_for_score(metrics.get("max_drawdown")), -0.35, -0.03),
-            self._normalize_score(self._to_float(metrics.get("annualized_volatility")), 0.35, 0.08, higher_is_better=False),
+            self._normalize_score(self._to_float(metrics.get("annualized_return")), return_low, return_high),
+            self._normalize_score(self._drawdown_for_score(metrics.get("max_drawdown")), drawdown_low, drawdown_high),
+            self._normalize_score(
+                self._to_float(metrics.get("annualized_volatility")),
+                volatility_high,
+                volatility_low,
+                higher_is_better=False,
+            ),
             self._normalize_score(self._to_float(metrics.get("sharpe_ratio")), 0.0, 2.0),
             self._normalize_score(self._to_float(metrics.get("positive_return_ratio")), 0.45, 0.70),
         ]
@@ -383,10 +449,12 @@ class PeerComparisonService:
         metric_name: str,
         label: str,
         unit: str,
+        minimum_peer_count: Optional[int] = None,
     ) -> Dict[str, Any]:
+        minimum = self._minimum_peer_count(minimum_peer_count)
         valid = [(code, value) for code, value in values if value is not None]
         target_value = next((value for code, value in valid if code == target_id), None)
-        if len(valid) < self.MIN_VALID_PEERS:
+        if len(valid) < minimum:
             return {
                 "metric_name": metric_name,
                 "label": label,
@@ -394,7 +462,7 @@ class PeerComparisonService:
                 "percentile": None,
                 "rank": None,
                 "peer_count": len(valid),
-                "minimum_peer_count": self.MIN_VALID_PEERS,
+                "minimum_peer_count": minimum,
                 "sample_status": "insufficient_peer_sample",
                 "unit": unit,
                 "direction": "higher" if higher_is_better else "lower",
@@ -407,7 +475,7 @@ class PeerComparisonService:
                 "percentile": None,
                 "rank": None,
                 "peer_count": len(valid),
-                "minimum_peer_count": self.MIN_VALID_PEERS,
+                "minimum_peer_count": minimum,
                 "sample_status": "target_metric_missing",
                 "unit": unit,
                 "direction": "higher" if higher_is_better else "lower",
@@ -423,7 +491,7 @@ class PeerComparisonService:
             "percentile": round(percentile, 2),
             "rank": rank,
             "peer_count": peer_count,
-            "minimum_peer_count": self.MIN_VALID_PEERS,
+            "minimum_peer_count": minimum,
             "sample_status": "sufficient",
             "unit": unit,
             "direction": "higher" if higher_is_better else "lower",
@@ -463,14 +531,16 @@ class PeerComparisonService:
         metric_map: Optional[Dict[str, Dict[str, Dict[str, float]]]] = None,
         window: str = "1y",
         target_id: Optional[str] = None,
+        minimum_peer_count: Optional[int] = None,
     ) -> Dict[str, Any]:
+        minimum = self._minimum_peer_count(minimum_peer_count)
         blocking_metrics = []
         required_more_funds = 0
         for metric_name, metric in metrics.items():
             if not isinstance(metric, dict) or metric.get("sample_status") != "insufficient_peer_sample":
                 continue
             peer_count = int(metric.get("peer_count") or 0)
-            missing_count = max(0, self.MIN_VALID_PEERS - peer_count)
+            missing_count = max(0, minimum - peer_count)
             required_more_funds = max(required_more_funds, missing_count)
             blocking_metrics.append({
                 "metric_name": metric_name,
@@ -493,6 +563,12 @@ class PeerComparisonService:
             "suggested_sync_funds": suggested_funds,
             "next_action": "sync_peer_nav_and_rolling_metrics" if blocking_metrics else "none",
         }
+
+    def _minimum_peer_count(self, value: Any) -> int:
+        try:
+            return max(2, int(value))
+        except (TypeError, ValueError):
+            return self.MIN_VALID_PEERS
 
     def _suggest_metric_sync_funds(
         self,
@@ -560,24 +636,24 @@ class PeerComparisonService:
             "values": values,
         }
 
-    def _recommendations(self, funds: List[Dict[str, Any]], rows: List[Dict[str, Any]]) -> List[str]:
-        recommendations = []
+    def _evaluation_observations(self, funds: List[Dict[str, Any]], rows: List[Dict[str, Any]]) -> List[str]:
+        observations = []
         score_row = next((row for row in rows if row["metric_name"] == "professional_score"), None)
         if score_row and score_row.get("best_code"):
             winner = next((fund for fund in funds if fund["wind_code"] == score_row["best_code"]), None)
             if winner:
-                recommendations.append(f"{winner['name']} 专业综合评分相对占优，可作为主候选继续尽调。")
+                observations.append(f"{winner['name']} 在当前分类口径的专业综合评分中相对较高。")
         drawdown_row = next((row for row in rows if row["metric_name"] == "max_drawdown"), None)
         if drawdown_row and drawdown_row.get("best_code"):
             winner = next((fund for fund in funds if fund["wind_code"] == drawdown_row["best_code"]), None)
             if winner:
-                recommendations.append(f"{winner['name']} 回撤控制在本次对比中更优，可作为低回撤重点观察样本继续核验。")
+                observations.append(f"{winner['name']} 的回撤控制在本次同类对比中相对较优。")
         peer_groups = {fund.get("peer_group") for fund in funds if fund.get("peer_group")}
         if len(peer_groups) > 1:
-            recommendations.append("本次对比跨越多个同类池，建议优先看同类分位，再看绝对收益。")
-        if not recommendations:
-            recommendations.append("本次对比未出现明显单边优势，建议继续核验持仓重叠、风格暴露和销售规则证据。")
-        return recommendations
+            observations.append("本次对比跨越多个同类组，绝对指标不应被解释为同一评价口径下的排名。")
+        if not observations:
+            observations.append("本次同类评价没有形成明显的单项相对优势。")
+        return observations
 
     def _display_value(self, value: Optional[float], unit: str) -> str:
         if value is None:

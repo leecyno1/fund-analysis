@@ -1,12 +1,14 @@
 """
 专业基金评分服务
 
-基于研究画像、滚动指标、现任经理任期指标和数据质量，按基金类型使用不同权重输出可解释评分。
+基于基金分类、滚动指标、现任经理任期指标和数据质量，按评价口径输出可解释评分。
+分类证据不足或尚未建立专属评价方法时显式停止，禁止默认套用主动权益评分。
 """
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
 from services.data_quality_service import DataQualityService
+from services.fund_classification_service import FundClassificationService
 from services.scoring_contract import build_scoring_output
 
 
@@ -15,8 +17,6 @@ class ProfessionalScoringService:
 
     TYPE_PROFILES = {
         "active_equity": {
-            "fund_types": {"stock", "hybrid", "qdii"},
-            "keywords": {"主动权益", "偏股混合", "QDII"},
             "weights": {
                 "return": 0.25,
                 "risk": 0.25,
@@ -30,8 +30,6 @@ class ProfessionalScoringService:
             "volatility_range": (0.35, 0.08),
         },
         "fixed_income": {
-            "fund_types": {"bond"},
-            "keywords": {"债券", "纯债", "持有期"},
             "weights": {
                 "return": 0.20,
                 "risk": 0.35,
@@ -44,40 +42,73 @@ class ProfessionalScoringService:
             "drawdown_range": (-0.08, -0.005),
             "volatility_range": (0.08, 0.01),
         },
-        "index_or_money": {
-            "fund_types": {"index", "money"},
-            "keywords": {"指数", "货币", "现金管理"},
-            "weights": {
-                "return": 0.15,
-                "risk": 0.30,
-                "risk_adjusted": 0.15,
-                "consistency": 0.15,
-                "manager_tenure": 0.05,
-                "data_quality": 0.20,
-            },
-            "return_range": (0.00, 0.15),
-            "drawdown_range": (-0.20, -0.001),
-            "volatility_range": (0.20, 0.005),
-        },
     }
 
-    def __init__(self, data_quality_service: Optional[DataQualityService] = None):
+    def __init__(
+        self,
+        data_quality_service: Optional[DataQualityService] = None,
+        classification_service: Optional[FundClassificationService] = None,
+        classification_adapter: Optional[Any] = None,
+        fund_repo: Optional[Any] = None,
+        metric_repo: Optional[Any] = None,
+        profile_repo: Optional[Any] = None,
+    ):
         self.data_quality_service = data_quality_service or DataQualityService()
+        self.classification_service = classification_service or FundClassificationService()
+        self._classification_adapter = classification_adapter
+        self._fund_repo_adapter = fund_repo
+        self._metric_repo_adapter = metric_repo
+        self._profile_repo_adapter = profile_repo
 
     def score_fund(self, fund_code: str) -> Dict[str, Any]:
-        from repositories import get_fund_repo, get_metric_snapshot_repo, get_research_profile_repo
-
-        fund_repo = get_fund_repo()
-        metric_repo = get_metric_snapshot_repo()
-        profile_repo = get_research_profile_repo()
+        fund_repo = self._get_fund_repo()
+        metric_repo = self._get_metric_repo()
+        profile_repo = self._get_profile_repo()
 
         fund = fund_repo.get_fund_by_identifier(fund_code) or {}
         wind_code = fund.get("wind_code") or fund_code
         profile = profile_repo.get_profile(wind_code) or {}
         panel = metric_repo.get_latest_panel("fund", wind_code)
-        metrics = self._metrics_by_window(panel)
         quality = self.data_quality_service.evaluate_fund(wind_code)
-        profile_key = self._profile_key(fund, profile)
+        classification_context = self._get_classification_adapter().get_classification_context(wind_code)
+        return self.score_from_inputs(fund, profile, panel, quality, classification_context)
+
+    def score_from_inputs(
+        self,
+        fund: Dict[str, Any],
+        profile: Dict[str, Any],
+        panel: List[Dict[str, Any]],
+        quality: Dict[str, Any],
+        standardized_classification: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """通过稳定 Interface 对已经取得的基金事实执行分类门禁和专业评分。"""
+        wind_code = fund.get("wind_code") or fund.get("ts_code") or fund.get("id") or "unknown"
+        classification = self.classification_service.classify(fund, profile, standardized_classification)
+        profile_key = classification.get("evaluation_profile_key")
+        if classification.get("status") != "classified":
+            return self._unavailable_evaluation(
+                wind_code,
+                classification,
+                quality,
+                classification.get("missing_items") or ["基金分类证据不足，不能选择评价方法"],
+            )
+        if profile_key not in self.TYPE_PROFILES:
+            return self._unavailable_evaluation(
+                wind_code,
+                classification,
+                quality,
+                [f"{profile_key} 专属基金评价方法尚未实现，禁止复用其他类别评分"],
+            )
+
+        metrics = self._metrics_by_window(panel)
+        core_metric_gaps = self._missing_core_metrics(metrics)
+        if core_metric_gaps:
+            return self._unavailable_evaluation(
+                wind_code,
+                classification,
+                quality,
+                core_metric_gaps,
+            )
         rule_profile = self.TYPE_PROFILES[profile_key]
 
         dimensions = {
@@ -105,23 +136,84 @@ class ProfessionalScoringService:
             negative_factors=self._negative_factors(dimensions, missing_data),
             missing_data=missing_data,
             as_of_date=self._latest_as_of(panel),
-            calculation_method="professional_metric_snapshot_v1",
+            calculation_method="professional_metric_snapshot_v2",
         )
+        output["status"] = "partial" if missing_data else "ok"
+        output["evaluation_scope"] = "classification_gated"
+        output["classification"] = classification
         output["fund_type_profile"] = profile_key
-        output["peer_group"] = profile.get("peer_group")
-        output["primary_benchmark"] = profile.get("primary_benchmark")
+        output["peer_group"] = classification.get("peer_group")
+        output["primary_benchmark"] = classification.get("primary_benchmark")
         output["data_quality"] = quality
+        output["product_scope"] = self._product_scope()
         return output
 
-    def _profile_key(self, fund: Dict[str, Any], profile: Dict[str, Any]) -> str:
-        fund_type = str(fund.get("type") or "").lower()
-        peer_group = str(profile.get("peer_group") or "")
-        for key, rule_profile in self.TYPE_PROFILES.items():
-            if fund_type in rule_profile["fund_types"]:
-                return key
-            if any(keyword in peer_group for keyword in rule_profile["keywords"]):
-                return key
-        return "active_equity"
+    def _get_classification_adapter(self):
+        if self._classification_adapter is None:
+            from repositories import get_fund_classification_repo
+
+            self._classification_adapter = get_fund_classification_repo()
+        return self._classification_adapter
+
+    def _get_fund_repo(self):
+        if self._fund_repo_adapter is None:
+            from repositories import get_fund_repo
+
+            self._fund_repo_adapter = get_fund_repo()
+        return self._fund_repo_adapter
+
+    def _get_metric_repo(self):
+        if self._metric_repo_adapter is None:
+            from repositories import get_metric_snapshot_repo
+
+            self._metric_repo_adapter = get_metric_snapshot_repo()
+        return self._metric_repo_adapter
+
+    def _get_profile_repo(self):
+        if self._profile_repo_adapter is None:
+            from repositories import get_research_profile_repo
+
+            self._profile_repo_adapter = get_research_profile_repo()
+        return self._profile_repo_adapter
+
+    def _unavailable_evaluation(
+        self,
+        wind_code: str,
+        classification: Dict[str, Any],
+        quality: Dict[str, Any],
+        missing_data: List[str],
+    ) -> Dict[str, Any]:
+        return {
+            "status": "insufficient_evidence",
+            "target_type": "fund",
+            "target_id": wind_code,
+            "overall_score": None,
+            "overall_grade": "insufficient_evidence",
+            "dimension_scores": {},
+            "metric_scores": {},
+            "positive_factors": [],
+            "negative_factors": ["分类或评价方法证据不足，不能输出综合分"],
+            "missing_data": list(missing_data),
+            "source_snapshot_ids": [],
+            "as_of_date": None,
+            "calculation_method": "professional_metric_snapshot_v2",
+            "evaluation_scope": "classification_gated",
+            "classification": classification,
+            "fund_type_profile": classification.get("evaluation_profile_key"),
+            "peer_group": classification.get("peer_group"),
+            "primary_benchmark": classification.get("primary_benchmark"),
+            "data_quality": quality,
+            "product_scope": self._product_scope(),
+        }
+
+    def _product_scope(self) -> Dict[str, str]:
+        return {
+            "fund_classification": "core",
+            "fund_evaluation": "core",
+            "explanatory_attribution": "optional",
+            "reporting": "projection_only",
+            "investment_decision": "excluded",
+        }
 
     def _metrics_by_window(self, panel: List[Dict[str, Any]]) -> Dict[str, Dict[str, float]]:
         metrics: Dict[str, Dict[str, float]] = {}
@@ -206,6 +298,14 @@ class ProfessionalScoringService:
         for issue in quality.get("issues", []):
             missing.append(f"quality:{issue}")
         return missing
+
+    def _missing_core_metrics(self, metrics: Dict[str, Dict[str, float]]) -> List[str]:
+        one_year = metrics.get("1y", {})
+        return [
+            f"core_metric:1y.{metric_name}"
+            for metric_name in ["annualized_return", "max_drawdown", "sharpe_ratio"]
+            if one_year.get(metric_name) is None
+        ]
 
     def _positive_factors(self, dimensions: Dict[str, Any], quality: Dict[str, Any]) -> List[str]:
         factors = [f"{name} 维度得分较高" for name, item in dimensions.items() if item.get("score", 0) >= 75]

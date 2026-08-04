@@ -57,12 +57,12 @@ def main() -> int:
     ManagerTenureMetricService().calculate_and_save_for_fund(fund_code)
 
     result = ProfessionalScoringService().score_fund(fund_code)
-    if result.get("calculation_method") != "professional_metric_snapshot_v1":
+    if result.get("calculation_method") != "professional_metric_snapshot_v2":
         raise AssertionError(f"Unexpected calculation method: {result}")
     if result.get("fund_type_profile") != "active_equity":
         raise AssertionError(f"Expected active_equity profile, got {result}")
     if result.get("overall_score", 0) <= 60:
-        raise AssertionError(f"Expected investable professional score, got {result}")
+        raise AssertionError(f"Expected usable professional evaluation score, got {result}")
 
     dimensions = result.get("dimension_scores", {})
     for dimension in {"return", "risk", "risk_adjusted", "consistency", "manager_tenure", "data_quality"}:
