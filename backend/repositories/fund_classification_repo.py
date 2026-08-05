@@ -339,12 +339,23 @@ class FundClassificationRepo:
             FROM (
                 SELECT DISTINCT ON (fe.id)
                     f.*,
+                    fe.id AS entity_id,
+                    fe.canonical_code,
+                    fe.canonical_name,
+                    sf.key AS strategy_family_key,
+                    sf.name AS strategy_family_name,
+                    COALESCE(fe.asset_class, sf.asset_class) AS asset_class,
+                    COALESCE(fe.active_passive, sf.active_passive) AS active_passive,
                     pg.id AS standardized_peer_group_id,
                     pg.key AS standardized_peer_group_key,
-                    pg.name AS standardized_peer_group_name
+                    pg.name AS standardized_peer_group_name,
+                    pg.minimum_peer_count,
+                    pg.benchmark_code,
+                    pg.benchmark_name
                 FROM peer_groups pg
                 JOIN peer_group_members pgm ON pgm.peer_group_id = pg.id
                 JOIN fund_entities fe ON fe.id = pgm.entity_id
+                LEFT JOIN strategy_families sf ON sf.id = fe.strategy_family_id
                 JOIN fund_share_classes fsc ON fsc.entity_id = fe.id AND fsc.status = 'active'
                 JOIN funds f ON f.wind_code = fsc.wind_code
                 WHERE (pg.name = :peer_group OR pg.key = :peer_group)
@@ -376,7 +387,7 @@ class FundClassificationRepo:
                     "peer_group": normalized_group,
                     "keyword": str(keyword or "").strip(),
                     "keyword_pattern": f"%{str(keyword or '').strip()}%",
-                    "limit": max(1, min(int(limit), 100)),
+                    "limit": max(1, min(int(limit), 2000)),
                 },
             ).fetchall()
         return [_row_to_dict(row) for row in rows]
