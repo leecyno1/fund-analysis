@@ -97,6 +97,8 @@ def main() -> int:
         }
         for index, row in enumerate(rows)
     }
+    profiles["000005.OF"]["style_label"] = "仅缺证基金拥有的风格"
+    profiles["000005.OF"]["strategy_tags"] = ["仅缺证风格"]
 
     classification_repo = FakeClassificationRepo(rows)
     service = FundRecommendationService(
@@ -117,6 +119,8 @@ def main() -> int:
         raise AssertionError(f"Funds missing required category evidence must be excluded: {result}")
     if result.get("style_matched_count") != 11:
         raise AssertionError(f"Style filtering must run across the full eligible peer group: {result}")
+    if "仅缺证基金拥有的风格" in (result.get("available_styles") or []):
+        raise AssertionError(f"Style options must only come from evidence-eligible funds: {result}")
     if any(item.get("research_profile", {}).get("peer_group") != "指数-沪深300" for item in candidates):
         raise AssertionError(f"Cross-category fund leaked into candidate group: {result}")
     if any("成长" not in " ".join(item.get("research_profile", {}).get("strategy_tags") or []) for item in candidates):
