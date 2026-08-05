@@ -10,6 +10,7 @@
     "doctor": "bash scripts/doctor.sh",
     "smoke:fund-research": "node scripts/fund_research_acceptance_smoke.mjs",
     "smoke:fund-browser": "node scripts/fund_browser_peer_group_smoke.mjs",
+    "smoke:fund-recommendations": "node scripts/fund_recommendation_flow_smoke.mjs",
     "smoke:newma-desk": "node scripts/newma_desk_fund_research_compat_smoke.mjs",
     "research:real-data-report": "node scripts/fund_research_real_data_report.mjs",
     "funds:update-universe": "bash scripts/update_fund_universe.sh",
