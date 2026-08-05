@@ -59,7 +59,7 @@ type PendingReview = {
   id: string
   report_id: string
   report_title: string
-  kind: 'manager' | 'classification' | 'style_label' | 'tag'
+  kind: 'manager' | 'fund' | 'classification' | 'style_label' | 'tag'
   value: string
   confidence: number
   source_ref: {
@@ -82,7 +82,7 @@ function formatDate(value?: string | null, withTime = false) {
 }
 
 function reviewKind(kind: PendingReview['kind']) {
-  return ({ manager: '基金经理', classification: '基金分类', style_label: '风格标签', tag: '标签' })[kind]
+  return ({ manager: '基金经理', fund: '关联基金', classification: '基金分类', style_label: '风格标签', tag: '标签' })[kind]
 }
 
 export default function ResearchLibraryClient() {

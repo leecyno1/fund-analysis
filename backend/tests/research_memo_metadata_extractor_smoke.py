@@ -20,7 +20,8 @@ class FakeGenerator:
             {"value": "不存在的人", "confidence": 0.99, "excerpt": "原文里没有这句话"}
           ],
           "fund_ids": [
-            {"value": "000001.OF", "confidence": 0.88, "excerpt": "代表基金：000001.OF"}
+            {"value": "000001.OF", "confidence": 0.88, "excerpt": "代表基金：000001.OF"},
+            {"value": "不是基金代码", "confidence": 0.97, "excerpt": "风格偏成长"}
           ],
           "classifications": [
             {"value": "主动权益", "confidence": 0.84, "excerpt": "基金分类：主动权益"}

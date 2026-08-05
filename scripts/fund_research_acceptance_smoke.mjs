@@ -64,6 +64,7 @@ const staticChecks = [
   'scripts/report_generation_trust_smoke.mjs',
   'scripts/report_search_embedding_trust_smoke.mjs',
   'scripts/fund_research_trading_copy_guard_smoke.mjs',
+  'scripts/local_research_library_flow_smoke.mjs',
 ]
 
 async function assertResearchApiReachable() {

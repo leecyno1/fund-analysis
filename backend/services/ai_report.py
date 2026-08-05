@@ -180,6 +180,23 @@ class ClaudeReportGenerator:
         prompt = self._build_comparison_prompt(targets, comparison_type)
         return self._call_llm(prompt, "comparative_analysis")
 
+    def extract_research_memo_metadata(self, content: str, filename: str) -> str:
+        """Extract only source-grounded memo metadata for later human review."""
+        prompt = "\n".join([
+            "请从这份基金调研纪要中提取结构化候选，仅返回 JSON，不要 Markdown。",
+            "不得推测：每个候选必须给出纪要中逐字存在的短摘录；无法确定就返回空数组。",
+            "基金代码统一为 6 位代码加市场后缀（如 000001.OF）；不要输出投资建议。",
+            "JSON 格式：",
+            '{"manager_names":[{"value":"姓名","confidence":0.0,"excerpt":"原文短句"}],',
+            '"fund_ids":[{"value":"000001.OF","confidence":0.0,"excerpt":"原文短句"}],',
+            '"classifications":[{"value":"基金或策略分类","confidence":0.0,"excerpt":"原文短句"}],',
+            '"style_labels":[{"value":"风格标签","confidence":0.0,"excerpt":"原文短句"}]}',
+            f"文件名：{filename}",
+            "纪要原文：",
+            content[:12_000],
+        ])
+        return self._call_llm(prompt, "memo_metadata_extraction")
+
     def _to_json(self, data: Any) -> str:
         return json.dumps(data, ensure_ascii=False, indent=2, default=str)
 

@@ -54,11 +54,13 @@ class LocalResearchFolderService:
         self,
         repo: Any,
         manager_resolver: Optional[Callable[[str], Optional[Dict[str, Any]]]] = None,
+        metadata_extractor: Optional[Callable[[str, str], Dict[str, Any]]] = None,
         max_files: int = 5_000,
         max_file_bytes: int = 25 * 1024 * 1024,
     ):
         self.repo = repo
         self.manager_resolver = manager_resolver
+        self.metadata_extractor = metadata_extractor
         self.max_files = max_files
         self.max_file_bytes = max_file_bytes
 
@@ -135,6 +137,7 @@ class LocalResearchFolderService:
             "classifications": list(report.get("classifications", [])),
             "style_labels": list(report.get("style_labels", [])),
             "tags": list(report.get("tags", [])),
+            "fund_ids": list(report.get("fund_ids", [])),
         }
         self._apply_proposal(fields, target, confirmed=action == "confirmed")
         fields.update({
@@ -180,7 +183,13 @@ class LocalResearchFolderService:
             content = self._extract_text(resolved_path, raw).strip()
             if not content:
                 raise ValueError("未提取到可检索文字")
-            proposals = self._extract_proposals(content, root, resolved_path)
+            extraction = self._extract_metadata(content, resolved_path.name)
+            proposals = self._merge_proposals(
+                self._extract_proposals(content, root, resolved_path),
+                extraction.get("proposals", []),
+                root,
+                resolved_path,
+            )
             now = self._now()
             report_payload = {
                 "manager_id": "",
@@ -202,6 +211,10 @@ class LocalResearchFolderService:
                 "local_source_path": str(resolved_path),
                 "source_hash": content_hash,
                 "extraction_status": "complete",
+                "extraction_provider": extraction.get("provider") or "deterministic_rules",
+                "extraction_model": extraction.get("model"),
+                "llm_extraction_status": extraction.get("status") or "unavailable",
+                "llm_extraction_error": extraction.get("error"),
                 "created_at": now,
                 "updated_at": now,
             }
@@ -293,6 +306,45 @@ class LocalResearchFolderService:
                 ))
         return proposals
 
+    def _extract_metadata(self, content: str, filename: str) -> Dict[str, Any]:
+        if not self.metadata_extractor:
+            return {"status": "unavailable", "provider": None, "model": None, "proposals": []}
+        try:
+            result = self.metadata_extractor(content, filename)
+            return result if isinstance(result, dict) else {"status": "failed", "proposals": [], "error": "模型提取结果格式无效"}
+        except Exception as exc:
+            return {"status": "failed", "provider": None, "model": None, "proposals": [], "error": str(exc)}
+
+    def _merge_proposals(
+        self,
+        rule_proposals: List[Dict[str, Any]],
+        model_proposals: List[Dict[str, Any]],
+        root: Path,
+        path: Path,
+    ) -> List[Dict[str, Any]]:
+        merged: Dict[tuple, Dict[str, Any]] = {
+            (item.get("kind"), item.get("value")): item for item in rule_proposals
+        }
+        for candidate in model_proposals:
+            kind = candidate.get("kind")
+            value = str(candidate.get("value") or "").strip()
+            if kind not in {"manager", "fund", "classification", "style_label", "tag"} or not value:
+                continue
+            key = (kind, value)
+            proposal = self._proposal(
+                kind,
+                value,
+                path,
+                root,
+                str(candidate.get("excerpt") or ""),
+                float(candidate.get("confidence", 0)),
+            )
+            proposal["extraction_source"] = "llm"
+            current = merged.get(key)
+            if not current or proposal["confidence"] > current.get("confidence", 0):
+                merged[key] = proposal
+        return list(merged.values())
+
     def _proposal(
         self,
         kind: str,
@@ -331,7 +383,12 @@ class LocalResearchFolderService:
                 fields["manager_name"] = ""
                 fields["manager_id"] = ""
             return
-        field_name = {"classification": "classifications", "style_label": "style_labels", "tag": "tags"}.get(kind)
+        field_name = {
+            "fund": "fund_ids",
+            "classification": "classifications",
+            "style_label": "style_labels",
+            "tag": "tags",
+        }.get(kind)
         if not field_name:
             return
         values = [item for item in fields.get(field_name, []) if item != value]
@@ -353,6 +410,7 @@ class LocalResearchFolderService:
             "classifications": [],
             "style_labels": [],
             "tags": [],
+            "fund_ids": [],
         }
         for proposal in fresh["review_proposals"]:
             old = old_by_key.get((proposal.get("kind"), proposal.get("value")))

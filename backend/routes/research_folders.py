@@ -23,6 +23,7 @@ class ReviewDecisionRequest(BaseModel):
 @lru_cache(maxsize=1)
 def _get_service() -> LocalResearchFolderService:
     from repositories.local_research_folder_repo import LocalResearchFolderRepo
+    from services.research_memo_metadata_extractor import get_research_memo_metadata_extractor
     from service_registry import get_db
 
     db = get_db()
@@ -30,7 +31,8 @@ def _get_service() -> LocalResearchFolderService:
         raise HTTPException(status_code=503, detail="调研纪要数据库不可用")
     repo = LocalResearchFolderRepo(db)
     repo.ensure_indexes()
-    return LocalResearchFolderService(repo=repo)
+    extractor = get_research_memo_metadata_extractor()
+    return LocalResearchFolderService(repo=repo, metadata_extractor=extractor.extract)
 
 
 @router.get("/")
