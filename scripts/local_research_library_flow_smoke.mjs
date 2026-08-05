@@ -14,6 +14,7 @@ function assertIncludes(content, expected, label) {
 
 const page = read('app/(dashboard)/research/ResearchLibraryClient.tsx')
 const backendMain = read('backend/main.py')
+const reportRoute = read('backend/routes/research_reports.py')
 
 for (const expected of [
   '本地文件夹路径',
@@ -27,6 +28,7 @@ for (const expected of [
   '确认',
   '拒绝',
   '来源原文',
+  '模型提取暂不可用，已使用原文规则继续处理',
 ]) {
   assertIncludes(page, expected, 'research library user flow')
 }
@@ -41,6 +43,9 @@ for (const expected of [
 }
 
 assertIncludes(backendMain, 'research_folders', 'backend registers local folder routes')
+for (const expected of ['llm_extraction_status', 'extraction_provider', 'extraction_model', 'llm_extraction_error']) {
+  assertIncludes(reportRoute, expected, 'memo detail exposes extraction provenance')
+}
 
 for (const route of [
   'app/api/research-folders/route.ts',

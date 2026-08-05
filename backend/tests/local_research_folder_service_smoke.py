@@ -271,6 +271,36 @@ def main() -> int:
         if result.get("counts", {}).get("failed") != 1:
             raise AssertionError(f"Oversized file should fail without being read: {result}")
 
+    fallback_repo = MemoryResearchFolderRepo()
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        root = Path(temporary_directory) / "llm-fallback"
+        root.mkdir()
+        (root / "模型失效时仍可识别.md").write_text(
+            "基金经理：赵六\n代表基金：000002.OF\n基金分类：主动权益",
+            encoding="utf-8",
+        )
+        fallback_service = LocalResearchFolderService(
+            repo=fallback_repo,
+            metadata_extractor=lambda _content, _filename: {
+                "status": "failed",
+                "provider": "siliconflow",
+                "model": "deepseek-ai/DeepSeek-V4-Flash",
+                "proposals": [],
+                "error": "模型服务认证失败",
+            },
+        )
+        folder = fallback_service.add_folder(str(root))
+        fallback_service.scan_folder(folder["id"])
+        report = next(iter(fallback_repo.reports.values()))
+        fund_proposals = [
+            item for item in report.get("review_proposals", [])
+            if item.get("kind") == "fund" and item.get("value") == "000002.OF"
+        ]
+        if len(fund_proposals) != 1:
+            raise AssertionError(f"Rules must preserve fund identity when LLM is unavailable: {report}")
+        if report.get("llm_extraction_status") != "failed" or not report.get("llm_extraction_error"):
+            raise AssertionError(f"LLM fallback status must be auditable: {report}")
+
     print("OK local research folders scan incrementally with auditable, reviewable extraction")
     return 0
 
