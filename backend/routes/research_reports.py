@@ -95,6 +95,10 @@ async def list_reports(
                 "review_status": doc.get("review_status"),
                 "local_relative_path": doc.get("local_relative_path"),
                 "extraction_status": doc.get("extraction_status"),
+                "llm_extraction_status": doc.get("llm_extraction_status"),
+                "extraction_provider": doc.get("extraction_provider"),
+                "extraction_model": doc.get("extraction_model"),
+                "llm_extraction_error": doc.get("llm_extraction_error"),
             })
 
         return {"total": total, "page": page, "page_size": page_size, "data": reports}
@@ -213,6 +217,10 @@ async def get_report(report_id: str):
             "local_source_path": doc.get("local_source_path"),
             "source_hash": doc.get("source_hash"),
             "extraction_status": doc.get("extraction_status"),
+            "llm_extraction_status": doc.get("llm_extraction_status"),
+            "extraction_provider": doc.get("extraction_provider"),
+            "extraction_model": doc.get("extraction_model"),
+            "llm_extraction_error": doc.get("llm_extraction_error"),
             "created_at": doc.get("created_at"),
         }
     except HTTPException:

@@ -36,6 +36,10 @@ type ResearchMemo = {
   local_relative_path?: string | null
   local_source_path?: string | null
   source_hash?: string | null
+  llm_extraction_status?: string | null
+  extraction_provider?: string | null
+  extraction_model?: string | null
+  llm_extraction_error?: string | null
 }
 
 type ScanCounts = {
@@ -394,6 +398,7 @@ export default function ResearchLibraryClient() {
                       {[...(memo.classifications || []), ...(memo.style_labels || []), ...(memo.tags || [])].slice(0, 6).map((tag, index) => <span key={`${tag}-${index}`} className="rounded-sm bg-[#edf1ed] px-2 py-1 text-[11px] text-[#53625b]">{tag}</span>)}
                       {memo.review_status === 'pending' ? <span className="rounded-sm bg-[#fff2d8] px-2 py-1 text-[11px] text-[#795b1d]">有待确认内容</span> : null}
                     </div>
+                    {memo.llm_extraction_status === 'failed' ? <p className="mt-2 text-[11px] text-[#8a6a2d]">模型提取暂不可用，已使用原文规则继续处理</p> : null}
                   </div>
                   <ChevronRight className="hidden h-4 w-4 self-center text-[#849088] sm:block" />
                 </button>
@@ -420,6 +425,11 @@ export default function ResearchLibraryClient() {
                 {[...(selectedMemo.classifications || []), ...(selectedMemo.style_labels || []), ...(selectedMemo.tags || [])].map((tag, index) => <span key={`${tag}-${index}`} className="inline-flex items-center gap-1 rounded-sm bg-[#e8efeb] px-2 py-1 text-xs text-[#315e4d]"><Tag className="h-3 w-3" />{tag}</span>)}
               </div>
               {selectedMemo.summary ? <p className="mt-5 border-l-4 border-[#d7b46a] bg-[#fff9eb] px-4 py-3 text-sm leading-7 text-[#66583a]">{selectedMemo.summary}</p> : null}
+              {selectedMemo.llm_extraction_status === 'failed' ? (
+                <div className="mt-4 border border-[#e2d09d] bg-[#fff9ea] px-4 py-3 text-xs leading-6 text-[#725921]">
+                  模型提取暂不可用，已使用原文规则继续处理。经理、基金和标签仍需人工确认。
+                </div>
+              ) : null}
               {(selectedMemo.key_points || []).length ? <div className="mt-6 space-y-2">{(selectedMemo.key_points || []).map((point, index) => <div key={index} className="flex gap-2 text-sm leading-7 text-[#435149]"><CheckCircle2 className="mt-1.5 h-4 w-4 shrink-0 text-[#28745c]" />{point}</div>)}</div> : null}
               <div className="mt-7 whitespace-pre-wrap border-t border-[#dfe4df] pt-6 text-sm leading-8 text-[#334139]">{selectedMemo.content || '暂无可显示的原文。'}</div>
               {selectedMemo.source_hash ? <div className="mt-8 border-t border-[#e1e5e1] pt-4 text-[11px] text-[#7a8580]">来源校验：{selectedMemo.source_hash}</div> : null}

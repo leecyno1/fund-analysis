@@ -294,6 +294,17 @@ class LocalResearchFolderService:
                 0.55,
             ))
 
+        for match in re.finditer(r"(?<!\d)(\d{6}\.(?:OF|SH|SZ|BJ|HK))(?![A-Z])", content, re.IGNORECASE):
+            value = match.group(1).upper()
+            proposals.append(self._proposal(
+                "fund",
+                value,
+                path,
+                root,
+                self._line_excerpt(content, match.start()),
+                0.92,
+            ))
+
         for value in self.CLASSIFICATIONS:
             if value.lower() in content.lower():
                 proposals.append(self._proposal(
