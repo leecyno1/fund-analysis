@@ -278,7 +278,55 @@ class FundClassificationRepo:
             rows = conn.execute(text(sql), {"limit": max(1, min(int(limit), 200))}).fetchall()
         return [_row_to_dict(row) for row in rows]
 
-    def list_recommendation_funds(self, peer_group: str, limit: int = 50) -> List[Dict[str, Any]]:
+    def list_fund_peer_group_map(self, wind_codes: List[str]) -> Dict[str, Dict[str, Any]]:
+        """批量返回基金份额的标准同类组，避免列表页逐只查询分类上下文。"""
+        normalized_codes = list(dict.fromkeys(
+            str(code or "").strip() for code in wind_codes if str(code or "").strip()
+        ))
+        if not normalized_codes or not self._schema_ready():
+            return {}
+
+        from sqlalchemy import text
+
+        sql = """
+            SELECT DISTINCT ON (fsc.wind_code)
+                fsc.wind_code,
+                pg.id AS peer_group_id,
+                pg.key AS peer_group_key,
+                pg.name AS peer_group_name,
+                pg.minimum_peer_count,
+                pgm.confidence,
+                pgm.source,
+                pgm.sample_as_of_date
+            FROM fund_share_classes fsc
+            JOIN fund_entities fe ON fe.id = fsc.entity_id
+            LEFT JOIN peer_group_members pgm
+              ON pgm.entity_id = fe.id
+             AND pgm.role <> 'excluded'
+            LEFT JOIN peer_groups pg ON pg.id = pgm.peer_group_id
+            WHERE fsc.status = 'active'
+              AND fsc.wind_code = ANY(:wind_codes)
+            ORDER BY
+                fsc.wind_code,
+                CASE pgm.role WHEN 'primary' THEN 0 WHEN 'target' THEN 1 ELSE 2 END,
+                pgm.sample_as_of_date DESC NULLS LAST,
+                pgm.confidence DESC NULLS LAST,
+                pg.updated_at DESC NULLS LAST
+        """
+        with self.engine.connect() as conn:
+            rows = conn.execute(text(sql), {"wind_codes": normalized_codes}).fetchall()
+        return {
+            row["wind_code"]: row
+            for item in rows
+            if (row := _row_to_dict(item)).get("wind_code") and row.get("peer_group_id")
+        }
+
+    def list_recommendation_funds(
+        self,
+        peer_group: str,
+        limit: int = 50,
+        keyword: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
         """按标准化同类组返回每个基金实体的代表份额及完整基础数据。"""
         normalized_group = str(peer_group or "").strip()
         if not normalized_group or not self._schema_ready():
@@ -301,6 +349,11 @@ class FundClassificationRepo:
                 JOIN funds f ON f.wind_code = fsc.wind_code
                 WHERE (pg.name = :peer_group OR pg.key = :peer_group)
                   AND pgm.role <> 'excluded'
+                  AND (
+                    :keyword = ''
+                    OR f.name ILIKE :keyword_pattern
+                    OR f.wind_code ILIKE :keyword_pattern
+                  )
                 ORDER BY
                     fe.id,
                     CASE WHEN f.performance_data IS NULL OR f.performance_data = '{}'::jsonb THEN 1 ELSE 0 END,
@@ -319,9 +372,46 @@ class FundClassificationRepo:
         with self.engine.connect() as conn:
             rows = conn.execute(
                 text(sql),
-                {"peer_group": normalized_group, "limit": max(1, min(int(limit), 100))},
+                {
+                    "peer_group": normalized_group,
+                    "keyword": str(keyword or "").strip(),
+                    "keyword_pattern": f"%{str(keyword or '').strip()}%",
+                    "limit": max(1, min(int(limit), 100)),
+                },
             ).fetchall()
         return [_row_to_dict(row) for row in rows]
+
+    def count_recommendation_funds(self, peer_group: str, keyword: Optional[str] = None) -> int:
+        """统计同类组可浏览的基金实体数，与候选列表使用相同过滤口径。"""
+        normalized_group = str(peer_group or "").strip()
+        if not normalized_group or not self._schema_ready():
+            return 0
+
+        from sqlalchemy import text
+
+        sql = """
+            SELECT COUNT(DISTINCT fe.id)::int AS fund_count
+            FROM peer_groups pg
+            JOIN peer_group_members pgm ON pgm.peer_group_id = pg.id
+            JOIN fund_entities fe ON fe.id = pgm.entity_id
+            JOIN fund_share_classes fsc ON fsc.entity_id = fe.id AND fsc.status = 'active'
+            JOIN funds f ON f.wind_code = fsc.wind_code
+            WHERE (pg.name = :peer_group OR pg.key = :peer_group)
+              AND pgm.role <> 'excluded'
+              AND (
+                :keyword = ''
+                OR f.name ILIKE :keyword_pattern
+                OR f.wind_code ILIKE :keyword_pattern
+              )
+        """
+        normalized_keyword = str(keyword or "").strip()
+        with self.engine.connect() as conn:
+            value = conn.execute(text(sql), {
+                "peer_group": normalized_group,
+                "keyword": normalized_keyword,
+                "keyword_pattern": f"%{normalized_keyword}%",
+            }).scalar()
+        return int(value or 0)
 
     def apply_ingestion_plan(
         self,

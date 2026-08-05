@@ -1,8 +1,8 @@
 'use client'
 
 import Link from 'next/link'
-import { useCallback, useMemo, useState } from 'react'
-import { ArrowRight, BarChart3, Check, GitCompareArrows, Search, Sparkles } from 'lucide-react'
+import { useCallback, useState } from 'react'
+import { ArrowRight, BarChart3, Check, CircleAlert, GitCompareArrows, Search, Sparkles } from 'lucide-react'
 import type { CamelFund } from '@/lib/backend-api'
 import {
   drawdownMetric,
@@ -10,7 +10,8 @@ import {
   formatAsset,
   formatPercent,
   managerName,
-  peerGroup,
+  professionalPeerGroup,
+  professionalPeerGroupId,
   returnMetric,
   sharpeMetric,
   styleLabel,
@@ -19,29 +20,30 @@ import {
 
 type Props = {
   initialFunds: CamelFund[]
+  initialCategories: Array<{ id: string; name: string; count: number }>
   initialTotal: number
   initialSource: string
   initialError: string
 }
 
-export default function FundDiscoverClient({ initialFunds, initialTotal, initialSource, initialError }: Props) {
+export default function FundDiscoverClient({ initialFunds, initialCategories, initialTotal, initialSource, initialError }: Props) {
   const [funds, setFunds] = useState<SimpleFund[]>(initialFunds)
   const [searchText, setSearchText] = useState('')
   const [appliedSearch, setAppliedSearch] = useState('')
-  const [typeFilter, setTypeFilter] = useState('')
+  const [peerGroupFilter, setPeerGroupFilter] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(initialError)
   const [total, setTotal] = useState(initialTotal)
   const [compareFunds, setCompareFunds] = useState<SimpleFund[]>([])
 
-  const runSearch = useCallback(async () => {
+  const runSearch = useCallback(async (nextPeerGroup = peerGroupFilter) => {
     setLoading(true)
     setError('')
-    const params = new URLSearchParams({ limit: '30', page: '1', sortBy: 'updatedAt', sortOrder: 'desc' })
+    const params = new URLSearchParams({ limit: '30' })
     if (searchText.trim()) params.set('search', searchText.trim())
-    if (typeFilter) params.set('type', typeFilter)
+    if (nextPeerGroup) params.set('peerGroup', nextPeerGroup)
     try {
-      const response = await fetch(`/api/funds?${params.toString()}`)
+      const response = await fetch(`/api/fund-browser?${params.toString()}`)
       const payload = await response.json()
       if (!response.ok) throw new Error(payload.error || '基金查询失败')
       setFunds(payload.data || [])
@@ -52,11 +54,11 @@ export default function FundDiscoverClient({ initialFunds, initialTotal, initial
     } finally {
       setLoading(false)
     }
-  }, [searchText, typeFilter])
+  }, [searchText, peerGroupFilter])
 
-  const visibleTypes = useMemo(() => Array.from(new Set(initialFunds.map((fund) => fund.type).filter(Boolean))).slice(0, 8), [initialFunds])
   const compareCodes = compareFunds.map((fund) => fund.windCode)
   const compareHref = `/compare?${new URLSearchParams({ codes: compareCodes.join(',') }).toString()}`
+  const lockedPeerGroup = compareFunds.length ? professionalPeerGroup(compareFunds[0]) : ''
 
   function toggleCompare(fund: SimpleFund) {
     if (compareFunds.some((item) => item.windCode === fund.windCode)) {
@@ -64,8 +66,13 @@ export default function FundDiscoverClient({ initialFunds, initialTotal, initial
       return
     }
     if (compareFunds.length >= 6) return
-    if (compareFunds.length && peerGroup(compareFunds[0]) !== peerGroup(fund)) {
-      setError(`请只选择“${peerGroup(compareFunds[0])}”同类基金进行比较`)
+    const selectedGroupId = professionalPeerGroupId(fund)
+    if (!selectedGroupId) {
+      setError('这只基金尚未完成专业分类，可以浏览，但暂不能加入同类比较。')
+      return
+    }
+    if (compareFunds.length && professionalPeerGroupId(compareFunds[0]) !== selectedGroupId) {
+      setError(`已锁定“${professionalPeerGroup(compareFunds[0])}”同类组，请只选择该类基金。`)
       return
     }
     setError('')
@@ -79,7 +86,7 @@ export default function FundDiscoverClient({ initialFunds, initialTotal, initial
           <div className="max-w-3xl">
             <p className="text-xs font-bold uppercase text-[#28745c]">基金浏览器</p>
             <h1 className="mt-3 text-3xl font-bold leading-tight text-[#18231e] sm:text-4xl">快速找到并看懂一只基金</h1>
-            <p className="mt-3 text-sm leading-7 text-[#65716b] sm:text-base">搜索基金，查看收益、回撤、规模、经理与风格。勾选同类基金即可横向比较。</p>
+            <p className="mt-3 text-sm leading-7 text-[#65716b] sm:text-base">先选专业同类组，再看收益、回撤、规模、经理与风格。只有分类一致的基金才能横向比较。</p>
           </div>
           <div className="flex items-center gap-3 text-sm text-[#65716b]">
             <span className="rounded-sm bg-[#e7eee9] px-3 py-2 font-semibold text-[#245c49]">{total.toLocaleString('zh-CN')} 只基金</span>
@@ -100,18 +107,24 @@ export default function FundDiscoverClient({ initialFunds, initialTotal, initial
             <input
               value={searchText}
               onChange={(event) => setSearchText(event.target.value)}
-              placeholder="输入基金名称、代码或经理"
+              placeholder="输入基金名称或代码"
               className="h-12 w-full rounded-md border border-[#cfd6d0] bg-white pl-12 pr-4 text-sm outline-none transition focus:border-[#28745c] focus:ring-2 focus:ring-[#28745c]/10"
             />
           </label>
           <select
-            value={typeFilter}
-            onChange={(event) => setTypeFilter(event.target.value)}
-            aria-label="基金类别"
+            value={peerGroupFilter}
+            onChange={(event) => {
+              const nextPeerGroup = event.target.value
+              setPeerGroupFilter(nextPeerGroup)
+              setCompareFunds([])
+              setError('')
+              void runSearch(nextPeerGroup)
+            }}
+            aria-label="专业同类组"
             className="h-12 rounded-md border border-[#cfd6d0] bg-white px-4 text-sm outline-none focus:border-[#28745c]"
           >
-            <option value="">全部类别</option>
-            {visibleTypes.map((type) => <option key={type} value={type}>{type}</option>)}
+            <option value="">全部专业类别</option>
+            {initialCategories.map((category) => <option key={category.id} value={category.name}>{category.name}（{category.count} 只）</option>)}
           </select>
           <button type="submit" disabled={loading} className="h-12 rounded-md bg-[#173f35] px-6 text-sm font-bold text-white transition hover:bg-[#225747] disabled:opacity-60">
             {loading ? '查询中' : '查找基金'}
@@ -121,6 +134,13 @@ export default function FundDiscoverClient({ initialFunds, initialTotal, initial
 
       {error ? (
         <div className="border border-[#e5c98f] bg-[#fff8e8] px-5 py-4 text-sm text-[#78551c]">{error}</div>
+      ) : null}
+
+      {lockedPeerGroup ? (
+        <section className="flex flex-wrap items-center gap-x-4 gap-y-2 border-l-4 border-[#2b775d] bg-[#eef5f1] px-5 py-4 text-sm text-[#315e4d]">
+          <strong>比较已锁定：{lockedPeerGroup}</strong>
+          <span className="text-xs text-[#64736c]">已选 {compareCodes.length} / 6 只，其他类别不会加入。</span>
+        </section>
       ) : null}
 
       <section className="grid gap-4 sm:grid-cols-3">
@@ -145,7 +165,7 @@ export default function FundDiscoverClient({ initialFunds, initialTotal, initial
         <div className="flex flex-wrap items-center justify-between gap-3 pb-4">
           <div>
             <h2 className="text-lg font-bold">{appliedSearch ? `“${appliedSearch}”的结果` : '基金列表'}</h2>
-            <p className="mt-1 text-xs text-[#7b8680]">数据不足的指标显示为“—”，不会使用模拟值补齐。</p>
+            <p className="mt-1 text-xs text-[#7b8680]">{peerGroupFilter ? `当前只显示“${peerGroupFilter}”标准同类组。` : '未分类基金可浏览，但不能加入同类比较。'}</p>
           </div>
           {compareCodes.length >= 2 ? (
             <Link href={compareHref} className="inline-flex h-10 items-center gap-2 rounded-md bg-[#173f35] px-4 text-sm font-bold text-white">
@@ -155,7 +175,7 @@ export default function FundDiscoverClient({ initialFunds, initialTotal, initial
         </div>
 
         {funds.length === 0 ? (
-          <div className="border border-dashed border-[#cbd3cd] bg-white px-6 py-16 text-center text-sm text-[#748079]">没有找到可展示的基金。</div>
+          <div className="border border-dashed border-[#cbd3cd] bg-white px-6 py-16 text-center text-sm text-[#748079]"><CircleAlert className="mx-auto mb-3 h-5 w-5 text-[#9a7a3a]" />没有找到可展示的基金。</div>
         ) : (
           <div className="overflow-x-auto border border-[#dbe1dc] bg-white">
             <table className="w-full min-w-[980px] border-collapse text-left text-sm">
@@ -163,7 +183,7 @@ export default function FundDiscoverClient({ initialFunds, initialTotal, initial
                 <tr>
                   <th className="w-12 px-4 py-3">对比</th>
                   <th className="px-4 py-3">基金</th>
-                  <th className="px-4 py-3">类别 / 风格</th>
+                  <th className="px-4 py-3">专业同类组 / 风格</th>
                   <th className="px-4 py-3 text-right">近 1 年</th>
                   <th className="px-4 py-3 text-right">最大回撤</th>
                   <th className="px-4 py-3 text-right">Sharpe</th>
@@ -194,8 +214,8 @@ export default function FundDiscoverClient({ initialFunds, initialTotal, initial
                         <div className="mt-1 text-xs text-[#7b8680]">{fund.windCode} · 净值 {fund.nav?.toFixed(4) || '—'}</div>
                       </td>
                       <td className="px-4 py-4">
-                        <div className="max-w-[14rem] truncate font-medium">{peerGroup(fund)}</div>
-                        <div className="mt-1 inline-flex rounded-sm bg-[#edf1ed] px-2 py-1 text-xs text-[#5f6b65]">{styleLabel(fund)}</div>
+                        <div className="max-w-[14rem] truncate font-medium">{professionalPeerGroup(fund) || '专业分类待确认'}</div>
+                        <div className="mt-1 flex flex-wrap gap-2"><span className="inline-flex rounded-sm bg-[#edf1ed] px-2 py-1 text-xs text-[#5f6b65]">{styleLabel(fund)}</span><span className="inline-flex px-1 py-1 text-xs text-[#8a948f]">{fund.type || '法律类型待补'}</span></div>
                       </td>
                       <td className={`px-4 py-4 text-right font-bold ${annualReturn != null && annualReturn < 0 ? 'text-[#a84d47]' : 'text-[#267257]'}`}>{formatPercent(annualReturn)}</td>
                       <td className="px-4 py-4 text-right text-[#8b4f48]">{formatPercent(drawdownMetric(fund))}</td>

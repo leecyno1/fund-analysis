@@ -164,7 +164,7 @@ export default function SimpleComparisonClient({ funds }: { funds: ComparisonFun
             </div>
             {chartData.length ? (
               <div className="mt-6 h-[320px] w-full sm:h-[390px]">
-                <ResponsiveContainer width="100%" height="100%">
+                <ResponsiveContainer width="100%" height="100%" minWidth={0} initialDimension={{ width: 320, height: 320 }}>
                   <LineChart data={chartData} margin={{ top: 6, right: 8, bottom: 6, left: -16 }}>
                     <CartesianGrid stroke="#e6eae6" strokeDasharray="3 3" vertical={false} />
                     <XAxis dataKey="date" minTickGap={48} tick={{ fontSize: 11, fill: '#718078' }} tickLine={false} axisLine={false} />

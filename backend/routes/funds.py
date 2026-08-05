@@ -324,7 +324,7 @@ async def list_funds(
     """获取基金列表（优先从 PostgreSQL 获取，无数据则从 Tushare 查询并缓存）"""
     from services.cache_service import get_cache, CacheKey, TTL
     from service_registry import get_data_service, get_scoring_engine
-    from repositories import get_fund_repo, get_manager_repo, get_metric_snapshot_repo, get_research_profile_repo
+    from repositories import get_fund_classification_repo, get_fund_repo, get_manager_repo, get_metric_snapshot_repo, get_research_profile_repo
 
     cache = get_cache()
     safe_purchase_plan = "lump_sum" if purchase_plan == "lump_sum" else "sip"
@@ -332,6 +332,12 @@ async def list_funds(
 
     # 尝试从缓存获取
     normalized_fund_type = _normalize_fund_type_filter(fund_type)
+    has_sales_context = any(value is not None and value != "" for value in [
+        sales_rule_complete,
+        safe_planned_amount,
+        max_sales_risk_level,
+        sales_risk_filter,
+    ])
     has_explicit_filters = any(value is not None and value != "" for value in [
         normalized_fund_type,
         keyword,
@@ -358,10 +364,7 @@ async def list_funds(
         research_checklist_status,
         research_checklist_gap,
         sales_rule_complete,
-        safe_purchase_plan,
-        safe_planned_amount,
-        max_sales_risk_level,
-        sales_risk_filter,
+        has_sales_context,
         has_nav,
         has_performance,
         has_holdings,
@@ -387,6 +390,7 @@ async def list_funds(
     manager_repo = get_manager_repo()
     research_profile_repo = get_research_profile_repo()
     metric_snapshot_repo = get_metric_snapshot_repo()
+    classification_repo = get_fund_classification_repo()
 
     # 尝试从数据库获取
     db_result = None
@@ -443,9 +447,21 @@ async def list_funds(
     if db_result is not None and (db_result.get("total", 0) > 0 or has_explicit_filters):
         funds = [_api_fund_from_row(f, scoring_engine) for f in db_result.get("funds", [])]
         _attach_manager_summaries(funds, manager_repo)
-        profile_map = research_profile_repo.list_profiles([fund.get("wind_code") for fund in funds if fund.get("wind_code")])
+        fund_codes = [fund.get("wind_code") for fund in funds if fund.get("wind_code")]
+        profile_map = research_profile_repo.list_profiles(fund_codes)
+        peer_group_map = classification_repo.list_fund_peer_group_map(fund_codes)
         for fund in funds:
-            fund["research_profile"] = profile_map.get(fund.get("wind_code"))
+            code = fund.get("wind_code")
+            profile = profile_map.get(code) or {}
+            peer_group = peer_group_map.get(code) or {}
+            fund["research_profile"] = {
+                **profile,
+                "peer_group": peer_group.get("peer_group_name") or profile.get("peer_group"),
+                "peer_group_id": peer_group.get("peer_group_id"),
+                "peer_group_key": peer_group.get("peer_group_key"),
+                "classification_confidence": peer_group.get("confidence"),
+                "classification_source": peer_group.get("source"),
+            }
             try:
                 fund["rolling_metrics"] = _rolling_metric_panel(
                     metric_snapshot_repo.get_latest_panel("fund", fund.get("wind_code"))
@@ -562,6 +578,7 @@ async def get_recommendation_categories(limit: int = Query(100, ge=1, le=200)):
 async def get_recommendation_universe(
     peer_group: str = Query(..., min_length=1),
     limit: int = Query(30, ge=1, le=50),
+    keyword: Optional[str] = Query(None),
 ):
     """按同类组返回用于现场评价的候选集，不在此接口跨类排序。"""
     from repositories import get_fund_classification_repo, get_manager_repo, get_metric_snapshot_repo, get_research_profile_repo
@@ -570,7 +587,8 @@ async def get_recommendation_universe(
     classification_repo = get_fund_classification_repo()
     manager_repo = get_manager_repo()
     metric_repo = get_metric_snapshot_repo()
-    rows = classification_repo.list_recommendation_funds(peer_group, limit=limit)
+    rows = classification_repo.list_recommendation_funds(peer_group, limit=limit, keyword=keyword)
+    total = classification_repo.count_recommendation_funds(peer_group, keyword=keyword)
     funds = [_api_fund_from_row(row) for row in rows]
     _attach_manager_summaries(funds, manager_repo)
     profile_map = profile_repo.list_profiles([fund.get("wind_code") for fund in funds if fund.get("wind_code")])
@@ -590,11 +608,22 @@ async def get_recommendation_universe(
             fund["rolling_metrics"] = {}
     return _clean_nan({
         "peer_group": peer_group,
-        "total": len(funds),
+        "total": total,
+        "returned": len(funds),
         "limit": limit,
         "funds": funds,
         "source": "database_peer_group_universe",
     })
+
+
+@router.get("/peer-group-universe")
+async def get_peer_group_universe(
+    peer_group: str = Query(..., min_length=1),
+    limit: int = Query(50, ge=1, le=100),
+    keyword: Optional[str] = Query(None),
+):
+    """按标准同类组返回基金浏览器候选集，不执行评分或跨类排序。"""
+    return await get_recommendation_universe(peer_group=peer_group, limit=limit, keyword=keyword)
 
 
 @router.get("/{wind_code}/evaluation")

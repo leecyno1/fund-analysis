@@ -111,6 +111,16 @@ export function peerGroup(fund: SimpleFund) {
   return textValue(profile.peerGroup, profile.peer_group, fund.type) || '类别待确认'
 }
 
+export function professionalPeerGroup(fund: SimpleFund) {
+  const profile = asRecord(fund.researchProfile)
+  return textValue(profile.peerGroup, profile.peer_group)
+}
+
+export function professionalPeerGroupId(fund: SimpleFund) {
+  const profile = asRecord(fund.researchProfile)
+  return textValue(profile.peerGroupId, profile.peer_group_id, profile.peerGroupKey, profile.peer_group_key)
+}
+
 export function managerName(fund: SimpleFund) {
   const managers = Array.isArray(fund.managers) ? fund.managers : []
   const first = managers.length ? asRecord(managers[0]) : {}
