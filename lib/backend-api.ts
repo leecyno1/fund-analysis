@@ -47,6 +47,7 @@ function asRecordArray(value: unknown) {
 export function toCamelFund(fund: BackendRecord): CamelFund {
   const windCode = asText(fund.wind_code ?? fund.windCode)
   const researchProfile = asRecord(fund.research_profile ?? fund.researchProfile)
+  const recommendationEvidence = asRecord(fund.recommendation_evidence ?? fund.recommendationEvidence)
   const trust = asRecord(fund.trust)
 
   return {
@@ -108,6 +109,15 @@ export function toCamelFund(fund: BackendRecord): CamelFund {
     rollingMetrics: fund.rolling_metrics ?? fund.rollingMetrics ?? {},
     dataQuality: fund.data_quality ?? fund.dataQuality ?? null,
     professionalScoring: fund.professional_scoring ?? fund.professionalScoring ?? null,
+    recommendationEvidence: recommendationEvidence
+      ? {
+          reasons: asStringArray(recommendationEvidence.reasons),
+          risks: asStringArray(recommendationEvidence.risks),
+          dataAsOf: recommendationEvidence.data_as_of ?? recommendationEvidence.dataAsOf ?? null,
+          methodologyVersion: recommendationEvidence.methodology_version ?? recommendationEvidence.methodologyVersion ?? '',
+          scoreScope: recommendationEvidence.score_scope ?? recommendationEvidence.scoreScope ?? '',
+        }
+      : null,
     scores: asRecordArray(fund.scores),
     aiReports: asRecordArray(fund.ai_reports ?? fund.aiReports),
     trust: trust

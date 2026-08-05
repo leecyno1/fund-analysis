@@ -58,7 +58,6 @@ class FundRecommendationService:
         panels = self.metric_repo.get_latest_panels("fund", codes)
         profiles = self.profile_repo.list_profiles(codes)
 
-        available_styles = self._available_styles(profiles)
         eligible: List[Dict[str, Any]] = []
         excluded_reason_counts: Dict[str, int] = {}
         for row in exact_rows:
@@ -71,6 +70,10 @@ class FundRecommendationService:
                 continue
             eligible.append(candidate)
 
+        available_styles = self._available_styles({
+            str(candidate.get("wind_code") or ""): candidate.get("research_profile") or {}
+            for candidate in eligible
+        })
         self._attach_score_percentiles(eligible)
         styled = [
             candidate

@@ -6,21 +6,17 @@ import { ArrowRight, CheckCircle2, CircleAlert, GitCompareArrows, LoaderCircle, 
 import type { CamelFund } from '@/lib/backend-api'
 import {
   drawdownMetric,
-  evidenceCoverage,
   formatAsset,
   formatPercent,
   managerName,
-  matchesStyleLabel,
   peerGroup,
   professionalFundScore,
   professionalScorePercentile,
+  recommendationEvidence,
   returnMetric,
-  sharpeMetric,
   styleLabel,
   type SimpleFund,
 } from '@/lib/simple-fund-view'
-
-const defaultStyleTags = ['大盘成长', '成长', '价值', '均衡', '质量', '红利', '小盘', '行业主题', '低波稳健']
 
 type Props = {
   initialFunds: CamelFund[]
@@ -40,36 +36,30 @@ export default function RecommendationClient({ initialFunds, initialCategories, 
   const [categoryFunds, setCategoryFunds] = useState<SimpleFund[]>([])
   const [loading, setLoading] = useState(false)
   const [loadError, setLoadError] = useState('')
-  const [evaluatedCount, setEvaluatedCount] = useState(0)
+  const [peerUniverseCount, setPeerUniverseCount] = useState(0)
+  const [evidenceEligibleCount, setEvidenceEligibleCount] = useState(0)
+  const [availableStyles, setAvailableStyles] = useState<string[]>([])
+  const recommendations = categoryFunds
 
-  const availableStyles = useMemo(() => {
-    const fromData = categoryFunds.map((fund) => styleLabel(fund)).filter((value) => value !== '风格待确认')
-    return Array.from(new Set([...defaultStyleTags, ...fromData])).slice(0, 18)
-  }, [categoryFunds])
-
-  const recommendations = useMemo(() => categoryFunds
-    .filter((fund) => matchesStyleLabel(fund, style))
-    .map((fund) => ({ fund, score: professionalFundScore(fund) }))
-    .filter((item): item is { fund: SimpleFund; score: number } => item.score != null)
-    .sort((left, right) => right.score - left.score)
-    .slice(0, 10), [categoryFunds, style])
-
-  async function chooseCategory(nextCategory: string) {
-    setCategory(nextCategory)
-    setStyle('')
+  async function loadCandidates(nextCategory: string, nextStyle = '') {
     setCategoryFunds([])
-    setEvaluatedCount(0)
+    setPeerUniverseCount(0)
+    setEvidenceEligibleCount(0)
     setLoadError('')
     if (!nextCategory) return
     setLoading(true)
     try {
-      const response = await fetch(`/api/recommendations?${new URLSearchParams({ category: nextCategory })}`, {
+      const params = new URLSearchParams({ category: nextCategory })
+      if (nextStyle) params.set('style', nextStyle)
+      const response = await fetch(`/api/recommendations?${params}`, {
         cache: 'no-store',
       })
       const payload = await response.json().catch(() => ({}))
       if (!response.ok) throw new Error(payload.error || '同类基金评价暂时不可用')
       setCategoryFunds(Array.isArray(payload.data) ? payload.data : [])
-      setEvaluatedCount(Number(payload.evaluated || 0))
+      setPeerUniverseCount(Number(payload.peerUniverseCount || 0))
+      setEvidenceEligibleCount(Number(payload.evidenceEligibleCount || 0))
+      setAvailableStyles(Array.isArray(payload.availableStyles) ? payload.availableStyles : [])
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : '同类基金评价暂时不可用')
     } finally {
@@ -77,8 +67,15 @@ export default function RecommendationClient({ initialFunds, initialCategories, 
     }
   }
 
+  function chooseCategory(nextCategory: string) {
+    setCategory(nextCategory)
+    setStyle('')
+    setAvailableStyles([])
+    void loadCandidates(nextCategory)
+  }
+
   const compareHref = `/compare?${new URLSearchParams({
-    codes: recommendations.slice(0, 6).map((item) => item.fund.windCode).join(','),
+    codes: recommendations.slice(0, 6).map((fund) => fund.windCode).join(','),
   }).toString()}`
 
   return (
@@ -87,7 +84,7 @@ export default function RecommendationClient({ initialFunds, initialCategories, 
         <div className="max-w-3xl">
           <div className="flex items-center gap-2 text-xs font-bold uppercase text-[#28745c]"><Tags className="h-4 w-4" />标签推荐</div>
           <h1 className="mt-3 text-3xl font-bold leading-tight text-[#18231e] sm:text-4xl">先选基金类别，再看同类候选</h1>
-          <p className="mt-3 text-sm leading-7 text-[#65716b] sm:text-base">排序只使用后端的类别专属评价方法。没有分类、同类组或评价证据的基金不会被临时打分。</p>
+          <p className="mt-3 text-sm leading-7 text-[#65716b] sm:text-base">系统检查完整同类组，只保留分类和关键证据齐全的基金，再按该类别自己的评价方法给出最多十只候选。</p>
         </div>
         <div className="border-l-4 border-[#d7b46a] bg-[#fff9eb] px-4 py-3 text-xs leading-6 text-[#755722]">
           候选组用于缩小研究范围，不跨类比较，不代表收益承诺或买卖建议。
@@ -109,7 +106,11 @@ export default function RecommendationClient({ initialFunds, initialCategories, 
         <label className="block">
           <span className="text-sm font-bold">2. 风格标签</span>
           <span className="mt-1 block text-xs text-[#7a8580]">可选，兼容中英文风格标签</span>
-          <select value={style} disabled={!category || loading} onChange={(event) => setStyle(event.target.value)} className="mt-3 h-11 w-full rounded-md border border-[#cfd6d0] bg-white px-3 text-sm outline-none focus:border-[#28745c] disabled:bg-[#f1f3f0] disabled:text-[#9aa39e]">
+          <select value={style} disabled={!category || loading} onChange={(event) => {
+            const nextStyle = event.target.value
+            setStyle(nextStyle)
+            void loadCandidates(category, nextStyle)
+          }} className="mt-3 h-11 w-full rounded-md border border-[#cfd6d0] bg-white px-3 text-sm outline-none focus:border-[#28745c] disabled:bg-[#f1f3f0] disabled:text-[#9aa39e]">
             <option value="">不限风格</option>
             {availableStyles.map((item) => <option key={item} value={item}>{item}</option>)}
           </select>
@@ -121,7 +122,7 @@ export default function RecommendationClient({ initialFunds, initialCategories, 
           <div>
             <h2 className="text-xl font-bold">候选基金 <span className="text-[#28745c]">{recommendations.length}</span> / 10</h2>
             <p className="mt-1 text-xs text-[#79847e]">
-              {category ? `已检查 ${evaluatedCount} 只“${category}”基金的专业评价证据。` : `基金数据库共 ${universeTotal.toLocaleString('zh-CN')} 只，选择类别后开始评价。`}
+              {category ? `完整同类组 ${peerUniverseCount} 只，${evidenceEligibleCount} 只通过关键证据门槛。` : `基金数据库共 ${universeTotal.toLocaleString('zh-CN')} 只，选择类别后开始评价。`}
             </p>
           </div>
           {recommendations.length >= 2 ? (
@@ -149,16 +150,12 @@ export default function RecommendationClient({ initialFunds, initialCategories, 
           </div>
         ) : (
           <div className="grid gap-3 lg:grid-cols-2">
-            {recommendations.map(({ fund, score }, index) => {
+            {recommendations.map((fund, index) => {
               const annualReturn = returnMetric(fund)
               const drawdown = drawdownMetric(fund)
-              const sharpe = sharpeMetric(fund)
+              const score = professionalFundScore(fund)
               const percentile = professionalScorePercentile(fund)
-              const reasons = [
-                annualReturn != null ? `近 1 年收益 ${formatPercent(annualReturn)}` : '',
-                drawdown != null ? `最大回撤 ${formatPercent(drawdown)}` : '',
-                sharpe != null ? `Sharpe ${sharpe.toFixed(2)}` : '',
-              ].filter(Boolean)
+              const evidence = recommendationEvidence(fund)
               return (
                 <article key={fund.windCode} className="grid grid-cols-[2.6rem_minmax(0,1fr)] gap-4 border border-[#dbe1dc] bg-white p-5 transition hover:border-[#90ad9f]">
                   <div className="grid h-10 w-10 place-items-center rounded-md bg-[#edf2ee] text-sm font-black text-[#32614f]">{String(index + 1).padStart(2, '0')}</div>
@@ -170,7 +167,7 @@ export default function RecommendationClient({ initialFunds, initialCategories, 
                       </div>
                       <div className="text-right">
                         <span className="block text-[11px] text-[#7a8580]">同类专业评分</span>
-                        <strong className="mt-1 block text-xl text-[#24664f]">{score.toFixed(1)}</strong>
+                        <strong className="mt-1 block text-xl text-[#24664f]">{score?.toFixed(1) || '—'}</strong>
                         {percentile != null ? <span className="mt-1 block text-[11px] text-[#7a8580]">同类分位 {percentile.toFixed(0)}</span> : null}
                       </div>
                     </div>
@@ -183,10 +180,17 @@ export default function RecommendationClient({ initialFunds, initialCategories, 
                       <div><span className="block text-[#7a8580]">最大回撤</span><strong className="mt-1 block">{formatPercent(drawdown)}</strong></div>
                       <div><span className="block text-[#7a8580]">基金规模</span><strong className="mt-1 block">{formatAsset(fund.totalAsset)}</strong></div>
                     </div>
-                    <div className="mt-3 flex gap-2 text-xs leading-5 text-[#66726c]">
-                      <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-[#2d7b5e]" />
-                      <span>{reasons.length ? reasons.join('；') : '已通过分类与评价证据门槛。'} 数据完整度 {Math.round(evidenceCoverage(fund))}%。</span>
+                    <div className="mt-3 grid gap-2 text-xs leading-5 text-[#66726c]">
+                      <div className="flex gap-2">
+                        <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-[#2d7b5e]" />
+                        <span><strong className="text-[#345e4e]">入选依据：</strong>{evidence.reasons.join('；')}</span>
+                      </div>
+                      <div className="flex gap-2">
+                        <CircleAlert className="mt-0.5 h-4 w-4 shrink-0 text-[#a07837]" />
+                        <span><strong className="text-[#775e32]">主要风险：</strong>{evidence.risks.join(' ')}</span>
+                      </div>
                     </div>
+                    <p className="mt-3 text-[11px] text-[#89928d]">数据截至 {evidence.dataAsOf || fund.navDate || '待补'} · 仅在“{category}”同类组内评价</p>
                     <Link href={`/funds/${encodeURIComponent(fund.windCode)}`} className="mt-4 inline-flex items-center gap-1 text-xs font-bold text-[#28745c]">查看基金与风险 <ArrowRight className="h-3.5 w-3.5" /></Link>
                   </div>
                 </article>

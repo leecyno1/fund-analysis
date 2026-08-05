@@ -616,6 +616,31 @@ async def get_recommendation_universe(
     })
 
 
+@router.get("/recommendation-candidates")
+async def get_recommendation_candidates(
+    peer_group: str = Query(..., min_length=1),
+    style: Optional[str] = Query(None),
+    limit: int = Query(10, ge=1, le=10),
+):
+    """基于完整标准同类组返回证据充分的基金候选组。"""
+    from repositories import get_manager_repo
+    from services.fund_recommendation_service import FundRecommendationService
+
+    try:
+        result = FundRecommendationService().build_candidate_group(
+            peer_group=peer_group,
+            style=style,
+            limit=limit,
+        )
+        _attach_manager_summaries(result.get("candidates") or [], get_manager_repo())
+        return _clean_nan(result)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        logger.error(f"Get recommendation candidates error: {exc}")
+        raise HTTPException(status_code=500, detail="基金候选组暂时不可用")
+
+
 @router.get("/peer-group-universe")
 async def get_peer_group_universe(
     peer_group: str = Query(..., min_length=1),

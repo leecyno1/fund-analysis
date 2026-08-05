@@ -8,6 +8,7 @@ export type SimpleFund = CamelFund & {
   rollingMetrics?: UnknownRecord
   dataQuality?: UnknownRecord | null
   professionalScoring?: UnknownRecord | null
+  recommendationEvidence?: UnknownRecord | null
 }
 
 export function asRecord(value: unknown): UnknownRecord {
@@ -162,4 +163,14 @@ export function professionalScorePercentile(fund: SimpleFund) {
   const metrics = asRecord(peerPercentiles.metrics)
   const professional = asRecord(metrics.professional_score)
   return numberValue(professional.percentile)
+}
+
+export function recommendationEvidence(fund: SimpleFund) {
+  const evidence = asRecord(fund.recommendationEvidence)
+  return {
+    reasons: Array.isArray(evidence.reasons) ? evidence.reasons.map(String).filter(Boolean) : [],
+    risks: Array.isArray(evidence.risks) ? evidence.risks.map(String).filter(Boolean) : [],
+    dataAsOf: textValue(evidence.dataAsOf, evidence.data_as_of),
+    methodologyVersion: textValue(evidence.methodologyVersion, evidence.methodology_version),
+  }
 }
