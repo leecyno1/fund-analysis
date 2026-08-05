@@ -8,6 +8,8 @@ interface ReportMetadata {
   managerId?: string
   source: string
   tags: string[]
+  classifications: string[]
+  styleLabels: string[]
   summary: string
   keyPoints: string[]
   fundIds: string[]
@@ -69,9 +71,13 @@ export async function POST(request: NextRequest) {
     const metadata = await extractReportMetadata(content, fileName)
 
     // 解析标签
+    const managerName = sanitizeText(metadata.managerName, 80)
+    const resolvedManagerId = sanitizeText(managerId, 120) || await resolveManagerId(managerName)
+    const classificationList = (metadata.classifications || []).map((item) => sanitizeText(item, 80)).filter(Boolean)
+    const styleLabels = (metadata.styleLabels || []).map((item) => sanitizeText(item, 80)).filter(Boolean)
     const tagList = (tags
       ? tags.split(',').map(t => t.trim()).filter(Boolean)
-      : metadata.tags
+      : [...metadata.tags, ...classificationList, ...styleLabels]
     ).map((tag) => sanitizeText(tag, 80)).filter(Boolean)
 
     const title = metadata.title || fileName.replace(/\.[^.]+$/, '')
@@ -83,13 +89,16 @@ export async function POST(request: NextRequest) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        manager_id: managerId || metadata.managerId || '',
+        manager_id: resolvedManagerId || metadata.managerId || '',
+        manager_name: managerName,
         title,
         report_date: reportDate,
         source: cleanSource,
         content,
         summary,
         tags: tagList,
+        classifications: classificationList,
+        style_labels: styleLabels,
         key_points: keyPoints,
         fund_ids: metadata.fundIds || [],
       }),
@@ -107,7 +116,10 @@ export async function POST(request: NextRequest) {
       tags: tagList,
       summary,
       keyPoints,
-      managerId: managerId || metadata.managerId || null,
+      managerId: resolvedManagerId || metadata.managerId || null,
+      managerName: managerName || null,
+      classifications: classificationList,
+      styleLabels,
     }
 
     return NextResponse.json({
@@ -116,6 +128,9 @@ export async function POST(request: NextRequest) {
       metadata: {
         title: metadata.title,
         tags: tagList,
+        managerName,
+        classifications: classificationList,
+        styleLabels,
         summary,
         keyPoints,
       }
@@ -126,6 +141,21 @@ export async function POST(request: NextRequest) {
       { error: '上传调研报告失败', details: error instanceof Error ? error.message : '未知错误' },
       { status: 500 }
     )
+  }
+}
+
+async function resolveManagerId(managerName: string) {
+  if (!managerName) return ''
+  try {
+    const params = new URLSearchParams({ keyword: managerName, page: '1', page_size: '10' })
+    const response = await fetch(`${backendApiBaseUrl}/api/managers/?${params.toString()}`, { cache: 'no-store' })
+    const payload = await response.json().catch(() => ({}))
+    if (!response.ok) return ''
+    const candidates = Array.isArray(payload.managers) ? payload.managers : []
+    const exact = candidates.find((item: Record<string, unknown>) => sanitizeText(item.name, 80) === managerName)
+    return sanitizeText(exact?.manager_id || exact?.wind_code, 120)
+  } catch {
+    return ''
   }
 }
 
@@ -175,6 +205,8 @@ async function extractReportMetadata(
       reportDate: new Date().toISOString().split('T')[0],
       source: '用户上传',
       tags: [],
+      classifications: [],
+      styleLabels: [],
       summary: content.substring(0, 500),
       keyPoints: [],
       fundIds: []
@@ -206,6 +238,8 @@ ${contentExcerpt}
   "managerName": "基金经理姓名（如果有）",
   "source": "报告来源",
   "tags": ["标签1", "标签2"],
+  "classifications": ["基金类别或策略类别"],
+  "styleLabels": ["成长", "大盘", "低换手"],
   "summary": "一段话摘要（200字以内）",
   "keyPoints": ["要点1", "要点2", "要点3"]
 }`
@@ -227,6 +261,8 @@ ${contentExcerpt}
         managerName: parsed.managerName,
         source: parsed.source || '用户上传',
         tags: parsed.tags || [],
+        classifications: parsed.classifications || [],
+        styleLabels: parsed.styleLabels || [],
         summary: parsed.summary || content.substring(0, 500),
         keyPoints: parsed.keyPoints || [],
         fundIds: []
@@ -242,6 +278,8 @@ ${contentExcerpt}
     reportDate: new Date().toISOString().split('T')[0],
     source: '用户上传',
     tags: [],
+    classifications: [],
+    styleLabels: [],
     summary: content.substring(0, 500),
     keyPoints: [],
     fundIds: []

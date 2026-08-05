@@ -129,6 +129,34 @@ class ClaudeReportGenerator:
         )
         return self._call_llm(prompt, "fund_analysis")
 
+    def generate_fund_evaluation_analysis(
+        self,
+        fund_data: Dict[str, Any],
+        evaluation_data: Dict[str, Any],
+        factor_evidence: Dict[str, Any],
+        attribution_evidence: Dict[str, Any],
+        research_reports: List[Dict],
+        user_question: str = "",
+    ) -> str:
+        """生成面向基金评价的现场分析，不延伸到交易或个人适当性判断。"""
+        prompt = "\n".join([
+            "请生成一份面向普通用户的基金评价分析。",
+            "严格要求：",
+            "1. 只使用下方已提供的证据，缺失数据必须明示说明。",
+            "2. 以分类内专业评价为主线，不跨类比较。",
+            "3. 因子风险和主动收益归因只用于解释，不参与基金评分。",
+            "4. 调研纪要中的观点要标明纪要标题和日期，不得伪造引用。",
+            "5. 不输出买入、卖出、仓位、金额或个人适当性建议。",
+            "报告结构：一句话结论、基金定位、同类表现、风险与归因、经理与纪要证据、适合继续关注的情形、需要警惕的信号、数据缺口。",
+            f"\n## 用户关注的问题\n{user_question or '请做一次完整的基金评价'}",
+            "\n## 基金基础数据\n```json\n" + self._to_json(fund_data) + "\n```",
+            "\n## 分类内专业评价\n```json\n" + self._to_json(evaluation_data) + "\n```",
+            "\n## 因子与风险解释证据\n```json\n" + self._to_json(factor_evidence) + "\n```",
+            "\n## 主动收益归因证据\n```json\n" + self._to_json(attribution_evidence) + "\n```",
+            "\n## 关联调研纪要\n```json\n" + self._to_json(research_reports) + "\n```",
+        ])
+        return self._call_llm(prompt, "fund_analysis")
+
     def generate_manager_analysis(
         self,
         manager_data: Dict[str, Any],

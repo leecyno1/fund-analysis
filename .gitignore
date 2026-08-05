@@ -56,3 +56,5 @@ __pycache__/
 
 # generated browser test reports
 frontend/test_report_*.json
+/.playwright-cli/
+/output/playwright/

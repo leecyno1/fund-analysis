@@ -3,6 +3,7 @@ import { backendApiBaseUrl } from '@/lib/backend-api'
 import { buildReportRiskLevelGatePolicy } from '@/lib/report-risk-level-gate-policy'
 
 const reportTypeLabel = (reportType: string | null | undefined) => {
+  if (reportType === 'fund_evaluation_analysis') return '基金评价分析'
   if (reportType === 'fund_pool_shortlist_report') return '研究短名单报告'
   if (reportType === 'fund_pre_purchase_check') return '研究复核报告'
   if (reportType === 'fund_research_report') return '基金研究报告'

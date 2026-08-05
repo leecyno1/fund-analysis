@@ -117,3 +117,65 @@ class ResearchProfileRepo:
         with self.engine.connect() as conn:
             rows = conn.execute(text(sql), {"wind_codes": wind_codes}).fetchall()
         return {row.wind_code: _row_to_dict(row) for row in rows}
+
+    def list_funds_by_peer_group(self, peer_group: str, limit: int = 50) -> List[Dict[str, Any]]:
+        """从全库返回已归入指定同类组的基金，并兼容尚未建立画像的基础类别。"""
+        from sqlalchemy import text
+
+        normalized_group = str(peer_group or "").strip()
+        if not normalized_group:
+            return []
+        sql = """
+            SELECT f.*
+            FROM funds f
+            LEFT JOIN fund_research_profiles profile ON profile.wind_code = f.wind_code
+            WHERE profile.peer_group = :peer_group
+               OR (
+                    COALESCE(profile.peer_group, '') = ''
+                    AND f.type = :peer_group
+               )
+            ORDER BY
+                CASE WHEN f.performance_data IS NULL OR f.performance_data = '{}'::jsonb THEN 1 ELSE 0 END,
+                CASE WHEN f.risk_metrics IS NULL OR f.risk_metrics = '{}'::jsonb THEN 1 ELSE 0 END,
+                f.nav_date DESC NULLS LAST,
+                f.updated_at DESC NULLS LAST,
+                f.wind_code ASC
+            LIMIT :limit
+        """
+        with self.engine.connect() as conn:
+            rows = conn.execute(
+                text(sql),
+                {
+                    "peer_group": normalized_group,
+                    "limit": max(1, min(int(limit), 100)),
+                },
+            ).fetchall()
+        return [_row_to_dict(row) for row in rows]
+
+    def list_peer_groups(self, limit: int = 100) -> List[Dict[str, Any]]:
+        """汇总全库已确认的研究同类组，以及尚未建画像的基础类别。"""
+        from sqlalchemy import text
+
+        sql = """
+            WITH category_rows AS (
+                SELECT profile.peer_group AS name, COUNT(*)::int AS fund_count, 'research_profile' AS source
+                FROM fund_research_profiles profile
+                WHERE COALESCE(profile.peer_group, '') <> ''
+                GROUP BY profile.peer_group
+                UNION ALL
+                SELECT f.type AS name, COUNT(*)::int AS fund_count, 'fund_type' AS source
+                FROM funds f
+                LEFT JOIN fund_research_profiles profile ON profile.wind_code = f.wind_code
+                WHERE COALESCE(profile.peer_group, '') = ''
+                  AND COALESCE(f.type, '') <> ''
+                GROUP BY f.type
+            )
+            SELECT name, SUM(fund_count)::int AS fund_count, MIN(source) AS source
+            FROM category_rows
+            GROUP BY name
+            ORDER BY fund_count DESC, name ASC
+            LIMIT :limit
+        """
+        with self.engine.connect() as conn:
+            rows = conn.execute(text(sql), {"limit": max(1, min(int(limit), 200))}).fetchall()
+        return [_row_to_dict(row) for row in rows]

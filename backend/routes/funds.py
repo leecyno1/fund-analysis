@@ -549,6 +549,54 @@ async def get_fund_peer_percentiles(wind_code: str, window: str = Query("1y")):
         raise HTTPException(status_code=500, detail=str(exc))
 
 
+@router.get("/recommendation-categories")
+async def get_recommendation_categories(limit: int = Query(100, ge=1, le=200)):
+    """返回标准化专业同类组，不使用宽泛基金法律类型作为排名池。"""
+    from repositories import get_fund_classification_repo
+
+    categories = get_fund_classification_repo().list_peer_group_inventory(limit=limit)
+    return {"categories": categories, "total": len(categories), "source": "standardized_peer_group_inventory"}
+
+
+@router.get("/recommendation-universe")
+async def get_recommendation_universe(
+    peer_group: str = Query(..., min_length=1),
+    limit: int = Query(30, ge=1, le=50),
+):
+    """按同类组返回用于现场评价的候选集，不在此接口跨类排序。"""
+    from repositories import get_fund_classification_repo, get_manager_repo, get_metric_snapshot_repo, get_research_profile_repo
+
+    profile_repo = get_research_profile_repo()
+    classification_repo = get_fund_classification_repo()
+    manager_repo = get_manager_repo()
+    metric_repo = get_metric_snapshot_repo()
+    rows = classification_repo.list_recommendation_funds(peer_group, limit=limit)
+    funds = [_api_fund_from_row(row) for row in rows]
+    _attach_manager_summaries(funds, manager_repo)
+    profile_map = profile_repo.list_profiles([fund.get("wind_code") for fund in funds if fund.get("wind_code")])
+    for fund in funds:
+        code = fund.get("wind_code")
+        profile = profile_map.get(code) or {}
+        matching_row = next((row for row in rows if row.get("wind_code") == code), {})
+        fund["research_profile"] = {
+            **profile,
+            "peer_group": matching_row.get("standardized_peer_group_name") or peer_group,
+            "peer_group_id": matching_row.get("standardized_peer_group_id"),
+            "peer_group_key": matching_row.get("standardized_peer_group_key"),
+        }
+        try:
+            fund["rolling_metrics"] = _rolling_metric_panel(metric_repo.get_latest_panel("fund", code))
+        except Exception:
+            fund["rolling_metrics"] = {}
+    return _clean_nan({
+        "peer_group": peer_group,
+        "total": len(funds),
+        "limit": limit,
+        "funds": funds,
+        "source": "database_peer_group_universe",
+    })
+
+
 @router.get("/{wind_code}/evaluation")
 async def get_fund_evaluation(wind_code: str, window: str = Query("1y")):
     """获取分类、同类组、基准、专业评分和同类分位组成的基金评价快照。"""

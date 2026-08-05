@@ -253,6 +253,76 @@ class FundClassificationRepo:
             ).fetchall()
         return [_row_to_dict(row) for row in rows]
 
+    def list_peer_group_inventory(self, limit: int = 100) -> List[Dict[str, Any]]:
+        """返回标准化同类组清单，供分类内评价和推荐入口使用。"""
+        if not self._schema_ready():
+            return []
+
+        from sqlalchemy import text
+
+        sql = """
+            SELECT
+                pg.id,
+                pg.key,
+                pg.name,
+                pg.minimum_peer_count,
+                COUNT(DISTINCT pgm.entity_id) FILTER (WHERE pgm.role <> 'excluded')::int AS fund_count
+            FROM peer_groups pg
+            LEFT JOIN peer_group_members pgm ON pgm.peer_group_id = pg.id
+            GROUP BY pg.id, pg.key, pg.name, pg.minimum_peer_count
+            HAVING COUNT(DISTINCT pgm.entity_id) FILTER (WHERE pgm.role <> 'excluded') >= pg.minimum_peer_count
+            ORDER BY fund_count DESC, pg.name ASC
+            LIMIT :limit
+        """
+        with self.engine.connect() as conn:
+            rows = conn.execute(text(sql), {"limit": max(1, min(int(limit), 200))}).fetchall()
+        return [_row_to_dict(row) for row in rows]
+
+    def list_recommendation_funds(self, peer_group: str, limit: int = 50) -> List[Dict[str, Any]]:
+        """按标准化同类组返回每个基金实体的代表份额及完整基础数据。"""
+        normalized_group = str(peer_group or "").strip()
+        if not normalized_group or not self._schema_ready():
+            return []
+
+        from sqlalchemy import text
+
+        sql = """
+            SELECT *
+            FROM (
+                SELECT DISTINCT ON (fe.id)
+                    f.*,
+                    pg.id AS standardized_peer_group_id,
+                    pg.key AS standardized_peer_group_key,
+                    pg.name AS standardized_peer_group_name
+                FROM peer_groups pg
+                JOIN peer_group_members pgm ON pgm.peer_group_id = pg.id
+                JOIN fund_entities fe ON fe.id = pgm.entity_id
+                JOIN fund_share_classes fsc ON fsc.entity_id = fe.id AND fsc.status = 'active'
+                JOIN funds f ON f.wind_code = fsc.wind_code
+                WHERE (pg.name = :peer_group OR pg.key = :peer_group)
+                  AND pgm.role <> 'excluded'
+                ORDER BY
+                    fe.id,
+                    CASE WHEN f.performance_data IS NULL OR f.performance_data = '{}'::jsonb THEN 1 ELSE 0 END,
+                    CASE WHEN f.risk_metrics IS NULL OR f.risk_metrics = '{}'::jsonb THEN 1 ELSE 0 END,
+                    fsc.is_primary DESC,
+                    f.nav_date DESC NULLS LAST,
+                    fsc.wind_code ASC
+            ) peer_funds
+            ORDER BY
+                CASE WHEN performance_data IS NULL OR performance_data = '{}'::jsonb THEN 1 ELSE 0 END,
+                CASE WHEN risk_metrics IS NULL OR risk_metrics = '{}'::jsonb THEN 1 ELSE 0 END,
+                nav_date DESC NULLS LAST,
+                wind_code ASC
+            LIMIT :limit
+        """
+        with self.engine.connect() as conn:
+            rows = conn.execute(
+                text(sql),
+                {"peer_group": normalized_group, "limit": max(1, min(int(limit), 100))},
+            ).fetchall()
+        return [_row_to_dict(row) for row in rows]
+
     def apply_ingestion_plan(
         self,
         groups: List[Dict[str, Any]],

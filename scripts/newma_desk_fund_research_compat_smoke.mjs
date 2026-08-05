@@ -29,12 +29,12 @@ function loadTypeScriptModule(path) {
     },
     fileName: path,
   }).outputText
-  const module = { exports: {} }
+  const loadedModule = { exports: {} }
   const execute = new Function('module', 'exports', 'require', compiled)
-  execute(module, module.exports, () => {
+  execute(loadedModule, loadedModule.exports, () => {
     throw new Error(`Unexpected dependency while loading ${path}`)
   })
-  return module.exports
+  return loadedModule.exports
 }
 
 const suite = json('desk/suite.json')

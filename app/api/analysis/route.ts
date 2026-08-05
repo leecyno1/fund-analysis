@@ -3,6 +3,7 @@ import { backendApiBaseUrl } from '@/lib/backend-api'
 import { buildReportRiskLevelGatePolicy } from '@/lib/report-risk-level-gate-policy'
 
 const reportTypeLabel = (reportType: string | null | undefined) => {
+  if (reportType === 'fund_evaluation_analysis') return '基金评价分析'
   if (reportType === 'fund_pool_shortlist_report') return '研究短名单报告'
   if (reportType === 'fund_pre_purchase_check') return '研究复核报告'
   if (reportType === 'fund_research_report') return '基金研究报告'
@@ -73,6 +74,7 @@ export async function GET(request: Request) {
     backendUrl.searchParams.set('page', String(page))
     backendUrl.searchParams.set('limit', String(limit))
     if (targetType) backendUrl.searchParams.set('target_type', targetType)
+    if (reportType && reportType !== 'all') backendUrl.searchParams.set('report_type', reportType)
 
     const response = await fetch(backendUrl, { cache: 'no-store' })
     const payload = await response.json()

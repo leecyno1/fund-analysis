@@ -18,8 +18,11 @@ function assertNotIncludes(content, forbidden, label) {
 }
 
 const architecture = read('docs/architecture/professional-fund-research-architecture.md')
+const simpleProductScope = read('docs/adr/0002-simple-fund-selection-product-scope.md')
 const modules = read('lib/research-platform/core-modules.ts')
 const dashboardLayout = read('app/(dashboard)/layout.tsx')
+const appNavigation = read('components/navigation/AppNavigation.tsx')
+const comparisonPage = read('app/(dashboard)/compare/SimpleComparisonClient.tsx')
 const investorSelectionPage = read('app/(dashboard)/investor-selection/page.tsx')
 const salesRulesPage = read('app/(dashboard)/sales-rules/page.tsx')
 const alertsPage = read('app/(dashboard)/alerts/page.tsx')
@@ -65,13 +68,20 @@ for (const mergedRoute of [
   assertIncludes(modules, mergedRoute, `core module registry declares merged route ${mergedRoute}`)
 }
 
-for (const obsoleteNav of ['投资者选基', '销售规则', '基金池', '基金复查队列', '基金排行榜']) {
-  assertNotIncludes(dashboardLayout, obsoleteNav, 'dashboard navigation removes redundant module label')
+for (const obsoleteNav of ['投资者选基', '销售规则', '基金池', '基金复查队列', '基金排行榜', '尽调工作台', '监控复核']) {
+  assertNotIncludes(appNavigation, obsoleteNav, 'primary navigation removes professional workflow label')
 }
 
-for (const activeNav of ['全市场研究库', '同类横评', '研究报告', '数据证据', '基金经理']) {
-  assertIncludes(dashboardLayout, activeNav, `dashboard navigation keeps canonical label ${activeNav}`)
+for (const activeNav of ['找基金', '调研库', 'AI 分析', '标签推荐']) {
+  assertIncludes(appNavigation, activeNav, `primary navigation keeps simple product label ${activeNav}`)
 }
+for (const route of ['/discover', '/research', '/analysis', '/recommendations']) {
+  assertIncludes(appNavigation, route, `primary navigation exposes ${route}`)
+}
+assertIncludes(dashboardLayout, 'AppNavigation', 'dashboard uses the simple shared navigation')
+assertIncludes(simpleProductScope, '必须先确认基金类别，再进行同类比较', 'simple product scope preserves peer comparison boundary')
+assertIncludes(comparisonPage, 'peerGroupIds.length === 1', 'simple comparison enforces one professional peer group')
+assertNotIncludes(comparisonPage, 'purchasePlan', 'simple comparison excludes purchase workflow state')
 
 assertIncludes(legacyRedirect, 'redirect(mergedResearchRouteTarget(pathname))', 'legacy redirect helper centralizes page redirect')
 assertIncludes(routes, 'mergedResearchRouteTarget', 'routes expose canonical merged page target')

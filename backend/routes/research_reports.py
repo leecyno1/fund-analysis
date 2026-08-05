@@ -14,12 +14,15 @@ router = APIRouter(prefix="/api/research-reports", tags=["调研报告库"])
 
 class ResearchReportCreate(BaseModel):
     manager_id: str = ""
+    manager_name: str = ""
     title: str
     report_date: str
     source: str
     content: str
     summary: Optional[str] = None
     tags: List[str] = Field(default_factory=list)
+    classifications: List[str] = Field(default_factory=list)
+    style_labels: List[str] = Field(default_factory=list)
     fund_ids: List[str] = Field(default_factory=list)
     key_points: List[str] = Field(default_factory=list)
 
@@ -76,11 +79,15 @@ async def list_reports(
             reports.append({
                 "id": str(doc.get("_id", "")),
                 "manager_id": doc.get("manager_id"),
+                "manager_name": doc.get("manager_name"),
                 "title": doc.get("title"),
                 "report_date": doc.get("report_date"),
                 "source": doc.get("source"),
                 "summary": doc.get("summary", "")[:300],
                 "tags": doc.get("tags", []),
+                "classifications": doc.get("classifications", []),
+                "style_labels": doc.get("style_labels", []),
+                "fund_ids": doc.get("fund_ids", []),
                 "key_points": doc.get("key_points", [])[:3],
             })
 
@@ -103,6 +110,7 @@ async def create_report(payload: ResearchReportCreate = Body(...)):
     try:
         # 提取摘要（如果没有提供）
         manager_id = payload.manager_id or ""
+        manager_name = payload.manager_name or ""
         title = payload.title
         report_date = payload.report_date
         source = payload.source
@@ -119,12 +127,15 @@ async def create_report(payload: ResearchReportCreate = Body(...)):
 
         report_doc = {
             "manager_id": manager_id,
+            "manager_name": manager_name,
             "title": title,
             "report_date": report_date,
             "source": source,
             "content": content,
             "summary": summary,
             "tags": payload.tags,
+            "classifications": payload.classifications,
+            "style_labels": payload.style_labels,
             "fund_ids": payload.fund_ids,
             "key_points": payload.key_points,
             "embedding": embedding,
@@ -141,11 +152,14 @@ async def create_report(payload: ResearchReportCreate = Body(...)):
             "report": {
                 "id": str(result.inserted_id),
                 "manager_id": manager_id,
+                "manager_name": manager_name,
                 "title": title,
                 "report_date": report_date,
                 "source": source,
                 "summary": summary,
                 "tags": payload.tags,
+                "classifications": payload.classifications,
+                "style_labels": payload.style_labels,
                 "fund_ids": payload.fund_ids,
                 "key_points": payload.key_points,
                 "embedding_status": report_doc["embedding_status"],
@@ -176,12 +190,15 @@ async def get_report(report_id: str):
         return {
             "id": str(doc["_id"]),
             "manager_id": doc.get("manager_id"),
+            "manager_name": doc.get("manager_name"),
             "title": doc.get("title"),
             "report_date": doc.get("report_date"),
             "source": doc.get("source"),
             "content": doc.get("content"),
             "summary": doc.get("summary"),
             "tags": doc.get("tags", []),
+            "classifications": doc.get("classifications", []),
+            "style_labels": doc.get("style_labels", []),
             "fund_ids": doc.get("fund_ids", []),
             "key_points": doc.get("key_points", []),
             "created_at": doc.get("created_at"),

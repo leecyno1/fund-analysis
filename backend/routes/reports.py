@@ -1,7 +1,8 @@
 """
 基金研究报告路由 - 报告生成、查询
 """
-from fastapi import APIRouter, HTTPException, Query, BackgroundTasks
+from fastapi import APIRouter, HTTPException, Query, BackgroundTasks, Body
+from pydantic import BaseModel
 from typing import List, Optional
 from datetime import date, datetime
 from decimal import Decimal
@@ -10,6 +11,11 @@ import logging
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/reports", tags=["基金研究报告"])
+
+
+class FundEvaluationAnalysisRequest(BaseModel):
+    question: str = ""
+    include_research: bool = True
 
 
 def _json_safe(value):
@@ -68,6 +74,96 @@ def _is_unusable_llm_report(content: str) -> bool:
         or "当前使用模拟数据" in content
         or "配置模型 API Key 后" in content
     )
+
+
+def _evaluation_analysis_fallback(
+    fund_data: dict,
+    evaluation: dict,
+    factor_evidence: dict,
+    attribution_evidence: dict,
+    research_reports: list,
+    question: str,
+) -> str:
+    target = evaluation.get("target") or {}
+    classification = evaluation.get("classification") or {}
+    peer_context = evaluation.get("peer_context") or {}
+    result = evaluation.get("evaluation") or {}
+    score = result.get("overall_score")
+    missing = list(dict.fromkeys(str(item) for item in evaluation.get("missing_items", []) if item))
+    lines = [
+        f"# {fund_data.get('name') or target.get('name') or fund_data.get('wind_code')} 基金评价",
+        "",
+        "## 一句话结论",
+    ]
+    if evaluation.get("status") == "insufficient_evidence":
+        lines.append("当前分类或同类评价证据不足，暂不输出基金优劣结论。")
+    else:
+        lines.append(
+            f"该基金已按“{peer_context.get('peer_group') or classification.get('peer_group') or '已确认同类组'}”口径评价"
+            + (f"，专业综合评分为 {float(score):.1f}" if score is not None else "")
+            + "；这是分类内研究结果，不是买卖建议。"
+        )
+
+    lines.extend([
+        "",
+        "## 基金定位",
+        f"- 基金类别：{classification.get('fund_type') or fund_data.get('type') or '待补'}",
+        f"- 同类组：{peer_context.get('peer_group') or classification.get('peer_group') or '待补'}",
+        f"- 主要基准：{peer_context.get('primary_benchmark') or classification.get('primary_benchmark') or '待补'}",
+        f"- 同类有效样本：{peer_context.get('valid_metric_peer_count') or 0} 只",
+        "",
+        "## 同类表现",
+    ])
+    percentiles = result.get("peer_percentiles") or {}
+    if percentiles:
+        for item in list(percentiles.values())[:8]:
+            if not isinstance(item, dict):
+                continue
+            label = item.get("label") or item.get("metric_name")
+            percentile = item.get("percentile")
+            raw_value = item.get("value")
+            lines.append(f"- {label}：数值 {raw_value if raw_value is not None else '待补'}，同类分位 {percentile if percentile is not None else '待补'}")
+    else:
+        lines.append("- 当前没有可用的同类分位数据。")
+
+    lines.extend(["", "## 风险与归因"])
+    if factor_evidence.get("status") == "ok":
+        for item in (factor_evidence.get("risk_contributions") or [])[:4]:
+            lines.append(f"- {item.get('label') or item.get('factor')}风险贡献：{float(item.get('risk_contribution') or 0) * 100:.1f}%")
+    else:
+        lines.append("- 因子风险解释证据不足，不对风格暴露作强结论。")
+    if attribution_evidence.get("status") == "ok":
+        returns = attribution_evidence.get("returns") or {}
+        lines.append(f"- 归因区间主动收益：{float(returns.get('active') or 0) * 100:.2f}%")
+        for item in attribution_evidence.get("effects") or []:
+            lines.append(f"- {item.get('label')}：{float(item.get('value') or 0) * 100:.2f}%")
+    else:
+        lines.append("- 基金与基准重叠收益序列不足，不输出主动收益分解。")
+
+    lines.extend(["", "## 经理与纪要证据"])
+    if research_reports:
+        for memo in research_reports[:5]:
+            lines.append(f"- 《{memo.get('title') or '无标题纪要'}》（{memo.get('report_date') or '日期待补'}）：{memo.get('summary') or '暂无摘要'}")
+    else:
+        lines.append("- 没有找到已关联到该基金的调研纪要。")
+
+    lines.extend([
+        "",
+        "## 需要继续核查的信号",
+        "- 同类分位是否在多个滚动窗口持续，而非仅近期领先。",
+        "- 风格标签与净值因子、持仓和经理表述是否一致。",
+        "- 超额收益来源是否稳定，以及未解释残差是否过高。",
+        "",
+        "## 数据缺口",
+    ])
+    combined_missing = missing + list(factor_evidence.get("missing_items") or []) + list(attribution_evidence.get("missing_items") or [])
+    if combined_missing:
+        lines.extend(f"- {item}" for item in list(dict.fromkeys(combined_missing))[:12])
+    else:
+        lines.append("- 当前核心评价数据已可用，仍需持续更新净值、基准和调研纪要。")
+    if question:
+        lines.extend(["", "## 本次关注问题", question])
+    return "\n".join(lines)
 
 
 def _reject_mock_data_source(data_svc, report_scope: str) -> None:
@@ -325,6 +421,142 @@ def _load_local_sales_rules(wind_code: str) -> dict:
         "merged": merged,
         "note": "使用本地 PostgreSQL 销售规则快照；买前仍需以销售平台实时页面为准。",
     }
+
+
+@router.post("/fund/{wind_code}/evaluation-analysis")
+async def generate_fund_evaluation_analysis(
+    wind_code: str,
+    payload: FundEvaluationAnalysisRequest = Body(default=FundEvaluationAnalysisRequest()),
+):
+    """按需生成基金评价分析：分类内评价为主，归因与纪要为证据。"""
+    from service_registry import get_data_service, get_db
+    from services.ai_report import get_report_generator
+    from services.fund_evaluation_service import FundEvaluationService
+    from services.investment_analysis_service import InvestmentAnalysisService
+
+    data_svc = get_data_service()
+    _reject_mock_data_source(data_svc, "基金评价")
+    db = get_db()
+
+    try:
+        fund_data = data_svc.get_fund_info(wind_code)
+        evaluation = FundEvaluationService().evaluate_fund(wind_code, window="1y")
+        investment_analysis = InvestmentAnalysisService()
+
+        try:
+            factor_evidence = investment_analysis.factor_lens(wind_code)
+        except Exception as factor_error:
+            factor_evidence = {
+                "status": "insufficient_evidence",
+                "source": "evidence_gate",
+                "missing_items": [f"因子风险证据不可用：{factor_error.__class__.__name__}"],
+                "risk_contributions": [],
+            }
+
+        try:
+            attribution_evidence = investment_analysis.advanced_attribution(wind_code)
+        except Exception as attribution_error:
+            attribution_evidence = {
+                "status": "insufficient_evidence",
+                "source": "evidence_gate",
+                "missing_items": [f"主动收益归因不可用：{attribution_error.__class__.__name__}"],
+                "effects": [],
+            }
+
+        research_reports = []
+        if payload.include_research and db is not None:
+            try:
+                query = {"fund_ids": wind_code}
+                for doc in db.research_reports.find(query).sort("report_date", -1).limit(5):
+                    research_reports.append({
+                        "id": str(doc.get("_id", "")),
+                        "title": doc.get("title"),
+                        "report_date": doc.get("report_date"),
+                        "manager_name": doc.get("manager_name"),
+                        "summary": doc.get("summary", ""),
+                        "key_points": doc.get("key_points", []),
+                        "classifications": doc.get("classifications", []),
+                        "style_labels": doc.get("style_labels", []),
+                    })
+            except Exception as memo_error:
+                logger.warning(f"Research memos unavailable for evaluation analysis {wind_code}: {memo_error}")
+
+        generator = get_report_generator()
+        generation_mode = "llm_evaluation_evidence"
+        report_content = ""
+        if generator.api_key:
+            report_content = generator.generate_fund_evaluation_analysis(
+                fund_data=fund_data,
+                evaluation_data=evaluation,
+                factor_evidence=factor_evidence,
+                attribution_evidence=attribution_evidence,
+                research_reports=research_reports,
+                user_question=payload.question,
+            )
+        if not report_content or _is_unusable_llm_report(report_content):
+            report_content = _evaluation_analysis_fallback(
+                fund_data=fund_data,
+                evaluation=evaluation,
+                factor_evidence=factor_evidence,
+                attribution_evidence=attribution_evidence,
+                research_reports=research_reports,
+                question=payload.question,
+            )
+            generation_mode = "deterministic_evaluation_evidence"
+
+        report_record = {
+            "target_type": "fund",
+            "target_id": wind_code,
+            "report_type": "fund_evaluation_analysis",
+            "content": report_content,
+            "data_sources": {
+                "source": "fund_evaluation+factor_lens+active_attribution+research_memos",
+                "fund": fund_data,
+                "evaluation": evaluation,
+                "factor_evidence": factor_evidence,
+                "attribution_evidence": attribution_evidence,
+                "generation_mode": generation_mode,
+                "research_reports_count": len(research_reports),
+            },
+            "research_reports_used": [item["id"] for item in research_reports],
+            "generation_params": {
+                "mode": generation_mode,
+                "include_research": payload.include_research,
+                "question": payload.question,
+                "provider": generator.provider,
+                "model": generator.model,
+            },
+            "created_at": datetime.utcnow(),
+        }
+        report_id = _save_report_to_postgres(report_record)
+        try:
+            if db is not None:
+                db.ai_analysis_reports.insert_one(report_record)
+        except Exception as mongo_error:
+            logger.debug(f"Mongo evaluation analysis save skipped: {mongo_error}")
+
+        return {
+            "id": report_id,
+            "report": report_content,
+            "metadata": {
+                "target_type": "fund",
+                "target_id": wind_code,
+                "report_type": "fund_evaluation_analysis",
+                "report_id": report_id,
+                "mode": generation_mode,
+                "provider": generator.provider,
+                "model": generator.model,
+                "research_reports_count": len(research_reports),
+                "evaluation_status": evaluation.get("status"),
+                "factor_status": factor_evidence.get("status"),
+                "attribution_status": attribution_evidence.get("status"),
+            },
+        }
+    except HTTPException:
+        raise
+    except Exception as error:
+        logger.error(f"Generate fund evaluation analysis error for {wind_code}: {error}")
+        raise HTTPException(status_code=500, detail=str(error))
 
 
 @router.post("/fund/{wind_code}")
@@ -730,6 +962,7 @@ async def list_analysis_reports(
     page: int = Query(1, ge=1),
     limit: int = Query(20, ge=1, le=100),
     target_type: Optional[str] = Query(None, description="fund/manager"),
+    report_type: Optional[str] = Query(None),
 ):
     """获取 PostgreSQL 中已生成的研究报告列表"""
     from sqlalchemy import text
@@ -743,6 +976,9 @@ async def list_analysis_reports(
     if target_type:
         conditions.append("target_type = :target_type")
         params["target_type"] = target_type
+    if report_type:
+        conditions.append("report_type = :report_type")
+        params["report_type"] = report_type
 
     where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
     try:

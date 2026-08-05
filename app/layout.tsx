@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "基金研究系统",
-  description: "机构基金研究、同类横评、经理评价、持仓画像与证据台账工作台",
+  title: "选基助手",
+  description: "浏览、比较和分析基金，按类别与风格找到有依据的候选基金",
 };
 
 export default function RootLayout({
