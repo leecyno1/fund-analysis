@@ -10,8 +10,10 @@ from urllib.error import HTTPError, URLError
 BASE_URL = os.environ.get("RESEARCH_REPORTS_BASE_URL", "http://127.0.0.1:8005/api/research-reports")
 
 
-def request_json(url: str, method: str = "GET"):
-    req = urllib.request.Request(url, method=method)
+def request_json(url: str, method: str = "GET", payload=None):
+    body = json.dumps(payload).encode("utf-8") if payload is not None else None
+    headers = {"Content-Type": "application/json"} if payload is not None else {}
+    req = urllib.request.Request(url, data=body, headers=headers, method=method)
     with urllib.request.urlopen(req) as response:
         return response.status, json.loads(response.read().decode("utf-8"))
 
@@ -31,10 +33,7 @@ def main() -> int:
     }
 
     try:
-        create_status, created = request_json(
-            f"{BASE_URL}/?{urllib.parse.urlencode(create_params)}",
-            method="POST",
-        )
+        create_status, created = request_json(f"{BASE_URL}/", method="POST", payload=create_params)
         report_id = created.get("id")
         if create_status != 200 or not report_id:
             print(f"Expected report create to succeed, got: status={create_status}, body={created}")
