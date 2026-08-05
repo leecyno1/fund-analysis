@@ -9,7 +9,7 @@ export async function GET(request: Request) {
     page: url.searchParams.get('page') || '1',
     page_size: url.searchParams.get('limit') || '50',
   })
-  for (const key of ['keyword', 'manager_id', 'tags']) {
+  for (const key of ['keyword', 'manager_id', 'fund_id', 'tags']) {
     const value = url.searchParams.get(key)
     if (value) backendParams.set(key, value)
   }

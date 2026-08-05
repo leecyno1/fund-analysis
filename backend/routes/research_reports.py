@@ -30,6 +30,7 @@ class ResearchReportCreate(BaseModel):
 @router.get("/")
 async def list_reports(
     manager_id: Optional[str] = Query(None),
+    fund_id: Optional[str] = Query(None),
     keyword: Optional[str] = Query(None),
     tags: Optional[str] = Query(None, description="标签, 逗号分隔"),
     source: Optional[str] = Query(None),
@@ -51,6 +52,8 @@ async def list_reports(
         query = {}
         if manager_id:
             query["manager_id"] = manager_id
+        if fund_id:
+            query["fund_ids"] = fund_id
         if keyword:
             query["$or"] = [
                 {"title": {"$regex": keyword, "$options": "i"}},

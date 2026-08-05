@@ -69,11 +69,11 @@ function ReportBody({ content }: { content: string }) {
   )
 }
 
-export default function FundAnalysisWorkspace() {
-  const [query, setQuery] = useState('')
+export default function FundAnalysisWorkspace({ initialFund = null }: { initialFund?: FundOption | null }) {
+  const [query, setQuery] = useState(initialFund ? `${initialFund.name} ${initialFund.windCode}` : '')
   const [funds, setFunds] = useState<FundOption[]>([])
   const [fundLoading, setFundLoading] = useState(false)
-  const [selectedFund, setSelectedFund] = useState<FundOption | null>(null)
+  const [selectedFund, setSelectedFund] = useState<FundOption | null>(initialFund)
   const [question, setQuestion] = useState('')
   const [running, setRunning] = useState(false)
   const [progressStep, setProgressStep] = useState(0)
