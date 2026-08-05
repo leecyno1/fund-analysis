@@ -133,7 +133,26 @@ def _proposal(report, kind, value):
 
 def main() -> int:
     repo = MemoryResearchFolderRepo()
-    service = LocalResearchFolderService(repo=repo, max_files=20, max_file_bytes=2_000_000)
+    def model_extractor(content, filename):
+        if "张三" not in content:
+            return {"status": "complete", "provider": "fake", "model": "fake-model", "proposals": []}
+        return {
+            "status": "complete",
+            "provider": "fake",
+            "model": "fake-model",
+            "proposals": [
+                {"kind": "manager", "value": "张三", "confidence": 0.96, "excerpt": "基金经理：张三"},
+                {"kind": "fund", "value": "000001.OF", "confidence": 0.85, "excerpt": "基金经理：张三"},
+                {"kind": "style_label", "value": "成长", "confidence": 0.91, "excerpt": "风格：成长、大盘、低换手"},
+            ],
+        }
+
+    service = LocalResearchFolderService(
+        repo=repo,
+        metadata_extractor=model_extractor,
+        max_files=20,
+        max_file_bytes=2_000_000,
+    )
 
     with tempfile.TemporaryDirectory() as temporary_directory:
         root = Path(temporary_directory) / "调研纪要"
@@ -183,8 +202,9 @@ def main() -> int:
 
         manager_report = next(report for report in repo.reports.values() if "基金经理：张三" in report.get("content", ""))
         manager_proposal = _proposal(manager_report, "manager", "张三")
+        fund_proposal = _proposal(manager_report, "fund", "000001.OF")
         style_proposal = _proposal(manager_report, "style_label", "成长")
-        for proposal in (manager_proposal, style_proposal):
+        for proposal in (manager_proposal, fund_proposal, style_proposal):
             source_ref = proposal.get("source_ref", {})
             if proposal.get("review_status") != "pending":
                 raise AssertionError(f"Extracted conclusions must await review: {proposal}")
@@ -195,15 +215,20 @@ def main() -> int:
                 raise AssertionError(f"Proposal confidence is invalid: {proposal}")
 
         service.review_proposal(manager_report["id"], manager_proposal["id"], "confirmed")
+        service.review_proposal(manager_report["id"], fund_proposal["id"], "confirmed")
         service.review_proposal(manager_report["id"], style_proposal["id"], "rejected")
         reviewed = repo.get_report(manager_report["id"])
         if reviewed.get("manager_name") != "张三":
             raise AssertionError(f"Confirmed manager should control grouping: {reviewed}")
         if "成长" in reviewed.get("style_labels", []):
             raise AssertionError(f"Rejected style must not enter confirmed labels: {reviewed}")
+        if reviewed.get("fund_ids") != ["000001.OF"]:
+            raise AssertionError(f"Confirmed fund identity should enter the memo: {reviewed}")
+        if reviewed.get("extraction_provider") != "fake" or reviewed.get("extraction_model") != "fake-model":
+            raise AssertionError(f"Memo should retain model provenance: {reviewed}")
 
         pending = service.list_pending_reviews(folder["id"])
-        if any(item.get("id") in {manager_proposal["id"], style_proposal["id"]} for item in pending):
+        if any(item.get("id") in {manager_proposal["id"], fund_proposal["id"], style_proposal["id"]} for item in pending):
             raise AssertionError(f"Reviewed proposals must leave pending queue: {pending}")
 
         for proposal in list(repo.get_report(manager_report["id"]).get("review_proposals", [])):
