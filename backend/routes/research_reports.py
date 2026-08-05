@@ -92,6 +92,9 @@ async def list_reports(
                 "style_labels": doc.get("style_labels", []),
                 "fund_ids": doc.get("fund_ids", []),
                 "key_points": doc.get("key_points", [])[:3],
+                "review_status": doc.get("review_status"),
+                "local_relative_path": doc.get("local_relative_path"),
+                "extraction_status": doc.get("extraction_status"),
             })
 
         return {"total": total, "page": page, "page_size": page_size, "data": reports}
@@ -204,6 +207,12 @@ async def get_report(report_id: str):
             "style_labels": doc.get("style_labels", []),
             "fund_ids": doc.get("fund_ids", []),
             "key_points": doc.get("key_points", []),
+            "review_status": doc.get("review_status"),
+            "review_proposals": doc.get("review_proposals", []),
+            "local_relative_path": doc.get("local_relative_path"),
+            "local_source_path": doc.get("local_source_path"),
+            "source_hash": doc.get("source_hash"),
+            "extraction_status": doc.get("extraction_status"),
             "created_at": doc.get("created_at"),
         }
     except HTTPException:

@@ -137,7 +137,13 @@ class LocalResearchFolderService:
             "tags": list(report.get("tags", [])),
         }
         self._apply_proposal(fields, target, confirmed=action == "confirmed")
-        fields.update({"review_proposals": proposals, "updated_at": self._now()})
+        fields.update({
+            "review_proposals": proposals,
+            "review_status": "pending" if any(
+                item.get("review_status") == "pending" for item in proposals
+            ) else "reviewed",
+            "updated_at": self._now(),
+        })
         updated = self.repo.update_report(report_id, fields)
         return {"status": action, "report": updated, "proposal": target}
 

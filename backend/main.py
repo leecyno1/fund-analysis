@@ -28,7 +28,7 @@ import math
 import uuid
 import json
 
-from routes import funds, managers, scoring, reports, research_reports, research_memos, screening
+from routes import funds, managers, scoring, reports, research_reports, research_memos, research_folders, screening
 from routes import barra, brinson, export, data_sync, data_health, metrics, fund_pools, alerts, investment_analysis
 from service_registry import get_data_service, get_scoring_engine, get_db
 
@@ -146,6 +146,7 @@ app.include_router(scoring.router, tags=["评分系统"])
 app.include_router(reports.router, tags=["AI报告"])
 app.include_router(research_reports.router, tags=["调研纪要"])
 app.include_router(research_memos.router, tags=["证据研究备忘录"])
+app.include_router(research_folders.router, tags=["本地调研纪要文件夹"])
 app.include_router(screening.router, tags=["基金筛选"])
 app.include_router(barra.router, tags=["Barra风险分析"])
 app.include_router(brinson.router, tags=["Brinson归因"])

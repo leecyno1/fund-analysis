@@ -206,6 +206,12 @@ def main() -> int:
         if any(item.get("id") in {manager_proposal["id"], style_proposal["id"]} for item in pending):
             raise AssertionError(f"Reviewed proposals must leave pending queue: {pending}")
 
+        for proposal in list(repo.get_report(manager_report["id"]).get("review_proposals", [])):
+            if proposal.get("review_status") == "pending":
+                service.review_proposal(manager_report["id"], proposal["id"], "rejected")
+        if repo.get_report(manager_report["id"]).get("review_status") != "reviewed":
+            raise AssertionError("Report should become reviewed after its last proposal is decided")
+
         second = service.scan_folder(folder["id"])
         if second.get("counts") != {"created": 0, "updated": 0, "unchanged": 5, "failed": 0, "supported": 5}:
             raise AssertionError(f"Unchanged files should not be reparsed: {second}")
