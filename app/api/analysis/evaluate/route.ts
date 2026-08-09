@@ -28,7 +28,17 @@ export async function POST(request: Request) {
         { status: response.status },
       )
     }
-    return NextResponse.json(payload)
+    const reportId = typeof payload.id === 'string' ? payload.id : ''
+    const timelineResponse = reportId
+      ? await fetch(`${backendApiBaseUrl}/api/reports/${encodeURIComponent(reportId)}/timeline`, {
+          cache: 'no-store',
+          signal: AbortSignal.timeout(5_000),
+        }).catch(() => null)
+      : null
+    const timeline = timelineResponse?.ok
+      ? await timelineResponse.json().catch(() => null)
+      : null
+    return NextResponse.json({ ...payload, timeline })
   } catch (error) {
     return NextResponse.json(
       { error: error instanceof Error ? error.message : '基金评价分析失败' },

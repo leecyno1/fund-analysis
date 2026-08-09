@@ -8,6 +8,8 @@ import urllib.error
 import urllib.request
 from typing import Dict, Any, List, Optional
 
+from services.llm_runtime import LlmCircuitOpen, get_llm_runtime_guard
+
 logger = logging.getLogger(__name__)
 
 
@@ -92,6 +94,18 @@ class ClaudeReportGenerator:
                 or "https://api.siliconflow.cn"
             )
         return None
+
+    @property
+    def runtime_key(self) -> str:
+        return f"{self.provider}:{self.base_url or 'default'}"
+
+    def health(self) -> Dict[str, Any]:
+        return get_llm_runtime_guard().health(
+            runtime_key=self.runtime_key,
+            configured=bool(self.api_key),
+            provider=self.provider,
+            model=self.model,
+        )
 
     @property
     def client(self):
@@ -308,10 +322,15 @@ class ClaudeReportGenerator:
 
     def _call_llm(self, prompt: str, report_type: str) -> str:
         """调用模型 API"""
+        guard = get_llm_runtime_guard()
         if self.provider in {"siliconflow", "deepseek", "openai-compatible"}:
             if not self.api_key:
                 logger.warning("OpenAI-compatible API key not configured. Refusing to generate mock report.")
                 return "## 报告生成失败\n\n模型 API Key 未配置；系统已阻止输出模拟研究报告，请配置真实模型服务或使用本地确定性证据报告。"
+            try:
+                guard.before_request(self.runtime_key)
+            except LlmCircuitOpen as error:
+                return f"## 报告生成失败\n\n模型服务暂时降级，将在约 {error.retry_after_seconds} 秒后恢复尝试；本次使用本地确定性证据报告。"
             return self._call_openai_compatible(prompt)
 
         if not self.client:
@@ -319,18 +338,25 @@ class ClaudeReportGenerator:
             return "## 报告生成失败\n\nAnthropic 客户端或 API Key 不可用；系统已阻止输出模拟研究报告，请配置真实模型服务或使用本地确定性证据报告。"
 
         try:
+            guard.before_request(self.runtime_key)
             response = self.client.messages.create(
                 model=self.model,
                 max_tokens=4096,
                 system=SYSTEM_PROMPT,
                 messages=[{"role": "user", "content": prompt}],
             )
-            return response.content[0].text
+            content = response.content[0].text
+            guard.record_success(self.runtime_key)
+            return content
+        except LlmCircuitOpen as error:
+            return f"## 报告生成失败\n\n模型服务暂时降级，将在约 {error.retry_after_seconds} 秒后恢复尝试；本次使用本地确定性证据报告。"
         except Exception as e:
+            guard.record_failure(self.runtime_key, e)
             logger.error("Anthropic API error: {}".format(e))
             return "## 报告生成失败\n\n错误: {}\n\n请检查API配置后重试。".format(e)
 
     def _call_openai_compatible(self, prompt: str) -> str:
+        guard = get_llm_runtime_guard()
         url = self.base_url.rstrip("/") + "/v1/chat/completions"
         payload = {
             "model": self.model,
@@ -354,12 +380,16 @@ class ClaudeReportGenerator:
         try:
             with urllib.request.urlopen(request, timeout=timeout) as response:
                 data = json.loads(response.read().decode("utf-8"))
-            return data["choices"][0]["message"]["content"]
+            content = data["choices"][0]["message"]["content"]
+            guard.record_success(self.runtime_key)
+            return content
         except urllib.error.HTTPError as error:
             detail = error.read().decode("utf-8", errors="ignore")
+            guard.record_failure(self.runtime_key, f"HTTP {error.code}: {detail[:160]}")
             logger.error("OpenAI-compatible API HTTP error %s: %s", error.code, detail[:500])
             return "## 报告生成失败\n\n模型服务返回错误，请检查 API Key、模型名和供应商配额。"
         except Exception as error:
+            guard.record_failure(self.runtime_key, error)
             logger.error("OpenAI-compatible API error: %s", error)
             return "## 报告生成失败\n\n错误: {}\n\n请检查模型服务配置后重试。".format(error)
 

@@ -38,6 +38,34 @@ type AnalysisResult = {
   id?: string | null
   report: string
   metadata?: Record<string, unknown>
+  timeline?: AnalysisTimeline | null
+}
+
+type AnalysisRevision = {
+  id: string
+  revision: number
+  is_current: boolean
+  created_at: string
+  mode: string
+  mode_label: string
+  provider?: string | null
+  model?: string | null
+  question?: string
+  change_summary: string
+}
+
+type AnalysisTimeline = {
+  current_revision: number
+  total_revisions: number
+  revisions: AnalysisRevision[]
+}
+
+type LlmHealth = {
+  status: 'ready' | 'degraded' | 'unconfigured'
+  configured: boolean
+  provider?: string
+  model?: string
+  retry_after_seconds?: number
 }
 
 function formatDate(value?: string | null) {
@@ -48,6 +76,13 @@ function formatDate(value?: string | null) {
 
 function analysisModeLabel(metadata?: Record<string, unknown>) {
   return metadata?.mode === 'llm_evaluation_evidence' ? '模型综合评价' : '本地证据评价'
+}
+
+function healthCopy(health: LlmHealth | null) {
+  if (!health) return { label: '模型状态读取中', detail: '分析仍可使用本地证据评价。', tone: 'text-[#65716b]' }
+  if (health.status === 'ready') return { label: 'AI 模型已配置', detail: `${health.provider || '模型服务'} · ${health.model || '默认模型'}`, tone: 'text-[#28745c]' }
+  if (health.status === 'degraded') return { label: 'AI 暂时降级', detail: health.retry_after_seconds ? `约 ${health.retry_after_seconds} 秒后恢复尝试，本次自动使用本地证据。` : '本次自动使用本地证据评价。', tone: 'text-[#9a681d]' }
+  return { label: 'AI 模型未配置', detail: '仍可运行本地证据评价，不会生成模拟结论。', tone: 'text-[#65716b]' }
 }
 
 function ReportBody({ content }: { content: string }) {
@@ -81,6 +116,7 @@ export default function FundAnalysisWorkspace({ initialFund = null }: { initialF
   const [result, setResult] = useState<AnalysisResult | null>(null)
   const [history, setHistory] = useState<AnalysisHistory[]>([])
   const [historyLoading, setHistoryLoading] = useState(true)
+  const [llmHealth, setLlmHealth] = useState<LlmHealth | null>(null)
 
   const loadHistory = useCallback(async () => {
     setHistoryLoading(true)
@@ -93,10 +129,30 @@ export default function FundAnalysisWorkspace({ initialFund = null }: { initialF
     }
   }, [])
 
+  const loadLlmHealth = useCallback(async (signal?: AbortSignal) => {
+    try {
+      const response = await fetch('/api/analysis/health', { cache: 'no-store', signal })
+      const payload = await response.json().catch(() => ({}))
+      setLlmHealth(payload as LlmHealth)
+    } catch (healthError) {
+      if (healthError instanceof DOMException && healthError.name === 'AbortError') return
+      setLlmHealth({ status: 'degraded', configured: false })
+    }
+  }, [])
+
   useEffect(() => {
     const timer = globalThis.setTimeout(() => void loadHistory(), 0)
     return () => globalThis.clearTimeout(timer)
   }, [loadHistory])
+
+  useEffect(() => {
+    const controller = new AbortController()
+    const timer = globalThis.setTimeout(() => void loadLlmHealth(controller.signal), 0)
+    return () => {
+      globalThis.clearTimeout(timer)
+      controller.abort()
+    }
+  }, [loadLlmHealth])
 
   useEffect(() => {
     if (query.trim().length < 2 || selectedFund) {
@@ -149,25 +205,32 @@ export default function FundAnalysisWorkspace({ initialFund = null }: { initialF
     } finally {
       globalThis.clearInterval(progressTimer)
       setRunning(false)
+      void loadLlmHealth()
     }
   }
 
-  async function openHistory(item: AnalysisHistory) {
+  async function openHistoryReport(reportId: string, fallbackTargetId = '') {
     setError('')
     try {
-      const response = await fetch(`/api/analysis/${encodeURIComponent(item.id)}`, { cache: 'no-store' })
+      const response = await fetch(`/api/analysis/${encodeURIComponent(reportId)}`, { cache: 'no-store' })
       const payload = await response.json().catch(() => ({}))
       if (!response.ok) throw new Error(payload.error || '无法读取分析历史')
-      setResult({ id: payload.id, report: payload.content, metadata: payload.metadata })
-      setSelectedFund({ windCode: payload.targetId, name: payload.targetId, type: '' })
-      setQuery(payload.targetId)
+      setResult({ id: payload.id, report: payload.content, metadata: payload.metadata, timeline: payload.timeline })
+      const targetId = payload.targetId || fallbackTargetId
+      setSelectedFund({ windCode: targetId, name: targetId, type: '' })
+      setQuery(targetId)
       globalThis.scrollTo({ top: 0, behavior: 'smooth' })
     } catch (historyError) {
       setError(historyError instanceof Error ? historyError.message : '无法读取分析历史')
     }
   }
 
+  async function openHistory(item: AnalysisHistory) {
+    await openHistoryReport(item.id, item.targetId)
+  }
+
   const selectedManager = useMemo(() => selectedFund?.managers?.map((manager) => manager.name).filter(Boolean).join('、') || '', [selectedFund])
+  const modelHealthCopy = healthCopy(llmHealth)
 
   return (
     <div className="space-y-7">
@@ -176,6 +239,7 @@ export default function FundAnalysisWorkspace({ initialFund = null }: { initialF
           <div className="flex items-center gap-2 text-xs font-bold uppercase text-[#28745c]"><Bot className="h-4 w-4" />AI 分析</div>
           <h1 className="mt-3 text-3xl font-bold leading-tight text-[#18231e] sm:text-4xl">选一只基金，现场跑一次综合评价</h1>
           <p className="mt-3 text-sm leading-7 text-[#65716b] sm:text-base">每次只分析你选择的基金，不跑全市场。AI 先读取分类内专业评价，再结合归因和调研纪要说人话。</p>
+          <div className={`mt-3 text-xs ${modelHealthCopy.tone}`}><strong>{modelHealthCopy.label}</strong><span className="ml-2">{modelHealthCopy.detail}</span></div>
         </div>
         <div className="grid grid-cols-3 gap-px overflow-hidden border border-[#dbe1dc] bg-[#dbe1dc] text-center text-xs">
           <div className="bg-white p-3"><BarChart3 className="mx-auto h-4 w-4 text-[#28745c]" /><span className="mt-2 block">同类评价</span></div>
@@ -236,6 +300,23 @@ export default function FundAnalysisWorkspace({ initialFund = null }: { initialF
                 {result.id ? <span className="text-xs text-[#7a8580]">已保存到分析历史</span> : null}
               </div>
               <div className="px-5 py-6 sm:px-7 sm:py-8"><ReportBody content={result.report} /></div>
+              {result.timeline?.revisions?.length ? (
+                <div className="border-t border-[#dfe4df] px-5 py-5 sm:px-7">
+                  <div className="flex items-center justify-between gap-3">
+                    <h3 className="flex items-center gap-2 text-sm font-bold"><Clock3 className="h-4 w-4 text-[#28745c]" />分析版本</h3>
+                    <span className="text-xs text-[#7a8580]">当前 V{result.timeline.current_revision} / 共 {result.timeline.total_revisions} 版</span>
+                  </div>
+                  <div className="mt-4 divide-y divide-[#e5e9e6] border-y border-[#e5e9e6]">
+                    {result.timeline.revisions.map((revision) => (
+                      <button key={revision.id} type="button" onClick={() => void openHistoryReport(revision.id)} disabled={revision.is_current} className="grid w-full gap-1 py-3 text-left disabled:cursor-default sm:grid-cols-[5rem_minmax(0,1fr)_10rem] sm:items-center">
+                        <strong className={revision.is_current ? 'text-[#28745c]' : 'text-[#36443d]'}>V{revision.revision}{revision.is_current ? ' · 当前' : ''}</strong>
+                        <span className="text-xs leading-5 text-[#5f6c65]">{revision.change_summary}</span>
+                        <span className="text-xs text-[#929b96] sm:text-right">{formatDate(revision.created_at)}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
             </article>
           ) : null}
         </div>

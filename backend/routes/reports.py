@@ -1024,6 +1024,27 @@ async def list_analysis_reports(
         raise HTTPException(status_code=500, detail=str(error))
 
 
+@router.get("/ai-health")
+async def get_ai_health():
+    """Return configuration and circuit state without spending a model request."""
+    from services.ai_report import get_report_generator
+
+    return get_report_generator().health()
+
+
+@router.get("/{report_id}/timeline")
+async def get_report_timeline(report_id: UUID, limit: int = Query(50, ge=1, le=100)):
+    """Build a version timeline from immutable analyses of the same target and type."""
+    from services.analysis_history_service import AnalysisHistoryService
+
+    try:
+        return AnalysisHistoryService().timeline_for_report(str(report_id), limit=limit)
+    except ValueError as error:
+        if str(error) == "analysis_report_not_found":
+            raise HTTPException(status_code=404, detail="分析报告不存在") from error
+        raise
+
+
 @router.get("/{report_id}")
 async def get_report_detail(report_id: str):
     """获取报告详情"""

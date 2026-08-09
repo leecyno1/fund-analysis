@@ -73,6 +73,14 @@ export async function GET(
       )
     }
 
+    const timelineResponse = await fetch(
+      `${backendApiBaseUrl}/api/reports/${encodeURIComponent(id)}/timeline`,
+      { cache: 'no-store' },
+    ).catch(() => null)
+    const timeline = timelineResponse?.ok
+      ? await timelineResponse.json().catch(() => null)
+      : null
+
     const generationParams = asRecord(payload.generation_params ?? payload.metadata)
     const dataSources = asRecord(payload.data_sources)
     const codes = Array.isArray(dataSources.codes) ? dataSources.codes.map(String).filter(Boolean) : []
@@ -108,6 +116,7 @@ export async function GET(
         reportsCount: Array.isArray(payload.research_reports_used) ? payload.research_reports_used.length : 0,
         codes,
       },
+      timeline,
       createdAt: payload.created_at ?? payload.createdAt ?? null,
     })
   } catch (error) {
