@@ -116,6 +116,13 @@ export function toCamelFund(fund: BackendRecord): CamelFund {
           dataAsOf: recommendationEvidence.data_as_of ?? recommendationEvidence.dataAsOf ?? null,
           methodologyVersion: recommendationEvidence.methodology_version ?? recommendationEvidence.methodologyVersion ?? '',
           scoreScope: recommendationEvidence.score_scope ?? recommendationEvidence.scoreScope ?? '',
+          alternatives: asRecordArray(recommendationEvidence.alternatives).map((alternative) => ({
+            windCode: asText(alternative.wind_code ?? alternative.windCode),
+            name: asText(alternative.name),
+            styleLabel: asText(alternative.style_label ?? alternative.styleLabel),
+            overallScore: asNumberOrNull(alternative.overall_score ?? alternative.overallScore),
+            reason: asText(alternative.reason),
+          })),
         }
       : null,
     scores: asRecordArray(fund.scores),

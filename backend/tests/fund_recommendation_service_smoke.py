@@ -139,6 +139,9 @@ def main() -> int:
             raise AssertionError(f"Candidate evidence needs an auditable data date: {item}")
         if evidence.get("methodology_version") != "fund_candidate_group_v1":
             raise AssertionError(f"Candidate method must be versioned: {item}")
+        alternatives = evidence.get("alternatives") or []
+        if len(alternatives) != 2 or any(option.get("wind_code") == item.get("wind_code") for option in alternatives):
+            raise AssertionError(f"Every candidate needs two distinct same-category alternatives: {item}")
         percentile = (item.get("peer_percentiles") or {}).get("metrics", {}).get("professional_score", {}).get("percentile")
         if percentile is None:
             raise AssertionError(f"Category score percentile is missing: {item}")

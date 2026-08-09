@@ -167,10 +167,20 @@ export function professionalScorePercentile(fund: SimpleFund) {
 
 export function recommendationEvidence(fund: SimpleFund) {
   const evidence = asRecord(fund.recommendationEvidence)
+  const alternatives = Array.isArray(evidence.alternatives)
+    ? evidence.alternatives.map((item) => asRecord(item)).filter((item) => textValue(item.windCode, item.wind_code))
+    : []
   return {
     reasons: Array.isArray(evidence.reasons) ? evidence.reasons.map(String).filter(Boolean) : [],
     risks: Array.isArray(evidence.risks) ? evidence.risks.map(String).filter(Boolean) : [],
     dataAsOf: textValue(evidence.dataAsOf, evidence.data_as_of),
     methodologyVersion: textValue(evidence.methodologyVersion, evidence.methodology_version),
+    alternatives: alternatives.map((item) => ({
+      windCode: textValue(item.windCode, item.wind_code),
+      name: textValue(item.name, item.windCode, item.wind_code),
+      styleLabel: textValue(item.styleLabel, item.style_label),
+      overallScore: numberValue(item.overallScore, item.overall_score),
+      reason: textValue(item.reason),
+    })),
   }
 }

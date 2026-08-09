@@ -190,6 +190,18 @@ export default function RecommendationClient({ initialFunds, initialCategories, 
                         <span><strong className="text-[#775e32]">主要风险：</strong>{evidence.risks.join(' ')}</span>
                       </div>
                     </div>
+                    {evidence.alternatives.length ? (
+                      <div className="mt-3 border-t border-[#edf0ed] pt-3 text-xs">
+                        <strong className="text-[#526159]">可替代基金：</strong>
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          {evidence.alternatives.map((alternative) => (
+                            <Link key={alternative.windCode} href={`/funds/${encodeURIComponent(alternative.windCode)}`} className="rounded-sm bg-[#f1f4f1] px-2 py-1 text-[#315e4d] hover:bg-[#e5ede8]">
+                              {alternative.name}{alternative.overallScore != null ? ` · ${alternative.overallScore.toFixed(1)} 分` : ''}
+                            </Link>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
                     <p className="mt-3 text-[11px] text-[#89928d]">数据截至 {evidence.dataAsOf || fund.navDate || '待补'} · 仅在“{category}”同类组内评价</p>
                     <Link href={`/funds/${encodeURIComponent(fund.windCode)}`} className="mt-4 inline-flex items-center gap-1 text-xs font-bold text-[#28745c]">查看基金与风险 <ArrowRight className="h-3.5 w-3.5" /></Link>
                   </div>

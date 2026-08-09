@@ -85,7 +85,11 @@ class FundRecommendationService:
         candidate_limit = max(1, min(int(limit), self.MAX_CANDIDATES))
         candidates = styled[:candidate_limit]
         for candidate in candidates:
-            candidate["recommendation_evidence"] = self._recommendation_evidence(candidate)
+            alternatives = self._alternative_candidates(candidate, styled)
+            candidate["recommendation_evidence"] = {
+                **self._recommendation_evidence(candidate),
+                "alternatives": alternatives,
+            }
 
         return {
             "peer_group": normalized_group,
@@ -258,6 +262,37 @@ class FundRecommendationService:
             "methodology_version": self.METHODOLOGY_VERSION,
             "score_scope": "category_relative",
         }
+
+    def _alternative_candidates(
+        self,
+        candidate: Dict[str, Any],
+        peer_candidates: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        target_code = str(candidate.get("wind_code") or "")
+        target_style = self._normalize_style(
+            str((candidate.get("research_profile") or {}).get("style_label") or "")
+        )
+        same_style: List[Dict[str, Any]] = []
+        other_style: List[Dict[str, Any]] = []
+        for option in peer_candidates:
+            code = str(option.get("wind_code") or "")
+            if not code or code == target_code:
+                continue
+            option_style_label = str((option.get("research_profile") or {}).get("style_label") or "")
+            alternative = {
+                "wind_code": code,
+                "name": option.get("name") or code,
+                "style_label": option_style_label or None,
+                "overall_score": option.get("professional_scoring", {}).get("overall_score"),
+                "reason": "同类别、同风格候选"
+                if target_style and self._normalize_style(option_style_label) == target_style
+                else "同类别其他高分候选",
+            }
+            if target_style and self._normalize_style(option_style_label) == target_style:
+                same_style.append(alternative)
+            else:
+                other_style.append(alternative)
+        return (same_style + other_style)[:2]
 
     @staticmethod
     def _belongs_to_group(row: Dict[str, Any], peer_group: str) -> bool:
