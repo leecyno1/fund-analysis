@@ -253,7 +253,7 @@ class FundRepo:
         try:
             from sqlalchemy import text
 
-            where_clauses = ["raw_data->>'source' = 'tushare'"]
+            where_clauses = []
             params = {}
             safe_purchase_plan = "lump_sum" if purchase_plan == "lump_sum" else "sip"
             try:
