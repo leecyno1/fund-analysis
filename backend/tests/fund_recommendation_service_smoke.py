@@ -92,7 +92,7 @@ def main() -> int:
             "peer_group": row["standardized_peer_group_name"],
             "primary_benchmark": row["benchmark_name"],
             "style_label": "大盘成长" if index < 12 else "价值",
-            "strategy_tags": ["成长"] if index < 12 else ["价值"],
+            "strategy_tags": ["成长", "主动权益"] if index < 12 else ["价值", "主动权益"],
         }
         for index, row in enumerate(rows)
     }
@@ -120,6 +120,8 @@ def main() -> int:
         raise AssertionError(f"Style filtering must run across the full eligible peer group: {result}")
     if "仅缺证基金拥有的风格" in (result.get("available_styles") or []):
         raise AssertionError(f"Style options must only come from evidence-eligible funds: {result}")
+    if "主动权益" in (result.get("available_styles") or []):
+        raise AssertionError(f"Fund classifications must not leak into style options: {result}")
     if any(item.get("research_profile", {}).get("peer_group") != "指数-沪深300" for item in candidates):
         raise AssertionError(f"Cross-category fund leaked into candidate group: {result}")
     if any("成长" not in " ".join(item.get("research_profile", {}).get("strategy_tags") or []) for item in candidates):

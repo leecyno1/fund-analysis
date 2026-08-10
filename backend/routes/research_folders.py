@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from services.local_research_folder_service import FolderValidationError, LocalResearchFolderService
+from services.research_memo_profile_projection_service import ResearchMemoProfileProjectionService
 
 
 router = APIRouter(prefix="/api/research-folders", tags=["本地调研纪要文件夹"])
@@ -32,7 +33,12 @@ def _get_service() -> LocalResearchFolderService:
     repo = LocalResearchFolderRepo(db)
     repo.ensure_indexes()
     extractor = get_research_memo_metadata_extractor()
-    return LocalResearchFolderService(repo=repo, metadata_extractor=extractor.extract)
+    projector = ResearchMemoProfileProjectionService(report_repo=repo)
+    return LocalResearchFolderService(
+        repo=repo,
+        metadata_extractor=extractor.extract,
+        profile_projector=projector.project_report,
+    )
 
 
 @router.get("/")

@@ -20,9 +20,19 @@ class FundRecommendationService:
         "均衡": ("均衡", "平衡", "混合", "blend", "balanced"),
         "质量": ("质量", "品质", "quality"),
         "红利": ("红利", "股息", "dividend"),
+        "大盘": ("大盘", "large cap", "large_cap"),
+        "中盘": ("中盘", "mid cap", "mid_cap"),
         "小盘": ("小盘", "small cap", "small_cap", "small"),
+        "低换手": ("低换手", "low turnover", "low_turnover"),
+        "高换手": ("高换手", "high turnover", "high_turnover"),
         "行业主题": ("行业", "主题", "sector", "thematic"),
         "低波稳健": ("低波", "稳健", "low volatility", "low_volatility", "defensive"),
+        "行业轮动": ("行业轮动", "sector rotation", "sector_rotation"),
+        "量化": ("量化", "quant", "quantitative"),
+        "指数增强": ("指数增强", "enhanced index", "index enhancement"),
+        "固收+": ("固收+", "fixed income plus"),
+        "信用": ("信用", "credit"),
+        "利率": ("利率", "rates"),
     }
 
     def __init__(
@@ -323,15 +333,35 @@ class FundRecommendationService:
             return drawdown is not None and abs(float(drawdown)) <= 0.12
         return False
 
-    @staticmethod
-    def _available_styles(profiles: Dict[str, Dict[str, Any]]) -> List[str]:
+    @classmethod
+    def _available_styles(cls, profiles: Dict[str, Dict[str, Any]]) -> List[str]:
         values: List[str] = []
         for profile in profiles.values():
-            for value in [profile.get("style_label"), *(profile.get("strategy_tags") or [])]:
+            candidates = [profile.get("style_label")]
+            candidates.extend(
+                item.get("value")
+                for item in ((profile.get("evidence") or {}).get("research_memos") or [])
+                if item.get("kind") == "style_label" and item.get("review_status") == "confirmed"
+            )
+            candidates.extend(
+                value
+                for value in (profile.get("strategy_tags") or [])
+                if cls._is_known_style(value)
+            )
+            for value in candidates:
                 normalized = str(value or "").strip()
                 if normalized and normalized not in values:
                     values.append(normalized)
         return values[:50]
+
+    @classmethod
+    def _is_known_style(cls, value: Any) -> bool:
+        normalized = cls._normalize_style(str(value or ""))
+        return any(
+            normalized == cls._normalize_style(alias)
+            for canonical, aliases in cls.STYLE_ALIASES.items()
+            for alias in (canonical, *aliases)
+        )
 
     @staticmethod
     def _normalize_style(value: str) -> str:

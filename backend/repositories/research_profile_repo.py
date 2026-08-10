@@ -108,6 +108,23 @@ class ResearchProfileRepo:
             row = conn.execute(text(sql), {"wind_code": wind_code}).fetchone()
         return _row_to_dict(row) if row else None
 
+    def delete_projected_profile(self, wind_code: str, updated_by: str) -> bool:
+        """Delete only a profile owned by the named projection Module."""
+        from sqlalchemy import text
+
+        sql = """
+            DELETE FROM fund_research_profiles
+            WHERE wind_code = :wind_code
+              AND updated_by = :updated_by
+        """
+        with self.engine.connect() as conn:
+            result = conn.execute(text(sql), {
+                "wind_code": wind_code,
+                "updated_by": updated_by,
+            })
+            conn.commit()
+        return bool(result.rowcount)
+
     def list_profiles(self, wind_codes: List[str]) -> Dict[str, Dict[str, Any]]:
         from sqlalchemy import text
 

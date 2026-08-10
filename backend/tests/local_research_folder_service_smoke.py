@@ -72,6 +72,13 @@ class MemoryResearchFolderRepo:
         report = self.reports.get(report_id)
         return deepcopy(report) if report else None
 
+    def list_reports_for_fund(self, wind_code):
+        return [
+            deepcopy(report)
+            for report in self.reports.values()
+            if wind_code in report.get("fund_ids", [])
+        ]
+
     def list_pending_reviews(self, folder_id=None):
         pending = []
         for report in self.reports.values():
@@ -133,6 +140,12 @@ def _proposal(report, kind, value):
 
 def main() -> int:
     repo = MemoryResearchFolderRepo()
+    projection_calls = []
+
+    def profile_projector(report, affected_fund_ids):
+        projection_calls.append((deepcopy(report), list(affected_fund_ids)))
+        return {"projected_count": len(affected_fund_ids)}
+
     def model_extractor(content, filename):
         if "张三" not in content:
             return {"status": "complete", "provider": "fake", "model": "fake-model", "proposals": []}
@@ -150,6 +163,7 @@ def main() -> int:
     service = LocalResearchFolderService(
         repo=repo,
         metadata_extractor=model_extractor,
+        profile_projector=profile_projector,
         max_files=20,
         max_file_bytes=2_000_000,
     )
@@ -214,9 +228,15 @@ def main() -> int:
             if not isinstance(confidence, (int, float)) or not 0 <= confidence <= 1:
                 raise AssertionError(f"Proposal confidence is invalid: {proposal}")
 
-        service.review_proposal(manager_report["id"], manager_proposal["id"], "confirmed")
-        service.review_proposal(manager_report["id"], fund_proposal["id"], "confirmed")
-        service.review_proposal(manager_report["id"], style_proposal["id"], "rejected")
+        manager_review = service.review_proposal(manager_report["id"], manager_proposal["id"], "confirmed")
+        fund_review = service.review_proposal(manager_report["id"], fund_proposal["id"], "confirmed")
+        style_review = service.review_proposal(manager_report["id"], style_proposal["id"], "rejected")
+        if len(projection_calls) != 3:
+            raise AssertionError(f"Every review must rebuild affected profiles: {projection_calls}")
+        if projection_calls[0][1] or projection_calls[1][1] != ["000001.OF"] or projection_calls[2][1] != ["000001.OF"]:
+            raise AssertionError(f"Projection must receive old and new fund identities: {projection_calls}")
+        if manager_review.get("profile_projection") is None or fund_review.get("profile_projection") is None or style_review.get("profile_projection") is None:
+            raise AssertionError("Review response must expose profile projection status")
         reviewed = repo.get_report(manager_report["id"])
         if reviewed.get("manager_name") != "张三":
             raise AssertionError(f"Confirmed manager should control grouping: {reviewed}")

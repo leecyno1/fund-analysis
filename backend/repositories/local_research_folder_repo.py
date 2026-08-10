@@ -34,6 +34,7 @@ class LocalResearchFolderRepo:
             [("folder_id", 1), ("relative_path", 1)], unique=True
         )
         self.db.local_research_documents.create_index("content_hash")
+        self.db.research_reports.create_index("fund_ids")
 
     def create_folder(self, folder: Dict[str, Any]) -> Dict[str, Any]:
         result = self.db.local_research_folders.insert_one(dict(folder))
@@ -105,6 +106,13 @@ class LocalResearchFolderRepo:
         from bson import ObjectId
 
         return _document(self.db.research_reports.find_one({"_id": ObjectId(report_id)}))
+
+    def list_reports_for_fund(self, wind_code: str) -> List[Dict[str, Any]]:
+        cursor = self.db.research_reports.find({"fund_ids": wind_code}).sort([
+            ("report_date", -1),
+            ("updated_at", -1),
+        ])
+        return [_document(item) for item in cursor]
 
     def list_pending_reviews(self, folder_id: Optional[str] = None) -> List[Dict[str, Any]]:
         query: Dict[str, Any] = {"review_proposals": {"$elemMatch": {"review_status": "pending"}}}

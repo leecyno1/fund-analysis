@@ -55,12 +55,14 @@ class LocalResearchFolderService:
         repo: Any,
         manager_resolver: Optional[Callable[[str], Optional[Dict[str, Any]]]] = None,
         metadata_extractor: Optional[Callable[[str, str], Dict[str, Any]]] = None,
+        profile_projector: Optional[Callable[[Dict[str, Any], List[str]], Dict[str, Any]]] = None,
         max_files: int = 5_000,
         max_file_bytes: int = 25 * 1024 * 1024,
     ):
         self.repo = repo
         self.manager_resolver = manager_resolver
         self.metadata_extractor = metadata_extractor
+        self.profile_projector = profile_projector
         self.max_files = max_files
         self.max_file_bytes = max_file_bytes
 
@@ -123,6 +125,7 @@ class LocalResearchFolderService:
         report = self.repo.get_report(report_id)
         if not report:
             raise ValueError("未找到调研纪要")
+        old_fund_ids = list(report.get("fund_ids", []))
 
         proposals = report.get("review_proposals", [])
         target = next((item for item in proposals if item.get("id") == proposal_id), None)
@@ -148,7 +151,18 @@ class LocalResearchFolderService:
             "updated_at": self._now(),
         })
         updated = self.repo.update_report(report_id, fields)
-        return {"status": action, "report": updated, "proposal": target}
+        affected_fund_ids = list(dict.fromkeys([
+            *old_fund_ids,
+            *(updated.get("fund_ids", []) if updated else []),
+            *([target.get("value")] if target.get("kind") == "fund" else []),
+        ]))
+        projection = self.profile_projector(updated, affected_fund_ids) if self.profile_projector else None
+        return {
+            "status": action,
+            "report": updated,
+            "proposal": target,
+            "profile_projection": projection,
+        }
 
     def _index_file(self, folder_id: str, root: Path, path: Path) -> Dict[str, Any]:
         relative_path = path.relative_to(root).as_posix()

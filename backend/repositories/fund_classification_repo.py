@@ -199,6 +199,34 @@ class FundClassificationRepo:
             )
         return self._build_context(_row_to_dict(row))
 
+    def list_entity_share_codes(self, fund_code: str) -> List[str]:
+        """Return every active share code for the fund entity containing this code."""
+        normalized_code = str(fund_code or "").strip()
+        if not normalized_code or not self._schema_ready():
+            return []
+
+        from sqlalchemy import text
+
+        sql = """
+            WITH selected_entity AS (
+                SELECT selected.entity_id
+                FROM fund_share_classes selected
+                JOIN fund_entities entity ON entity.id = selected.entity_id
+                WHERE (selected.wind_code = :fund_code OR entity.canonical_code = :fund_code)
+                  AND selected.status = 'active'
+                ORDER BY selected.is_primary DESC, selected.wind_code ASC
+                LIMIT 1
+            )
+            SELECT shares.wind_code
+            FROM selected_entity entity
+            JOIN fund_share_classes shares ON shares.entity_id = entity.entity_id
+            WHERE shares.status = 'active'
+            ORDER BY shares.is_primary DESC, shares.wind_code ASC
+        """
+        with self.engine.connect() as conn:
+            rows = conn.execute(text(sql), {"fund_code": normalized_code}).fetchall()
+        return [str(row.wind_code) for row in rows]
+
     def list_peer_funds(
         self,
         peer_group_id: str,
