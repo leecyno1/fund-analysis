@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional
 class DataQualityService:
     """按基金基础信息、研究画像、净值覆盖和指标快照评估可信度。"""
 
-    MANAGER_TENURE_NOT_APPLICABLE = {"index_broad", "cash_management"}
+    MANAGER_TENURE_NOT_APPLICABLE = {"index_broad", "index_fixed_income", "cash_management"}
 
     def __init__(self, classification_adapter: Optional[Any] = None):
         self._classification_adapter = classification_adapter

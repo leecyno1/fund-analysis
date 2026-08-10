@@ -9,6 +9,8 @@ import unicodedata
 from datetime import date, datetime
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+from services.fund_classification_catalog import FundClassificationCatalog
+
 
 class FundClassificationIngestionService:
     """生成可审计的基金实体、份额、同类组和基准映射写入计划。"""
@@ -20,20 +22,7 @@ class FundClassificationIngestionService:
     TERMINATED_TERMS = ("清算", "终止", "退市")
     FUND_CODE_PATTERN = re.compile(r"^[0-9]{6}\.(OF|SH|SZ|BJ)$", re.IGNORECASE)
 
-    INDEX_RULES = (
-        {
-            "pattern": re.compile(r"沪深300指数(?:收益率|涨跌幅|\*|×|\+|$)", re.IGNORECASE),
-            "benchmark_code": "000300.SH",
-            "benchmark_name": "沪深300",
-            "peer_group_key": "peer-index-hs300",
-        },
-        {
-            "pattern": re.compile(r"中证500指数(?:收益率|涨跌幅|\*|×|\+|$)", re.IGNORECASE),
-            "benchmark_code": "000905.SH",
-            "benchmark_name": "中证500",
-            "peer_group_key": "peer-index-csi500",
-        },
-    )
+    INDEX_RULES = tuple(FundClassificationCatalog.TRACKED_INDEX_RULES)
 
     def __init__(self, repository: Optional[Any] = None):
         self._repository = repository
@@ -107,10 +96,19 @@ class FundClassificationIngestionService:
             },
         }
 
-    def apply_plan(self, plan: Dict[str, Any]) -> Dict[str, Any]:
+    def apply_plan(self, plan: Dict[str, Any], reconcile: bool = False) -> Dict[str, Any]:
         repository = self._get_repository()
-        result = repository.apply_ingestion_plan(plan.get("groups") or [], source=self.SOURCE)
-        return {**plan.get("summary", {}), **result}
+        catalog_result = repository.ensure_catalog(
+            FundClassificationCatalog.STRATEGY_FAMILIES,
+            FundClassificationCatalog.peer_groups(),
+            source=FundClassificationCatalog.VERSION,
+        )
+        result = repository.apply_ingestion_plan(
+            plan.get("groups") or [],
+            source=self.SOURCE,
+            reconcile=reconcile,
+        )
+        return {**plan.get("summary", {}), **catalog_result, **result}
 
     def _candidate(self, fund: Dict[str, Any], wind_code: str) -> Tuple[Optional[Dict[str, Any]], str]:
         name = self._display_text(fund.get("name") or fund.get("fund_name"))
@@ -122,6 +120,8 @@ class FundClassificationIngestionService:
         normalized_name, share_class = self._share_identity(name)
         fund_type = self._text(fund.get("type") or fund.get("fund_type")).lower()
         declared_benchmark = self._declared_benchmark(fund)
+        invest_type = self._raw_classification_value(fund, "invest_type")
+        contract_type = self._raw_classification_value(fund, "contract_type")
 
         if "货币" in fund_type or fund_type == "money":
             classification = {
@@ -138,16 +138,23 @@ class FundClassificationIngestionService:
                 "rationale": "基金法定类型明确为货币基金；DR007 仅作为资金利率参照，不生成净值跟踪误差。",
             }
         elif "指数" in fund_type or fund_type == "index":
-            combined = f"{name} {declared_benchmark}"
+            combined = f"{name} {declared_benchmark} {invest_type}"
             if any(term in combined for term in self.ENHANCED_INDEX_TERMS):
                 return None, "unsupported_index_enhanced"
-            matched = [rule for rule in self.INDEX_RULES if rule["pattern"].search(declared_benchmark)]
+            if invest_type and invest_type != "被动指数型":
+                return None, "unsupported_index_investment_type"
+            matched = [rule for rule in self.INDEX_RULES if self._matches_index_rule(rule, declared_benchmark)]
             if len(matched) != 1:
                 return None, "unsupported_or_ambiguous_index_benchmark"
             rule = matched[0]
+            required_contract_term = rule.get("required_contract_term")
+            if required_contract_term and required_contract_term not in contract_type:
+                return None, "index_contract_type_conflict"
+            if rule["asset_class"] == "index" and "债券" in contract_type:
+                return None, "index_contract_type_conflict"
             classification = {
-                "strategy_family_key": "index_broad",
-                "asset_class": "index",
+                "strategy_family_key": rule["strategy_family_key"],
+                "asset_class": rule["asset_class"],
                 "active_passive": "passive",
                 "peer_group_key": rule["peer_group_key"],
                 "benchmark_code": rule["benchmark_code"],
@@ -156,7 +163,7 @@ class FundClassificationIngestionService:
                 "mapping_method": "declared_benchmark_exact_alias",
                 "classification_confidence": 0.99,
                 "benchmark_confidence": 0.99,
-                "rationale": f"合同业绩比较基准明确引用{rule['benchmark_name']}指数，且基金名称未显示增强策略。",
+                "rationale": f"投资类型为被动指数型，合同业绩比较基准明确引用{rule['benchmark_name']}指数。",
             }
         else:
             return None, "unsupported_fund_type"
@@ -174,6 +181,8 @@ class FundClassificationIngestionService:
                 "established_at": established_at,
                 "declared_benchmark": declared_benchmark or None,
                 "fund_type": fund.get("type") or fund.get("fund_type"),
+                "invest_type": invest_type or None,
+                "contract_type": contract_type or None,
                 "source_updated_at": self._date_text(fund.get("nav_date")) or date.today().isoformat(),
             },
         }, "eligible"
@@ -204,11 +213,38 @@ class FundClassificationIngestionService:
             "evidence_refs": {
                 "source": "funds.raw_data.info/universe",
                 "fundType": primary.get("fund_type"),
+                "investType": primary.get("invest_type"),
+                "contractType": primary.get("contract_type"),
                 "declaredBenchmark": primary.get("declared_benchmark"),
                 "shareCodes": [share["wind_code"] for share in shares],
-                "automaticRuleScope": "money_market_or_exact_hs300_csi500_passive_index",
+                "catalogVersion": FundClassificationCatalog.VERSION,
+                "automaticRuleScope": "money_market_or_exact_supported_passive_index",
             },
         }
+
+    def _matches_index_rule(self, rule: Dict[str, Any], benchmark: str) -> bool:
+        if not benchmark or benchmark.count("指数") > 1:
+            return False
+        suffix = r"(?:收益率|涨跌幅)?(?=\s*(?:\*|×|x|X|\+|$))"
+        return any(
+            re.search(re.escape(alias) + suffix, benchmark, re.IGNORECASE)
+            for alias in rule.get("aliases") or []
+        )
+
+    def _raw_classification_value(self, fund: Dict[str, Any], field: str) -> str:
+        direct = self._display_text(fund.get(field))
+        if direct:
+            return direct
+        raw_data = fund.get("raw_data") or {}
+        if not isinstance(raw_data, dict):
+            return ""
+        for key in ("universe", "info"):
+            section = raw_data.get(key) or {}
+            if isinstance(section, dict):
+                value = self._display_text(section.get(field))
+                if value:
+                    return value
+        return ""
 
     def _share_identity(self, name: str) -> Tuple[str, Optional[str]]:
         compact = re.sub(r"\s+", "", unicodedata.normalize("NFKC", name)).strip()

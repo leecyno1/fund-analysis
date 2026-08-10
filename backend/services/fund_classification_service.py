@@ -7,76 +7,15 @@ Interface。显式策略族谱优先；基础类型与名称只作为带置信�
 """
 from typing import Any, Dict, List, Optional, Tuple
 
+from services.fund_classification_catalog import FundClassificationCatalog
+
 
 class FundClassificationService:
     """生成多层基金分类及其证据。"""
 
     METHODOLOGY_VERSION = "fund_classification_v2"
 
-    FAMILY_META: Dict[str, Dict[str, Any]] = {
-        "active_equity_core": {
-            "asset_class": "equity",
-            "active_passive": "active",
-            "evaluation_profile_key": "active_equity",
-            "compatible_fund_types": [
-                "stock", "股票型", "普通股票型", "hybrid", "偏股混合型", "偏股混合",
-            ],
-        },
-        "active_equity_sector": {
-            "asset_class": "equity",
-            "active_passive": "active",
-            "evaluation_profile_key": "active_equity",
-            "compatible_fund_types": [
-                "stock", "股票型", "普通股票型", "hybrid", "偏股混合型", "偏股混合",
-            ],
-        },
-        "fixed_income_credit": {
-            "asset_class": "fixed_income",
-            "active_passive": "active",
-            "evaluation_profile_key": "fixed_income",
-            "compatible_fund_types": [
-                "bond", "债券型", "中长期纯债型", "短期纯债型", "混合债券型", "纯债",
-            ],
-        },
-        "fixed_income_general": {
-            "asset_class": "fixed_income",
-            "active_passive": "active",
-            "evaluation_profile_key": "fixed_income",
-            "compatible_fund_types": [
-                "bond", "债券型", "中长期纯债型", "短期纯债型", "混合债券型", "纯债",
-            ],
-        },
-        "index_broad": {
-            "asset_class": "index",
-            "active_passive": "passive",
-            "evaluation_profile_key": "index_fund",
-            "compatible_fund_types": ["index", "指数型", "被动指数型", "ETF", "ETF联接"],
-        },
-        "index_enhanced": {
-            "asset_class": "index",
-            "active_passive": "active",
-            "evaluation_profile_key": "index_enhanced",
-            "compatible_fund_types": ["index", "指数型", "增强指数型", "指数增强"],
-        },
-        "qdii_global_theme": {
-            "asset_class": "global",
-            "active_passive": "active",
-            "evaluation_profile_key": "qdii",
-            "compatible_fund_types": ["qdii", "QDII", "国际(QDII)", "海外基金"],
-        },
-        "cash_management": {
-            "asset_class": "money_market",
-            "active_passive": "active",
-            "evaluation_profile_key": "money_market",
-            "compatible_fund_types": ["money", "货币型", "货币基金", "现金管理"],
-        },
-        "multi_asset_allocation": {
-            "asset_class": "multi_asset",
-            "active_passive": "active",
-            "evaluation_profile_key": "multi_asset",
-            "compatible_fund_types": ["hybrid", "混合型", "灵活配置型", "平衡混合型"],
-        },
-    }
+    FAMILY_META: Dict[str, Dict[str, Any]] = FundClassificationCatalog.family_meta()
 
     EXPLICIT_FAMILY_KEYS = (
         "strategy_family_key",
@@ -224,6 +163,8 @@ class FundClassificationService:
         if any(token in combined for token in ("指数增强", "增强指数", "enhanced index")):
             return "index_enhanced", "fund.type/name", combined.strip()
         if any(token in combined for token in ("指数", "index", "etf", "联接")):
+            if any(token in combined for token in ("债券", "同业存单", "国开债", "政金债")):
+                return "index_fixed_income", "fund.type/name", combined.strip()
             return "index_broad", "fund.type/name", combined.strip()
         if any(token in combined for token in ("债券", "纯债", "信用债", "产业债", "bond", "固收")):
             family = "fixed_income_credit" if any(token in combined for token in ("信用", "产业债")) else "fixed_income_general"

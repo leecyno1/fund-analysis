@@ -39,6 +39,15 @@ def main() -> int:
     if index_fund.get("evaluation_profile_key") != "index_fund":
         raise AssertionError(f"Index evaluation profile expected: {index_fund}")
 
+    fixed_index = service.classify(
+        {"wind_code": "CD.TEST", "name": "中证同业存单AAA指数7天持有", "type": "指数型"},
+        {},
+    )
+    if fixed_index.get("strategy_family_key") != "index_fixed_income":
+        raise AssertionError(f"Fixed-income index classification failed: {fixed_index}")
+    if fixed_index.get("asset_class") != "fixed_income" or fixed_index.get("evaluation_profile_key") != "index_fund":
+        raise AssertionError(f"Fixed-income index must use index evaluation without entering equity peers: {fixed_index}")
+
     qdii_fund = service.classify(
         {"wind_code": "QDII.TEST", "name": "全球消费精选QDII", "type": "QDII"},
         {},
@@ -66,7 +75,7 @@ def main() -> int:
     if not unknown.get("missing_items"):
         raise AssertionError(f"Unknown classification must explain the evidence gap: {unknown}")
 
-    for result in [explicit, index_fund, qdii_fund, profile_only, unknown]:
+    for result in [explicit, index_fund, fixed_index, qdii_fund, profile_only, unknown]:
         for key in [
             "status",
             "asset_class",

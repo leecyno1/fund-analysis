@@ -36,6 +36,7 @@ except Exception:
 
 from database import get_engine, init_database
 from repositories import get_fund_repo, get_metric_snapshot_repo, get_nav_repo
+from services.fund_classification_catalog import FundClassificationCatalog
 from services.fund_classification_ingestion_service import FundClassificationIngestionService
 from services.fund_nav_evidence_service import FundNavDataEnrichmentService
 from services.peer_comparison_service import PeerComparisonService
@@ -43,10 +44,8 @@ from services.rolling_metric_service import RollingMetricService
 from services.tushare_service import TushareDataService
 
 
-DEFAULT_PEER_COVERAGE_GROUPS = (
-    "peer-money-cash-management",
-    "peer-index-hs300",
-    "peer-index-csi500",
+DEFAULT_PEER_COVERAGE_GROUPS = tuple(
+    group["key"] for group in FundClassificationCatalog.peer_groups()
 )
 
 

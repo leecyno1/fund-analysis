@@ -424,18 +424,136 @@ class FundClassificationRepo:
             }).scalar()
         return int(value or 0)
 
+    def ensure_catalog(
+        self,
+        strategy_families: List[Dict[str, Any]],
+        peer_groups: List[Dict[str, Any]],
+        source: str,
+    ) -> Dict[str, Any]:
+        """幂等初始化正式分类目录，不写入演示基金。"""
+        if not self._schema_ready():
+            raise RuntimeError("标准化基金分类表尚未完整部署")
+
+        from sqlalchemy import text
+
+        with self.engine.begin() as conn:
+            for family in strategy_families:
+                benchmark_policy = family.get("benchmark_policy") or {
+                    "catalogVersion": source,
+                    "rule": "explicit_benchmark_mapping_required",
+                }
+                peer_policy = family.get("peer_policy") or {
+                    "catalogVersion": source,
+                    "rule": "same_strategy_and_benchmark_only",
+                }
+                conn.execute(text("""
+                    INSERT INTO strategy_families (
+                        id, key, name, asset_class, active_passive, style_tags,
+                        benchmark_policy, peer_policy, source, updated_at
+                    ) VALUES (
+                        :id, :key, :name, :asset_class, :active_passive, :style_tags,
+                        CAST(:benchmark_policy AS jsonb), CAST(:peer_policy AS jsonb), :source, NOW()
+                    )
+                    ON CONFLICT (key) DO UPDATE SET
+                        name = EXCLUDED.name,
+                        asset_class = EXCLUDED.asset_class,
+                        active_passive = EXCLUDED.active_passive,
+                        style_tags = EXCLUDED.style_tags,
+                        benchmark_policy = EXCLUDED.benchmark_policy,
+                        peer_policy = EXCLUDED.peer_policy,
+                        source = EXCLUDED.source,
+                        updated_at = NOW()
+                """), {
+                    "id": family.get("id"),
+                    "key": family.get("key"),
+                    "name": family.get("name"),
+                    "asset_class": family.get("asset_class"),
+                    "active_passive": family.get("active_passive"),
+                    "style_tags": family.get("style_tags") or [],
+                    "benchmark_policy": json.dumps(benchmark_policy, ensure_ascii=False),
+                    "peer_policy": json.dumps(peer_policy, ensure_ascii=False),
+                    "source": source,
+                })
+
+            for peer_group in peer_groups:
+                strategy = conn.execute(text("""
+                    SELECT id, asset_class, active_passive
+                    FROM strategy_families
+                    WHERE key = :strategy_family_key
+                    LIMIT 1
+                """), {
+                    "strategy_family_key": peer_group.get("strategy_family_key"),
+                }).fetchone()
+                if not strategy:
+                    raise ValueError("catalog_strategy_family_missing")
+                strategy_row = dict(strategy._mapping)
+                if strategy_row.get("asset_class") != peer_group.get("asset_class"):
+                    raise ValueError("catalog_peer_asset_class_conflict")
+                if strategy_row.get("active_passive") != peer_group.get("active_passive"):
+                    raise ValueError("catalog_peer_active_passive_conflict")
+
+                conn.execute(text("""
+                    INSERT INTO peer_groups (
+                        id, key, name, strategy_family_id, asset_class, active_passive,
+                        benchmark_code, benchmark_name, inclusion_rules, exclusion_rules,
+                        minimum_peer_count, source, source_updated_at, updated_at
+                    ) VALUES (
+                        :id, :key, :name, :strategy_family_id, :asset_class, :active_passive,
+                        :benchmark_code, :benchmark_name, CAST(:inclusion_rules AS jsonb),
+                        CAST(:exclusion_rules AS jsonb), :minimum_peer_count, :source,
+                        :source_updated_at, NOW()
+                    )
+                    ON CONFLICT (key) DO UPDATE SET
+                        name = EXCLUDED.name,
+                        strategy_family_id = EXCLUDED.strategy_family_id,
+                        asset_class = EXCLUDED.asset_class,
+                        active_passive = EXCLUDED.active_passive,
+                        benchmark_code = EXCLUDED.benchmark_code,
+                        benchmark_name = EXCLUDED.benchmark_name,
+                        inclusion_rules = EXCLUDED.inclusion_rules,
+                        exclusion_rules = EXCLUDED.exclusion_rules,
+                        minimum_peer_count = EXCLUDED.minimum_peer_count,
+                        source = EXCLUDED.source,
+                        source_updated_at = EXCLUDED.source_updated_at,
+                        updated_at = NOW()
+                """), {
+                    "id": peer_group.get("id"),
+                    "key": peer_group.get("key"),
+                    "name": peer_group.get("name"),
+                    "strategy_family_id": strategy_row["id"],
+                    "asset_class": peer_group.get("asset_class"),
+                    "active_passive": peer_group.get("active_passive"),
+                    "benchmark_code": peer_group.get("benchmark_code"),
+                    "benchmark_name": peer_group.get("benchmark_name"),
+                    "inclusion_rules": json.dumps(peer_group.get("inclusion_rules") or {}, ensure_ascii=False),
+                    "exclusion_rules": json.dumps(peer_group.get("exclusion_rules") or {}, ensure_ascii=False),
+                    "minimum_peer_count": peer_group.get("minimum_peer_count") or 5,
+                    "source": source,
+                    "source_updated_at": date.today(),
+                })
+
+        self._schema_ready_cache = True
+        return {
+            "catalog_strategy_families": len(strategy_families),
+            "catalog_peer_groups": len(peer_groups),
+            "catalog_version": source,
+        }
+
     def apply_ingestion_plan(
         self,
         groups: List[Dict[str, Any]],
         source: str = "tushare_classification_ingestion",
+        reconcile: bool = False,
     ) -> Dict[str, Any]:
         """幂等写入高置信度实体、份额、同类组成员关系与基准映射。"""
-        if not groups:
+        if not groups and not reconcile:
             return {
                 "applied_groups": 0,
                 "applied_shares": 0,
                 "created_entities": 0,
                 "reused_entities": 0,
+                "deactivated_shares": 0,
+                "deactivated_entities": 0,
                 "conflicts": [],
             }
         if not self._schema_ready():
@@ -447,7 +565,15 @@ class FundClassificationRepo:
         applied_shares = 0
         created_entities = 0
         reused_entities = 0
+        deactivated_shares = 0
+        deactivated_entities = 0
         conflicts: List[Dict[str, Any]] = []
+        active_share_codes = [
+            str(share.get("wind_code"))
+            for group in groups
+            for share in group.get("shares") or []
+            if share.get("wind_code")
+        ]
 
         with self.engine.begin() as conn:
             for group in groups:
@@ -529,6 +655,7 @@ class FundClassificationRepo:
                                         strategy_family_id = :strategy_family_id,
                                         asset_class = :asset_class,
                                         active_passive = :active_passive,
+                                        lifecycle_stage = 'active',
                                         established_at = COALESCE(:established_at, established_at),
                                         source_updated_at = :source_updated_at,
                                         raw_data = COALESCE(raw_data, '{}'::jsonb) || CAST(:raw_data AS jsonb),
@@ -578,6 +705,8 @@ class FundClassificationRepo:
                             share_payload = {
                                 "source": "funds",
                                 "fundType": share.get("fund_type"),
+                                "investType": share.get("invest_type"),
+                                "contractType": share.get("contract_type"),
                                 "declaredBenchmark": share.get("declared_benchmark"),
                                 "normalizationRule": "trailing_share_class_suffix",
                             }
@@ -606,6 +735,10 @@ class FundClassificationRepo:
                                         WHEN fund_share_classes.source = :source THEN EXCLUDED.is_primary
                                         ELSE fund_share_classes.is_primary
                                     END,
+                                    status = CASE
+                                        WHEN fund_share_classes.source = :source THEN 'active'
+                                        ELSE fund_share_classes.status
+                                    END,
                                     source_updated_at = GREATEST(fund_share_classes.source_updated_at, EXCLUDED.source_updated_at),
                                     raw_data = COALESCE(fund_share_classes.raw_data, '{}'::jsonb) || EXCLUDED.raw_data,
                                     updated_at = NOW()
@@ -631,6 +764,17 @@ class FundClassificationRepo:
                             LIMIT 1
                         """), {"entity_id": entity_id, "source": source}).fetchone()
                         if not curated_membership:
+                            if reconcile:
+                                conn.execute(text("""
+                                    DELETE FROM peer_group_members
+                                    WHERE entity_id = :entity_id
+                                      AND source = :source
+                                      AND peer_group_id <> :peer_group_id
+                                """), {
+                                    "entity_id": entity_id,
+                                    "source": source,
+                                    "peer_group_id": peer_row["id"],
+                                })
                             member_id = "peer-member-auto-" + hashlib.sha1(
                                 f"{peer_row['id']}|{entity_id}".encode("utf-8")
                             ).hexdigest()[:20]
@@ -674,6 +818,19 @@ class FundClassificationRepo:
                             LIMIT 1
                         """), {"entity_id": entity_id, "source": source}).fetchone()
                         if not curated_mapping:
+                            if reconcile:
+                                conn.execute(text("""
+                                    UPDATE benchmark_mappings
+                                    SET status = 'inactive', updated_at = NOW()
+                                    WHERE entity_id = :entity_id
+                                      AND source = :source
+                                      AND benchmark_code <> :benchmark_code
+                                      AND status = 'active'
+                                """), {
+                                    "entity_id": entity_id,
+                                    "source": source,
+                                    "benchmark_code": group.get("benchmark_code"),
+                                })
                             mapping_id = "benchmark-auto-" + hashlib.sha1(
                                 f"{entity_id}|{group.get('benchmark_code')}|{effective_from}".encode("utf-8")
                             ).hexdigest()[:20]
@@ -725,12 +882,56 @@ class FundClassificationRepo:
                         "reason": str(error),
                     })
 
+            if reconcile:
+                deactivated_shares = conn.execute(text("""
+                    UPDATE fund_share_classes
+                    SET status = 'inactive', updated_at = NOW()
+                    WHERE source = :source
+                      AND status = 'active'
+                      AND wind_code <> ALL(:active_share_codes)
+                """), {
+                    "source": source,
+                    "active_share_codes": active_share_codes,
+                }).rowcount
+                deactivated_entities = conn.execute(text("""
+                    UPDATE fund_entities fe
+                    SET lifecycle_stage = 'inactive', updated_at = NOW()
+                    WHERE fe.source = :source
+                      AND fe.lifecycle_stage = 'active'
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM fund_share_classes fsc
+                          WHERE fsc.entity_id = fe.id
+                            AND fsc.status = 'active'
+                      )
+                """), {"source": source}).rowcount
+                conn.execute(text("""
+                    DELETE FROM peer_group_members pgm
+                    USING fund_entities fe
+                    WHERE pgm.entity_id = fe.id
+                      AND pgm.source = :source
+                      AND fe.source = :source
+                      AND fe.lifecycle_stage = 'inactive'
+                """), {"source": source})
+                conn.execute(text("""
+                    UPDATE benchmark_mappings bm
+                    SET status = 'inactive', updated_at = NOW()
+                    FROM fund_entities fe
+                    WHERE bm.entity_id = fe.id
+                      AND bm.source = :source
+                      AND fe.source = :source
+                      AND fe.lifecycle_stage = 'inactive'
+                      AND bm.status = 'active'
+                """), {"source": source})
+
         self._schema_ready_cache = True
         return {
             "applied_groups": applied_groups,
             "applied_shares": applied_shares,
             "created_entities": created_entities,
             "reused_entities": reused_entities,
+            "deactivated_shares": deactivated_shares,
+            "deactivated_entities": deactivated_entities,
             "conflicts": conflicts,
         }
 

@@ -39,6 +39,15 @@ npm install
 npm run dev
 ```
 
+已有真实基金基础数据后，生成标准分类和同类评价样本：
+
+```bash
+./scripts/update_fund_classification.sh --apply
+./scripts/update_fund_ranking_metrics.sh --peer-evaluation-coverage --limit 100
+```
+
+`start-local-postgres.sh` 默认不导入演示基金；只有显式设置 `SEED_COMPLETION_SAMPLE=1` 才导入验收样本。
+
 打开：
 
 - 找基金：`http://127.0.0.1:3000/discover`

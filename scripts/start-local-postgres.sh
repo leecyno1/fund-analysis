@@ -54,7 +54,7 @@ init_database()
 PY
   )
 
-  if [[ "${SEED_COMPLETION_SAMPLE:-1}" == "1" ]]; then
+  if [[ "${SEED_COMPLETION_SAMPLE:-0}" == "1" ]]; then
     echo "导入基金研究方法论配置"
     psql "$DATABASE_URL" -f "$ROOT_DIR/scripts/seed_methodology_config.sql"
     echo "导入完成验收样本数据"

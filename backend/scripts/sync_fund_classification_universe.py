@@ -3,7 +3,7 @@
 
 默认仅预览；传入 --apply 才写库。当前自动规则范围：
 - 法定类型明确的货币基金；
-- 合同基准明确为沪深300/中证500且名称不含增强策略的指数基金。
+- 投资类型为被动指数型，且合同基准能精确映射到目录中基准代码的基金。
 
 模糊类别不会猜测，也不会生成投资建议。
 """
@@ -67,7 +67,7 @@ def load_funds(limit: int, fund_type: str) -> List[Dict[str, Any]]:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="同步高置信度基金分类标准化数据")
+    parser = argparse.ArgumentParser(description="同步正式分类目录和高置信度基金分类")
     parser.add_argument("--apply", action="store_true", help="实际写入；默认只预览")
     parser.add_argument("--limit", type=int, default=0, help="最多读取基金数；0 表示不限制")
     parser.add_argument("--fund-type", choices=("all", "money", "index"), default="all")
@@ -94,7 +94,10 @@ def main() -> int:
         "skipped_examples": plan["skipped"][:max(args.skip_samples, 0)],
     }
     if args.apply:
-        output["write_result"] = service.apply_plan(plan)
+        output["write_result"] = service.apply_plan(
+            plan,
+            reconcile=args.limit == 0 and args.fund_type == "all",
+        )
     print(json.dumps(output, ensure_ascii=False, indent=2, default=str))
     return 0
 
