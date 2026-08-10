@@ -625,6 +625,7 @@ async def get_recommendation_candidates(
     """基于完整标准同类组返回证据充分的基金候选组。"""
     from repositories import get_manager_repo
     from services.fund_recommendation_service import FundRecommendationService
+    from services.fund_research_snapshot_service import FundResearchSnapshotService
 
     try:
         result = FundRecommendationService().build_candidate_group(
@@ -633,6 +634,8 @@ async def get_recommendation_candidates(
             limit=limit,
         )
         _attach_manager_summaries(result.get("candidates") or [], get_manager_repo())
+        for candidate in result.get("candidates") or []:
+            candidate["research_snapshot"] = FundResearchSnapshotService.candidate_snapshot(candidate)
         return _clean_nan(result)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -661,6 +664,31 @@ async def get_fund_evaluation(wind_code: str, window: str = Query("1y")):
         return _clean_nan(result)
     except Exception as exc:
         logger.error(f"Get fund evaluation error for {wind_code}: {exc}")
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.get("/{wind_code}/research-snapshot")
+async def get_fund_research_snapshot(
+    wind_code: str,
+    window: str = Query("1y"),
+    include_research: bool = Query(True),
+    include_attribution: bool = Query(False),
+):
+    """详情、推荐和 AI 共用的统一基金研究快照。"""
+    from services.fund_research_snapshot_service import FundResearchSnapshotService
+
+    try:
+        result = FundResearchSnapshotService().build(
+            wind_code,
+            window=window,
+            include_research=include_research,
+            include_attribution=include_attribution,
+        )
+        return _clean_nan(result)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except Exception as exc:
+        logger.error(f"Get fund research snapshot error for {wind_code}: {exc}")
         raise HTTPException(status_code=500, detail=str(exc))
 
 

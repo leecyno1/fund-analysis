@@ -448,59 +448,32 @@ async def generate_fund_evaluation_analysis(
     """按需生成基金评价分析：分类内评价为主，归因与纪要为证据。"""
     from service_registry import get_data_service, get_db
     from services.ai_report import get_report_generator
-    from services.fund_evaluation_service import FundEvaluationService
-    from services.performance_attribution_service import PerformanceAttributionService
+    from services.fund_research_snapshot_service import FundResearchSnapshotService
 
     data_svc = get_data_service()
     _reject_mock_data_source(data_svc, "基金评价")
     db = get_db()
 
     try:
-        fund_data = data_svc.get_fund_info(wind_code)
-        evaluation = FundEvaluationService().evaluate_fund(wind_code, window="1y")
-        try:
-            attribution_bundle = PerformanceAttributionService().analyze(wind_code)
-            factor_evidence = {
-                **(attribution_bundle.get("barra") or {}),
-                "supplementary_nav_factor": attribution_bundle.get("nav_factor_lens") or {},
-            }
-            attribution_evidence = {
-                **(attribution_bundle.get("brinson") or {}),
-                "supplementary_nav_return": attribution_bundle.get("nav_return_attribution") or {},
-            }
-        except Exception as attribution_error:
-            factor_evidence = {
-                "status": "insufficient_evidence",
-                "source": "evidence_gate",
-                "method": "barra_style_risk_model",
-                "missing_items": [f"Barra 风险证据不可用：{attribution_error.__class__.__name__}"],
-                "risk_contributions": [],
-            }
-            attribution_evidence = {
-                "status": "insufficient_evidence",
-                "source": "evidence_gate",
-                "method": "brinson_fachler",
-                "missing_items": [f"Brinson 归因不可用：{attribution_error.__class__.__name__}"],
-                "effects": [],
-            }
-
-        research_reports = []
-        if payload.include_research and db is not None:
-            try:
-                query = {"fund_ids": wind_code}
-                for doc in db.research_reports.find(query).sort("report_date", -1).limit(5):
-                    research_reports.append({
-                        "id": str(doc.get("_id", "")),
-                        "title": doc.get("title"),
-                        "report_date": doc.get("report_date"),
-                        "manager_name": doc.get("manager_name"),
-                        "summary": doc.get("summary", ""),
-                        "key_points": doc.get("key_points", []),
-                        "classifications": doc.get("classifications", []),
-                        "style_labels": doc.get("style_labels", []),
-                    })
-            except Exception as memo_error:
-                logger.warning(f"Research memos unavailable for evaluation analysis {wind_code}: {memo_error}")
+        snapshot = FundResearchSnapshotService().build(
+            wind_code,
+            window="1y",
+            include_research=payload.include_research,
+            include_attribution=True,
+            research_limit=5,
+        )
+        fund_data = snapshot.get("fund") or {}
+        evaluation = snapshot.get("evaluation") or {}
+        attribution_bundle = snapshot.get("attribution") or {}
+        factor_evidence = {
+            **(attribution_bundle.get("barra") or {}),
+            "supplementary_nav_factor": attribution_bundle.get("nav_factor_lens") or {},
+        }
+        attribution_evidence = {
+            **(attribution_bundle.get("brinson") or {}),
+            "supplementary_nav_return": attribution_bundle.get("nav_return_attribution") or {},
+        }
+        research_reports = (snapshot.get("research_memos") or {}).get("items") or []
 
         generator = get_report_generator()
         generation_mode = "llm_evaluation_evidence"
@@ -531,11 +504,8 @@ async def generate_fund_evaluation_analysis(
             "report_type": "fund_evaluation_analysis",
             "content": report_content,
             "data_sources": {
-                "source": "fund_evaluation+performance_attribution+research_memos",
-                "fund": fund_data,
-                "evaluation": evaluation,
-                "factor_evidence": factor_evidence,
-                "attribution_evidence": attribution_evidence,
+                "source": "fund_research_snapshot",
+                "research_snapshot": snapshot,
                 "generation_mode": generation_mode,
                 "research_reports_count": len(research_reports),
             },

@@ -94,28 +94,27 @@ function normalizeEvaluation(payload: unknown): FundEvaluation {
 async function loadFundDetail(code: string) {
   const endDate = new Date().toISOString().slice(0, 10)
   const navParams = new URLSearchParams({ start_date: dateYearsAgo(3), end_date: endDate })
-  const memoParams = new URLSearchParams({ fund_id: code, page: '1', page_size: '6' })
-  const [detailResult, evaluationResult, navResult, memoResult] = await Promise.allSettled([
-    fetch(`${backendApiBaseUrl}/api/funds/${encodeURIComponent(code)}`, { cache: 'no-store' }),
-    fetch(`${backendApiBaseUrl}/api/funds/${encodeURIComponent(code)}/evaluation?window=1y`, { cache: 'no-store' }),
+  const [snapshotResult, navResult] = await Promise.allSettled([
+    fetch(`${backendApiBaseUrl}/api/funds/${encodeURIComponent(code)}/research-snapshot?window=1y&include_research=true&include_attribution=false`, { cache: 'no-store' }),
     fetch(`${backendApiBaseUrl}/api/funds/${encodeURIComponent(code)}/nav?${navParams.toString()}`, { cache: 'no-store' }),
-    fetch(`${backendApiBaseUrl}/api/research-reports/?${memoParams.toString()}`, { cache: 'no-store' }),
   ])
 
-  if (detailResult.status !== 'fulfilled' || !detailResult.value.ok) return null
+  if (snapshotResult.status !== 'fulfilled' || !snapshotResult.value.ok) return null
 
-  const detailPayload = await detailResult.value.json().catch(() => ({}))
-  const fund = toCamelFund(asRecord(asRecord(detailPayload).fund || detailPayload)) as CamelFund
-
-  const evaluationPayload = evaluationResult.status === 'fulfilled' && evaluationResult.value.ok
-    ? await evaluationResult.value.json().catch(() => ({}))
-    : {}
+  const snapshotPayload = asRecord(await snapshotResult.value.json().catch(() => ({})))
+  const evaluationPayload = asRecord(snapshotPayload.evaluation)
+  const fund = toCamelFund({
+    ...asRecord(snapshotPayload.fund),
+    managers: snapshotPayload.managers,
+    research_profile: snapshotPayload.research_profile,
+    rolling_metrics: snapshotPayload.rolling_metrics,
+    data_quality: snapshotPayload.data_quality,
+    professional_scoring: asRecord(evaluationPayload.evaluation),
+  }) as CamelFund
   const navPayload = navResult.status === 'fulfilled' && navResult.value.ok
     ? asRecord(await navResult.value.json().catch(() => ({})))
     : {}
-  const memoPayload = memoResult.status === 'fulfilled' && memoResult.value.ok
-    ? asRecord(await memoResult.value.json().catch(() => ({})))
-    : {}
+  const memoPayload = asRecord(snapshotPayload.research_memos)
 
   const nav = (Array.isArray(navPayload.data) ? navPayload.data : [])
     .map((value) => {
@@ -125,7 +124,7 @@ async function loadFundDetail(code: string) {
     .filter((point: FundNavPoint) => point.date && Number.isFinite(point.nav) && point.nav > 0)
     .sort((left: FundNavPoint, right: FundNavPoint) => left.date.localeCompare(right.date))
 
-  const researchMemos: FundResearchMemo[] = (Array.isArray(memoPayload.data) ? memoPayload.data : []).map((value) => {
+  const researchMemos: FundResearchMemo[] = (Array.isArray(memoPayload.items) ? memoPayload.items : []).map((value) => {
     const memo = asRecord(value)
     return {
       id: textValue(memo.id),

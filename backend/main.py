@@ -29,7 +29,7 @@ import uuid
 import json
 
 from routes import funds, managers, scoring, reports, research_reports, research_memos, research_folders, screening
-from routes import attribution, barra, brinson, export, data_sync, data_health, metrics, fund_pools, alerts, investment_analysis
+from routes import attribution, barra, brinson, export, data_sync, data_health, metrics, fund_pools, alerts, investment_analysis, fund_browser
 from service_registry import get_data_service, get_scoring_engine, get_db
 
 logging.basicConfig(
@@ -141,6 +141,7 @@ app.add_middleware(
 )
 
 app.include_router(funds.router, tags=["基金"])
+app.include_router(fund_browser.router, tags=["基金浏览器"])
 app.include_router(managers.router, tags=["基金经理"])
 app.include_router(scoring.router, tags=["评分系统"])
 app.include_router(reports.router, tags=["AI报告"])

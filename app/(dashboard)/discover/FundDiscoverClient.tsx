@@ -90,7 +90,7 @@ export default function FundDiscoverClient({ initialFunds, initialCategories, in
           </div>
           <div className="flex items-center gap-3 text-sm text-[#65716b]">
             <span className="rounded-sm bg-[#e7eee9] px-3 py-2 font-semibold text-[#245c49]">{total.toLocaleString('zh-CN')} 只基金</span>
-            <span className="hidden sm:inline">来源：{initialSource === 'database' ? '本地数据库' : initialSource}</span>
+            <span className="hidden sm:inline">来源：{['database', 'fund_database'].includes(initialSource) ? '本地数据库' : initialSource}</span>
           </div>
         </div>
 

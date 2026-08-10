@@ -1,6 +1,27 @@
 import { NextResponse } from 'next/server'
 import { backendApiBaseUrl, toCamelFund } from '@/lib/backend-api'
 
+type UnknownRecord = Record<string, unknown>
+
+function asRecord(value: unknown): UnknownRecord {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as UnknownRecord : {}
+}
+
+function toRecommendationFund(value: unknown) {
+  const candidate = asRecord(value)
+  const snapshot = asRecord(candidate.research_snapshot)
+  const snapshotEvaluation = asRecord(snapshot.evaluation)
+  return toCamelFund({
+    ...candidate,
+    ...asRecord(snapshot.fund),
+    managers: snapshot.managers ?? candidate.managers,
+    research_profile: snapshot.research_profile ?? candidate.research_profile,
+    rolling_metrics: snapshot.rolling_metrics ?? candidate.rolling_metrics,
+    professional_scoring: asRecord(snapshotEvaluation.evaluation),
+    recommendation_evidence: snapshot.recommendation_evidence ?? candidate.recommendation_evidence,
+  })
+}
+
 export async function GET(request: Request) {
   const url = new URL(request.url)
   const category = url.searchParams.get('category')?.trim() || ''
@@ -17,7 +38,7 @@ export async function GET(request: Request) {
     if (!response.ok) throw new Error(payload.detail?.message || payload.detail || '基金数据库不可用')
 
     return NextResponse.json({
-      data: ((payload.candidates || []) as Record<string, unknown>[]).map(toCamelFund),
+      data: ((payload.candidates || []) as Record<string, unknown>[]).map(toRecommendationFund),
       category,
       style: style || null,
       peerUniverseCount: Number(payload.peer_universe_count || 0),

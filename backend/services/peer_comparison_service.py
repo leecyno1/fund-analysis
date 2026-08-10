@@ -38,11 +38,26 @@ class PeerComparisonService:
         self._fund_repo_adapter = fund_repo
         self._profile_repo_adapter = profile_repo
 
-    def build_peer_percentiles(self, wind_code: str, window: str = "1y") -> Dict[str, Any]:
-        target, peer_funds, peer_group_source = self._peer_universe(wind_code)
+    def build_peer_percentiles(
+        self,
+        wind_code: str,
+        window: str = "1y",
+        target_context: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        if target_context is None:
+            target, peer_funds, peer_group_source = self._peer_universe(wind_code)
+        else:
+            target, peer_funds, peer_group_source = self._peer_universe(wind_code, target_context)
         target_id = target.get("wind_code") or wind_code
         peer_codes = [fund["wind_code"] for fund in peer_funds if fund.get("wind_code")]
-        metric_map = self._metric_map(peer_codes, peer_funds)
+        if target_context and target_context.get("metric_panel") is not None:
+            metric_map = self._metric_map(
+                peer_codes,
+                peer_funds,
+                {target_id: target_context["metric_panel"]},
+            )
+        else:
+            metric_map = self._metric_map(peer_codes, peer_funds)
         target_profile = target.get("research_profile") or {}
         classification = target.get("classification") or self.classification_service.classify(target, target_profile)
         evaluation_profile_key = classification.get("evaluation_profile_key")
@@ -221,16 +236,27 @@ class PeerComparisonService:
             },
         }
 
-    def _peer_universe(self, wind_code: str) -> Tuple[Dict[str, Any], List[Dict[str, Any]], str]:
+    def _peer_universe(
+        self,
+        wind_code: str,
+        target_context: Optional[Dict[str, Any]] = None,
+    ) -> Tuple[Dict[str, Any], List[Dict[str, Any]], str]:
         fund_repo = self._get_fund_repo()
         profile_repo = self._get_profile_repo()
-        target = fund_repo.get_fund_by_identifier(wind_code) or {"wind_code": wind_code}
+        context = target_context or {}
+        target = dict(context.get("fund") or fund_repo.get_fund_by_identifier(wind_code) or {"wind_code": wind_code})
         target_code = target.get("wind_code") or wind_code
-        target_profile = profile_repo.get_profile(target_code) or {}
+        target_profile = context.get("profile") or profile_repo.get_profile(target_code) or {}
         target["research_profile"] = target_profile
-        standardized_context = self._get_classification_adapter().get_classification_context(target_code)
+        standardized_context = context.get("standardized_classification")
+        if standardized_context is None:
+            standardized_context = self._get_classification_adapter().get_classification_context(target_code)
         target["standardized_classification"] = standardized_context
-        classification = self.classification_service.classify(target, target_profile, standardized_context)
+        classification = context.get("classification") or self.classification_service.classify(
+            target,
+            target_profile,
+            standardized_context,
+        )
         target["classification"] = classification
 
         if standardized_context.get("status") == "resolved":
@@ -322,15 +348,22 @@ class PeerComparisonService:
             self._profile_repo_adapter = get_research_profile_repo()
         return self._profile_repo_adapter
 
-    def _metric_map(self, wind_codes: List[str], fund_rows: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Dict[str, Dict[str, float]]]:
+    def _metric_map(
+        self,
+        wind_codes: List[str],
+        fund_rows: Optional[List[Dict[str, Any]]] = None,
+        preloaded_panels: Optional[Dict[str, List[Dict[str, Any]]]] = None,
+    ) -> Dict[str, Dict[str, Dict[str, float]]]:
         from repositories import get_metric_snapshot_repo
 
         repo = get_metric_snapshot_repo()
         fund_map = {fund.get("wind_code"): fund for fund in (fund_rows or []) if fund.get("wind_code")}
-        batch_panels = repo.get_latest_panels("fund", wind_codes)
+        loaded_panels = preloaded_panels or {}
+        missing_codes = [code for code in wind_codes if code not in loaded_panels]
+        batch_panels = repo.get_latest_panels("fund", missing_codes) if missing_codes else {}
         return {
             code: self._merge_metric_windows(
-                self._metrics_by_window(batch_panels.get(code, [])),
+                self._metrics_by_window(loaded_panels.get(code, batch_panels.get(code, []))),
                 self._fund_fallback_metrics(fund_map.get(code, {})),
             )
             for code in wind_codes

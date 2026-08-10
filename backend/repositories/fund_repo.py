@@ -5,7 +5,7 @@ import os
 import math
 import json
 import numbers
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime, date
 import logging
 
@@ -209,6 +209,43 @@ class FundRepo:
         except Exception as e:
             logger.error(f"get_fund_by_identifier error: {e}")
             return None
+
+    def browse_funds(
+        self,
+        keyword: Optional[str] = None,
+        page: int = 1,
+        page_size: int = 30,
+    ) -> Tuple[List[Dict[str, Any]], int]:
+        """基金浏览器只读取基金研究基础事实，不连接销售规则或投资处置表。"""
+        from sqlalchemy import text
+
+        normalized_keyword = str(keyword or "").strip()
+        params = {
+            "keyword": normalized_keyword,
+            "keyword_pattern": f"%{normalized_keyword}%",
+            "limit": max(1, min(int(page_size), 100)),
+            "offset": max(0, int(page) - 1) * max(1, min(int(page_size), 100)),
+        }
+        where_sql = """
+            :keyword = ''
+            OR name ILIKE :keyword_pattern
+            OR wind_code ILIKE :keyword_pattern
+        """
+        data_sql = text(f"""
+            SELECT
+                id, wind_code, name, type, manager_ids, total_asset, nav, nav_date,
+                establishment_date, performance_data, risk_metrics, raw_data,
+                updated_at
+            FROM funds
+            WHERE {where_sql}
+            ORDER BY updated_at DESC NULLS LAST, wind_code ASC
+            LIMIT :limit OFFSET :offset
+        """)
+        count_sql = text(f"SELECT COUNT(*) FROM funds WHERE {where_sql}")
+        with self.engine.connect() as conn:
+            rows = conn.execute(data_sql, params).fetchall()
+            total = int(conn.execute(count_sql, params).scalar() or 0)
+        return [dict(row._mapping) for row in rows], total
 
     def list_funds(
         self,

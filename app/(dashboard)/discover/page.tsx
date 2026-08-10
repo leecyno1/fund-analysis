@@ -6,7 +6,7 @@ export const dynamic = 'force-dynamic'
 async function loadFunds() {
   try {
     const [fundResponse, categoryResponse] = await Promise.all([
-      fetch(`${backendApiBaseUrl}/api/funds?page=1&page_size=30&sort_by=updated_at&sort_order=desc`, { cache: 'no-store' }),
+      fetch(`${backendApiBaseUrl}/api/fund-browser?page=1&page_size=30`, { cache: 'no-store' }),
       fetch(`${backendApiBaseUrl}/api/funds/recommendation-categories?limit=100`, { cache: 'no-store' }),
     ])
     if (!fundResponse.ok || !categoryResponse.ok) throw new Error('fund database unavailable')
@@ -20,7 +20,7 @@ async function loadFunds() {
         count: Number(item.fund_count || 0),
       })).filter((item: { id: string; name: string }) => item.id && item.name),
       total: Number(payload.total || 0),
-      source: String(payload.source || 'database'),
+      source: String(payload.source || 'fund_database'),
       error: '',
     }
   } catch {

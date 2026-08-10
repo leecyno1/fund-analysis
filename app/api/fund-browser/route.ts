@@ -10,21 +10,11 @@ export async function GET(request: Request) {
   const limit = Math.max(1, Math.min(Number(url.searchParams.get('limit') || 30), 100))
 
   try {
-    const backendUrl = peerGroup
-      ? new URL('/api/funds/peer-group-universe', backendApiBaseUrl)
-      : new URL('/api/funds', backendApiBaseUrl)
-
-    if (peerGroup) {
-      backendUrl.searchParams.set('peer_group', peerGroup)
-      backendUrl.searchParams.set('limit', String(limit))
-      if (keyword) backendUrl.searchParams.set('keyword', keyword)
-    } else {
-      backendUrl.searchParams.set('page', '1')
-      backendUrl.searchParams.set('page_size', String(limit))
-      backendUrl.searchParams.set('sort_by', 'updated_at')
-      backendUrl.searchParams.set('sort_order', 'desc')
-      if (keyword) backendUrl.searchParams.set('keyword', keyword)
-    }
+    const backendUrl = new URL('/api/fund-browser', backendApiBaseUrl)
+    backendUrl.searchParams.set('page', '1')
+    backendUrl.searchParams.set('page_size', String(limit))
+    if (peerGroup) backendUrl.searchParams.set('peer_group', peerGroup)
+    if (keyword) backendUrl.searchParams.set('keyword', keyword)
 
     const response = await fetch(backendUrl, { cache: 'no-store' })
     const payload = await response.json().catch(() => ({}))
@@ -40,7 +30,7 @@ export async function GET(request: Request) {
         total: Number(payload.total || sourceFunds.length),
       },
       peerGroup,
-      source: peerGroup ? 'standardized_peer_group_universe' : String(payload.source || 'database'),
+      source: String(payload.source || 'fund_database'),
     })
   } catch (error) {
     return NextResponse.json(

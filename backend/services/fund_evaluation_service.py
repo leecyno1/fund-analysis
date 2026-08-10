@@ -21,8 +21,66 @@ class FundEvaluationService:
         )
 
     def evaluate_fund(self, wind_code: str, window: str = "1y") -> Dict[str, Any]:
-        scoring = self.scoring_service.score_fund(wind_code)
-        peer = self.peer_comparison_service.build_peer_percentiles(wind_code, window=window)
+        if not hasattr(self.scoring_service, "score_from_inputs"):
+            return self._assemble(
+                self.scoring_service.score_fund(wind_code),
+                self.peer_comparison_service.build_peer_percentiles(wind_code, window=window),
+                wind_code,
+                window,
+            )
+        return self.evaluate_from_context(self.load_context(wind_code), window=window)
+
+    def load_context(self, wind_code: str) -> Dict[str, Any]:
+        """一次读取基金评价所需事实，供详情、推荐和 AI 共用。"""
+        from repositories import (
+            get_fund_classification_repo,
+            get_fund_repo,
+            get_metric_snapshot_repo,
+            get_research_profile_repo,
+        )
+
+        fund = get_fund_repo().get_fund_by_identifier(wind_code) or {}
+        resolved_code = fund.get("wind_code") or wind_code
+        profile = get_research_profile_repo().get_profile(resolved_code) or {}
+        panel = get_metric_snapshot_repo().get_latest_panel("fund", resolved_code)
+        quality = self.scoring_service.data_quality_service.evaluate_fund(resolved_code)
+        standardized_classification = get_fund_classification_repo().get_classification_context(resolved_code)
+        return {
+            "found": bool(fund),
+            "fund": fund or {"wind_code": resolved_code},
+            "profile": profile,
+            "metric_panel": panel,
+            "data_quality": quality,
+            "standardized_classification": standardized_classification,
+        }
+
+    def evaluate_from_context(self, context: Dict[str, Any], window: str = "1y") -> Dict[str, Any]:
+        fund = context.get("fund") or {}
+        wind_code = fund.get("wind_code") or "unknown"
+        scoring = self.scoring_service.score_from_inputs(
+            fund,
+            context.get("profile") or {},
+            context.get("metric_panel") or [],
+            context.get("data_quality") or {},
+            context.get("standardized_classification") or {},
+        )
+        peer = self.peer_comparison_service.build_peer_percentiles(
+            wind_code,
+            window=window,
+            target_context={
+                **context,
+                "classification": scoring.get("classification") or {},
+            },
+        )
+        return self._assemble(scoring, peer, wind_code, window)
+
+    def _assemble(
+        self,
+        scoring: Dict[str, Any],
+        peer: Dict[str, Any],
+        wind_code: str,
+        window: str,
+    ) -> Dict[str, Any]:
         classification = scoring.get("classification") or peer.get("classification") or {
             "status": "insufficient_evidence",
             "missing_items": ["基金分类结果缺失"],

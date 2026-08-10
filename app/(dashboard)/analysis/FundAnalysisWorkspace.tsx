@@ -165,8 +165,8 @@ export default function FundAnalysisWorkspace({ initialFund = null }: { initialF
     const timer = globalThis.setTimeout(async () => {
       setFundLoading(true)
       try {
-        const params = new URLSearchParams({ search: query.trim(), page: '1', limit: '10' })
-        const response = await fetch(`/api/funds?${params.toString()}`, { cache: 'no-store' })
+        const params = new URLSearchParams({ search: query.trim(), limit: '10' })
+        const response = await fetch(`/api/fund-browser?${params.toString()}`, { cache: 'no-store' })
         const payload = await response.json().catch(() => ({}))
         setFunds(response.ok && Array.isArray(payload.data) ? payload.data : [])
       } finally {

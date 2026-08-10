@@ -6,7 +6,7 @@ export const dynamic = 'force-dynamic'
 async function loadRecommendationUniverse() {
   try {
     const [fundResponse, categoryResponse] = await Promise.all([
-      fetch(`${backendApiBaseUrl}/api/funds?page=1&page_size=30&sort_by=updated_at&sort_order=desc`, { cache: 'no-store' }),
+      fetch(`${backendApiBaseUrl}/api/fund-browser?page=1&page_size=30`, { cache: 'no-store' }),
       fetch(`${backendApiBaseUrl}/api/funds/recommendation-categories?limit=100`, { cache: 'no-store' }),
     ])
     if (!fundResponse.ok || !categoryResponse.ok) throw new Error('fund database unavailable')
