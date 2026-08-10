@@ -13,6 +13,9 @@ logger = logging.getLogger(__name__)
 class PerformanceAttributionService:
     """面向基金详情与 AI 分析的统一归因入口。"""
 
+    def __init__(self, classification_adapter: Optional[Any] = None):
+        self._classification_adapter = classification_adapter
+
     def analyze(
         self,
         wind_code: str,
@@ -35,7 +38,8 @@ class PerformanceAttributionService:
             raise ValueError("quarter must use YYYYQ1-YYYYQ4, for example 2026Q2")
         attribution_quarter = normalized_quarter or self._latest_completed_quarter()
         holding_quarter = self._previous_quarter(attribution_quarter)
-        benchmark_code = self._benchmark_code(benchmark, fund)
+        classification_context = self._get_classification_adapter().get_classification_context(fund_code) or {}
+        benchmark_code, benchmark_source = self._resolve_benchmark(benchmark, classification_context)
         data_service = get_data_service()
         holdings = data_service.get_fund_holdings(fund_code, holding_quarter)
 
@@ -66,15 +70,22 @@ class PerformanceAttributionService:
             lambda: investment_analysis.factor_lens(fund_code, start_date, end_date),
             "净值行为因子证据不可用",
         )
-        nav_attribution = self._safe_analysis(
-            lambda: investment_analysis.advanced_attribution(
-                fund_code,
-                benchmark=benchmark_code,
-                start_date=start_date,
-                end_date=end_date,
-            ),
-            "净值主动收益解释不可用",
-        )
+        if benchmark_code:
+            nav_attribution = self._safe_analysis(
+                lambda: investment_analysis.advanced_attribution(
+                    fund_code,
+                    benchmark=benchmark_code,
+                    start_date=start_date,
+                    end_date=end_date,
+                ),
+                "净值主动收益解释不可用",
+            )
+        else:
+            nav_attribution = {
+                "status": "insufficient_evidence",
+                "source": "standardized_classification_gate",
+                "missing_items": ["基金分类目录缺少有效基准，不能计算主动收益。"],
+            }
         nav_factor["method"] = "nav_behavior_factor_lens"
         nav_factor["is_barra"] = False
         nav_attribution["method"] = "nav_return_attribution"
@@ -99,6 +110,7 @@ class PerformanceAttributionService:
             "quarter": attribution_quarter,
             "holding_snapshot_quarter": holding_quarter,
             "benchmark": benchmark_code,
+            "benchmark_source": benchmark_source,
             "barra": barra,
             "brinson": brinson,
             "nav_factor_lens": nav_factor,
@@ -107,6 +119,7 @@ class PerformanceAttributionService:
                 "formal_models": ["Barra style/risk exposure", "Brinson-Fachler industry attribution"],
                 "supplementary_models": ["NAV behavior factor lens", "NAV active-return decomposition"],
                 "rule": "净值行为解释不得标记为 Barra 或 Brinson。",
+                "benchmark_rule": "默认基准只来自基金分类目录；用户可在单次分析中显式覆盖。",
             },
         }
 
@@ -168,7 +181,7 @@ class PerformanceAttributionService:
         data_service: Any,
         fund: Dict[str, Any],
         holdings: List[Dict[str, Any]],
-        benchmark_code: str,
+        benchmark_code: Optional[str],
         attribution_quarter: str,
         holding_quarter: str,
     ) -> Dict[str, Any]:
@@ -180,6 +193,13 @@ class PerformanceAttributionService:
                 holding_quarter,
                 ["货币或债券基金不适用当前股票行业 Brinson 归因。"],
                 status="not_applicable",
+            )
+        if not benchmark_code:
+            return self._missing_brinson(
+                benchmark_code,
+                attribution_quarter,
+                holding_quarter,
+                ["基金分类目录缺少有效基准，不能计算 Brinson 行业归因。"],
             )
         if not holdings:
             return self._missing_brinson(
@@ -411,7 +431,7 @@ class PerformanceAttributionService:
 
     def _missing_brinson(
         self,
-        benchmark_code: str,
+        benchmark_code: Optional[str],
         attribution_quarter: str,
         holding_quarter: str,
         missing_items: List[str],
@@ -433,20 +453,29 @@ class PerformanceAttributionService:
             "missing_items": missing_items,
         }
 
-    def _benchmark_code(self, benchmark: Optional[str], fund: Dict[str, Any]) -> str:
+    def _resolve_benchmark(
+        self,
+        benchmark: Optional[str],
+        classification_context: Dict[str, Any],
+    ) -> Tuple[Optional[str], str]:
         value = str(benchmark or "").strip().upper()
         if not value:
-            name = str(fund.get("name") or "")
-            if "中证1000" in name:
-                value = "000852.SH"
-            elif "中证500" in name:
-                value = "000905.SH"
-            else:
-                value = "000300.SH"
+            mapping = classification_context.get("benchmark_mapping") or {}
+            value = str(mapping.get("benchmark_code") or "").strip().upper()
+            source = "fund_classification_catalog" if value else "missing_classification_benchmark"
+        else:
+            source = "user_override"
         if re.fullmatch(r"\d{6}", value):
             suffix = ".SZ" if value.startswith("399") else ".SH"
-            return f"{value}{suffix}"
-        return value
+            value = f"{value}{suffix}"
+        return (value or None), source
+
+    def _get_classification_adapter(self):
+        if self._classification_adapter is None:
+            from repositories import get_fund_classification_repo
+
+            self._classification_adapter = get_fund_classification_repo()
+        return self._classification_adapter
 
     def _normalize_quarter(self, quarter: Optional[str]) -> Optional[str]:
         value = str(quarter or "").strip().upper()

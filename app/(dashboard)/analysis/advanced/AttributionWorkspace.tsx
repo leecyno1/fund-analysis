@@ -69,7 +69,8 @@ type AttributionBundle = {
   status: Status
   quarter: string
   holding_snapshot_quarter: string
-  benchmark: string
+  benchmark?: string | null
+  benchmark_source?: 'fund_classification_catalog' | 'user_override' | 'missing_classification_benchmark'
   fund?: { wind_code?: string; name?: string; type?: string }
   barra: BarraEvidence
   brinson: BrinsonEvidence
@@ -161,7 +162,7 @@ export default function AttributionWorkspace({
       <section className="border border-[#dbe1dc] bg-white p-5 sm:p-6">
         <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_13rem_11rem_auto] md:items-end">
           <label className="block text-sm font-bold">基金代码<input value={fundCode} onChange={(event) => setFundCode(event.target.value)} className="mt-2 h-11 w-full rounded-md border border-[#cfd6d0] px-3 text-sm uppercase outline-none focus:border-[#28745c]" /></label>
-          <label className="block text-sm font-bold">比较基准<select value={benchmark} onChange={(event) => setBenchmark(event.target.value)} className="mt-2 h-11 w-full rounded-md border border-[#cfd6d0] bg-white px-3 text-sm outline-none focus:border-[#28745c]"><option value="000300.SH">沪深300</option><option value="000905.SH">中证500</option><option value="000852.SH">中证1000</option></select></label>
+          <label className="block text-sm font-bold">比较基准<select value={benchmark} onChange={(event) => setBenchmark(event.target.value)} className="mt-2 h-11 w-full rounded-md border border-[#cfd6d0] bg-white px-3 text-sm outline-none focus:border-[#28745c]"><option value="">自动使用基金分类基准</option><option value="000300.SH">沪深300</option><option value="000905.SH">中证500</option><option value="000852.SH">中证1000</option></select></label>
           <label className="block text-sm font-bold">归因季度<input value={quarter} onChange={(event) => setQuarter(event.target.value.toUpperCase())} placeholder="2026Q2" className="mt-2 h-11 w-full rounded-md border border-[#cfd6d0] px-3 text-sm uppercase outline-none focus:border-[#28745c]" /></label>
           <button type="button" onClick={() => void runAttribution()} disabled={loading} className="inline-flex h-11 items-center justify-center gap-2 rounded-md bg-[#173f35] px-5 text-sm font-bold text-white hover:bg-[#225747] disabled:opacity-50">{loading ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}{loading ? '正在计算' : '运行业绩归因'}</button>
         </div>
@@ -175,7 +176,7 @@ export default function AttributionWorkspace({
           <section className="grid overflow-hidden border border-[#dbe1dc] bg-white sm:grid-cols-4">
             <div className="p-5"><div className="text-xs text-[#748079]">基金</div><div className="mt-2 font-bold">{result.fund?.name || result.fund?.wind_code}</div><div className="mt-1 text-xs text-[#7a8580]">{result.fund?.wind_code} · {result.fund?.type}</div></div>
             <div className="border-t border-[#e3e7e4] p-5 sm:border-l sm:border-t-0"><div className="text-xs text-[#748079]">归因季度</div><div className="mt-2 font-bold">{result.quarter}</div><div className="mt-1 text-xs text-[#7a8580]">持仓快照 {result.holding_snapshot_quarter}</div></div>
-            <div className="border-t border-[#e3e7e4] p-5 sm:border-l sm:border-t-0"><div className="text-xs text-[#748079]">基准</div><div className="mt-2 font-bold">{result.benchmark}</div><div className="mt-1 text-xs text-[#7a8580]">用户选择口径</div></div>
+            <div className="border-t border-[#e3e7e4] p-5 sm:border-l sm:border-t-0"><div className="text-xs text-[#748079]">基准</div><div className="mt-2 font-bold">{result.benchmark || '待补'}</div><div className="mt-1 text-xs text-[#7a8580]">{result.benchmark_source === 'user_override' ? '本次手动指定' : result.benchmark_source === 'fund_classification_catalog' ? '来自基金分类目录' : '分类目录尚未配置'}</div></div>
             <div className="border-t border-[#e3e7e4] p-5 sm:border-l sm:border-t-0"><div className="text-xs text-[#748079]">综合状态</div><div className="mt-3"><StatusBadge status={result.status} /></div></div>
           </section>
 

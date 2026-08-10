@@ -541,6 +541,8 @@ async def generate_fund_evaluation_analysis(
                 "evaluation_status": evaluation.get("status"),
                 "factor_status": factor_evidence.get("status"),
                 "attribution_status": attribution_evidence.get("status"),
+                "attribution_benchmark": attribution_bundle.get("benchmark"),
+                "attribution_benchmark_source": attribution_bundle.get("benchmark_source"),
             },
         }
     except HTTPException:

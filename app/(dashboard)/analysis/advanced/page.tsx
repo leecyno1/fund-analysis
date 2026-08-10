@@ -15,7 +15,7 @@ export default async function PerformanceAttributionPage({
   return (
     <AttributionWorkspace
       initialFundCode={query.fundCode || '000051.OF'}
-      initialBenchmark={query.benchmark || '000300.SH'}
+      initialBenchmark={query.benchmark || ''}
       initialQuarter={query.quarter || latestCompletedQuarter()}
     />
   )

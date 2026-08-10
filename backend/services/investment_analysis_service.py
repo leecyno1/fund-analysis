@@ -30,6 +30,9 @@ class InvestmentAnalysisService:
         "qdii": 0.80,
     }
 
+    def __init__(self, market_data_adapter: Optional[Any] = None):
+        self._market_data_adapter = market_data_adapter
+
     def factor_lens(
         self,
         wind_code: str,
@@ -77,7 +80,14 @@ class InvestmentAnalysisService:
     ) -> Dict[str, Any]:
         fund = self._get_fund(wind_code)
         fund_returns = self._returns(fund["wind_code"], start_date, end_date)
-        benchmark_returns, benchmark_label, benchmark_source = self._benchmark_returns(fund, benchmark, start_date, end_date)
+        effective_start = start_date or (min(fund_returns) if fund_returns else None)
+        effective_end = end_date or (max(fund_returns) if fund_returns else None)
+        benchmark_returns, benchmark_label, benchmark_source = self._benchmark_returns(
+            fund,
+            benchmark,
+            effective_start,
+            effective_end,
+        )
         shared_dates = sorted(set(fund_returns) & set(benchmark_returns))
         if len(shared_dates) < 2:
             return self._insufficient_attribution(
@@ -188,6 +198,10 @@ class InvestmentAnalysisService:
             direct = self._returns(benchmark, start_date, end_date)
             if len(direct) >= 2:
                 return direct, benchmark, "nav_series"
+            market_series = self._market_benchmark_returns(benchmark, start_date, end_date)
+            if len(market_series) >= 2:
+                return market_series, benchmark, "market_data_adapter"
+            return {}, benchmark, "benchmark_series_unavailable"
 
         fund_type = fund.get("type")
         peer_returns = []
@@ -208,6 +222,38 @@ class InvestmentAnalysisService:
                 }, f"{fund_type or 'fund'}_peer_average", "peer_average"
 
         return {}, f"{fund_type or 'fund'}_peer_average", "insufficient_benchmark_evidence"
+
+    def _market_benchmark_returns(
+        self,
+        benchmark: str,
+        start_date: Optional[str],
+        end_date: Optional[str],
+    ) -> Dict[str, float]:
+        if not start_date or not end_date:
+            return {}
+        rows = self._get_market_data_adapter().get_benchmark_nav(benchmark, start_date, end_date)
+        points = []
+        for row in rows or []:
+            item_date = str(row.get("date") or "")[:10]
+            nav = row.get("nav")
+            try:
+                if item_date and nav is not None:
+                    points.append((item_date, float(Decimal(str(nav)))))
+            except Exception:
+                continue
+        points.sort(key=lambda item: item[0])
+        return {
+            points[index][0]: points[index][1] / points[index - 1][1] - 1
+            for index in range(1, len(points))
+            if points[index - 1][1] > 0
+        }
+
+    def _get_market_data_adapter(self):
+        if self._market_data_adapter is None:
+            from service_registry import get_data_service
+
+            self._market_data_adapter = get_data_service()
+        return self._market_data_adapter
 
     def _benchmark_peer_funds(self, fund: Dict[str, Any]) -> List[Dict[str, Any]]:
         fund_type = str(fund.get("type") or "").strip()
