@@ -180,6 +180,7 @@ export default function SimpleFundDetailClient({ fund, nav, evaluation, research
   const classification = evaluation.peerGroup || '专业分类待确认'
   const benchmark = evaluation.benchmark || String(fund.benchmark || '') || '基准待补充'
   const analysisHref = `/analysis?${new URLSearchParams({ fundCode: fund.windCode }).toString()}`
+  const attributionHref = `/analysis/advanced?${new URLSearchParams({ fundCode: fund.windCode }).toString()}`
 
   return (
     <div className="space-y-7">
@@ -201,6 +202,7 @@ export default function SimpleFundDetailClient({ fund, nav, evaluation, research
           </div>
           <div className="flex flex-wrap gap-3">
             <Link href={analysisHref} className="inline-flex h-11 items-center gap-2 rounded-md bg-[#173f35] px-5 text-sm font-bold text-white hover:bg-[#225747]"><Bot className="h-4 w-4" />开始 AI 分析</Link>
+            <Link href={attributionHref} className="inline-flex h-11 items-center gap-2 rounded-md border border-[#7fa18f] bg-[#edf4f0] px-5 text-sm font-bold text-[#245f4b] hover:bg-[#e2eee8]"><ChartNoAxesCombined className="h-4 w-4" />业绩归因</Link>
             <Link href="/discover" className="inline-flex h-11 items-center gap-2 rounded-md border border-[#bfc9c2] bg-white px-5 text-sm font-bold text-[#315e4d] hover:border-[#7fa18f]"><GitCompareArrows className="h-4 w-4" />找同类比较</Link>
           </div>
         </div>

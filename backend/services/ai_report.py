@@ -165,8 +165,9 @@ class ClaudeReportGenerator:
             f"\n## 用户关注的问题\n{user_question or '请做一次完整的基金评价'}",
             "\n## 基金基础数据\n```json\n" + self._to_json(fund_data) + "\n```",
             "\n## 分类内专业评价\n```json\n" + self._to_json(evaluation_data) + "\n```",
-            "\n## 因子与风险解释证据\n```json\n" + self._to_json(factor_evidence) + "\n```",
-            "\n## 主动收益归因证据\n```json\n" + self._to_json(attribution_evidence) + "\n```",
+            "\n## Barra 与持仓行业暴露证据\n```json\n" + self._to_json(factor_evidence) + "\n```",
+            "\n## Brinson 与补充净值行为解释\n```json\n" + self._to_json(attribution_evidence) + "\n```",
+            "\n## 模型边界\n正式 Barra/Brinson 与净值行为解释必须分开表述；不得把 supplementary_nav_factor 标成 Barra，不得把 supplementary_nav_return 标成 Brinson。",
             "\n## 关联调研纪要\n```json\n" + self._to_json(research_reports) + "\n```",
         ])
         return self._call_llm(prompt, "fund_analysis")

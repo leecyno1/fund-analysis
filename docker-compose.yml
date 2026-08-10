@@ -129,11 +129,12 @@ services:
   # ─────────────────────────────────────────────
   frontend:
     build:
-      context: ./frontend
+      context: .
       dockerfile: Dockerfile
     container_name: fund_frontend
     environment:
-      NEXT_PUBLIC_API_URL: http://localhost:8005/api
+      BACKEND_API_URL: http://backend:8005
+      DATABASE_URL: postgresql://postgres:fundanalysis2024@postgres:5432/fund_analysis
       NEXT_TELEMETRY_DISABLED: "1"
     ports:
       - "3000:3000"

@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 
-const baseUrl = process.env.FRONTEND_BASE_URL || 'http://127.0.0.1:3003'
+const baseUrl = process.env.FRONTEND_BASE_URL || 'http://127.0.0.1:3000'
 
 async function fetchJson(path) {
   const response = await fetch(new URL(path, baseUrl), { cache: 'no-store' })

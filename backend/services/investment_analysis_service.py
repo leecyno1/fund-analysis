@@ -1,8 +1,8 @@
 """
 高级基金研究服务
 
-提供确定性的因子镜头和主动收益归因，作为早期 Barra/Brinson
-接口之上的基金研究解释层。
+提供确定性的净值行为因子镜头和主动收益解释。
+这些结果是补充证据，不是 Barra 或 Brinson。
 """
 import math
 from decimal import Decimal

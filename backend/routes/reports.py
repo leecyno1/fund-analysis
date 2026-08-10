@@ -130,15 +130,26 @@ def _evaluation_analysis_fallback(
     if factor_evidence.get("status") == "ok":
         for item in (factor_evidence.get("risk_contributions") or [])[:4]:
             lines.append(f"- {item.get('label') or item.get('factor')}风险贡献：{float(item.get('risk_contribution') or 0) * 100:.1f}%")
+    elif factor_evidence.get("industry_exposures"):
+        lines.append("- 已取得持仓行业暴露，但正式 Barra 风格因子仍不可用。")
+        for industry, weight in list((factor_evidence.get("industry_exposures") or {}).items())[:5]:
+            lines.append(f"- 已披露持仓中的{industry}暴露：{float(weight) * 100:.1f}%")
     else:
-        lines.append("- 因子风险解释证据不足，不对风格暴露作强结论。")
-    if attribution_evidence.get("status") == "ok":
+        lines.append("- Barra 因子风险解释证据不足，不对正式风格暴露作强结论。")
+    if attribution_evidence.get("status") in {"ok", "partial_evidence"}:
         returns = attribution_evidence.get("returns") or {}
-        lines.append(f"- 归因区间主动收益：{float(returns.get('active') or 0) * 100:.2f}%")
+        lines.append(f"- Brinson 归因区间主动收益：{float(returns.get('active') or 0) * 100:.2f}%")
         for item in attribution_evidence.get("effects") or []:
-            lines.append(f"- {item.get('label')}：{float(item.get('value') or 0) * 100:.2f}%")
+            if item.get("value") is not None:
+                lines.append(f"- {item.get('label')}：{float(item.get('value')) * 100:.2f}%")
+        if attribution_evidence.get("status") == "partial_evidence":
+            lines.append("- 当前 Brinson 仅覆盖公开披露持仓，未披露部分进入残差，不作完整持仓结论。")
     else:
-        lines.append("- 基金与基准重叠收益序列不足，不输出主动收益分解。")
+        lines.append("- 正式 Brinson 行业归因证据不足，不输出配置与选择效应结论。")
+    nav_attribution = attribution_evidence.get("supplementary_nav_return") or {}
+    if nav_attribution.get("status") == "ok":
+        nav_returns = nav_attribution.get("returns") or {}
+        lines.append(f"- 补充净值行为解释：主动收益 {float(nav_returns.get('active') or 0) * 100:.2f}%（不是 Brinson）。")
 
     lines.extend(["", "## 经理与纪要证据"])
     if research_reports:
@@ -156,7 +167,13 @@ def _evaluation_analysis_fallback(
         "",
         "## 数据缺口",
     ])
-    combined_missing = missing + list(factor_evidence.get("missing_items") or []) + list(attribution_evidence.get("missing_items") or [])
+    combined_missing = (
+        missing
+        + list(factor_evidence.get("missing_items") or [])
+        + list(attribution_evidence.get("missing_items") or [])
+        + list((factor_evidence.get("supplementary_nav_factor") or {}).get("missing_items") or [])
+        + list((attribution_evidence.get("supplementary_nav_return") or {}).get("missing_items") or [])
+    )
     if combined_missing:
         lines.extend(f"- {item}" for item in list(dict.fromkeys(combined_missing))[:12])
     else:
@@ -432,7 +449,7 @@ async def generate_fund_evaluation_analysis(
     from service_registry import get_data_service, get_db
     from services.ai_report import get_report_generator
     from services.fund_evaluation_service import FundEvaluationService
-    from services.investment_analysis_service import InvestmentAnalysisService
+    from services.performance_attribution_service import PerformanceAttributionService
 
     data_svc = get_data_service()
     _reject_mock_data_source(data_svc, "基金评价")
@@ -441,25 +458,29 @@ async def generate_fund_evaluation_analysis(
     try:
         fund_data = data_svc.get_fund_info(wind_code)
         evaluation = FundEvaluationService().evaluate_fund(wind_code, window="1y")
-        investment_analysis = InvestmentAnalysisService()
-
         try:
-            factor_evidence = investment_analysis.factor_lens(wind_code)
-        except Exception as factor_error:
+            attribution_bundle = PerformanceAttributionService().analyze(wind_code)
+            factor_evidence = {
+                **(attribution_bundle.get("barra") or {}),
+                "supplementary_nav_factor": attribution_bundle.get("nav_factor_lens") or {},
+            }
+            attribution_evidence = {
+                **(attribution_bundle.get("brinson") or {}),
+                "supplementary_nav_return": attribution_bundle.get("nav_return_attribution") or {},
+            }
+        except Exception as attribution_error:
             factor_evidence = {
                 "status": "insufficient_evidence",
                 "source": "evidence_gate",
-                "missing_items": [f"因子风险证据不可用：{factor_error.__class__.__name__}"],
+                "method": "barra_style_risk_model",
+                "missing_items": [f"Barra 风险证据不可用：{attribution_error.__class__.__name__}"],
                 "risk_contributions": [],
             }
-
-        try:
-            attribution_evidence = investment_analysis.advanced_attribution(wind_code)
-        except Exception as attribution_error:
             attribution_evidence = {
                 "status": "insufficient_evidence",
                 "source": "evidence_gate",
-                "missing_items": [f"主动收益归因不可用：{attribution_error.__class__.__name__}"],
+                "method": "brinson_fachler",
+                "missing_items": [f"Brinson 归因不可用：{attribution_error.__class__.__name__}"],
                 "effects": [],
             }
 
@@ -510,7 +531,7 @@ async def generate_fund_evaluation_analysis(
             "report_type": "fund_evaluation_analysis",
             "content": report_content,
             "data_sources": {
-                "source": "fund_evaluation+factor_lens+active_attribution+research_memos",
+                "source": "fund_evaluation+performance_attribution+research_memos",
                 "fund": fund_data,
                 "evaluation": evaluation,
                 "factor_evidence": factor_evidence,

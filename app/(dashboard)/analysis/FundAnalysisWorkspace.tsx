@@ -239,6 +239,7 @@ export default function FundAnalysisWorkspace({ initialFund = null }: { initialF
           <div className="flex items-center gap-2 text-xs font-bold uppercase text-[#28745c]"><Bot className="h-4 w-4" />AI 分析</div>
           <h1 className="mt-3 text-3xl font-bold leading-tight text-[#18231e] sm:text-4xl">选一只基金，现场跑一次综合评价</h1>
           <p className="mt-3 text-sm leading-7 text-[#65716b] sm:text-base">每次只分析你选择的基金，不跑全市场。AI 先读取分类内专业评价，再结合归因和调研纪要说人话。</p>
+          <Link href={selectedFund ? `/analysis/advanced?fundCode=${encodeURIComponent(selectedFund.windCode)}` : '/analysis/advanced'} className="mt-4 inline-flex items-center gap-2 text-xs font-bold text-[#28745c]">单独查看 Barra / Brinson 业绩归因<ArrowRight className="h-4 w-4" /></Link>
           <div className={`mt-3 text-xs ${modelHealthCopy.tone}`}><strong>{modelHealthCopy.label}</strong><span className="ml-2">{modelHealthCopy.detail}</span></div>
         </div>
         <div className="grid grid-cols-3 gap-px overflow-hidden border border-[#dbe1dc] bg-[#dbe1dc] text-center text-xs">

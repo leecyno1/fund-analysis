@@ -1,17 +1,17 @@
 #!/bin/bash
 
-# 基金经理评价分析系统 - 快速启动脚本
+# 选基助手 - 快速启动脚本
 
 set -e
 
-echo "🚀 基金经理评价分析系统 - 快速启动"
+echo "🚀 选基助手 - 快速启动"
 echo "=================================="
 echo ""
 
 # 检查 Node.js
 if ! command -v node &> /dev/null; then
     echo "❌ 错误: 未安装 Node.js"
-    echo "请访问 https://nodejs.org/ 安装 Node.js 18+"
+    echo "请访问 https://nodejs.org/ 安装 Node.js 20+"
     exit 1
 fi
 
@@ -72,14 +72,20 @@ echo ""
 echo "访问地址: http://localhost:3000"
 echo ""
 echo "可用页面:"
-echo "  - 基金列表: http://localhost:3000/funds"
-echo "  - 基金经理: http://localhost:3000/managers"
-echo "  - 调研报告: http://localhost:3000/reports"
-echo "  - 基金研究: http://localhost:3000/analysis"
-echo "  - 筛选器: http://localhost:3000/screening"
-echo "  - 数据同步: http://localhost:3000/sync"
+echo "  - 找基金: http://localhost:3000/discover"
+echo "  - 调研库: http://localhost:3000/research"
+echo "  - AI 分析: http://localhost:3000/analysis"
+echo "  - 业绩归因: http://localhost:3000/analysis/advanced"
+echo "  - 标签推荐: http://localhost:3000/recommendations"
 echo ""
 echo "按 Ctrl+C 停止服务"
 echo ""
+
+backend_pid=""
+if ! curl -sf http://127.0.0.1:8005/api/health >/dev/null 2>&1; then
+    ./backend/scripts/start_backend.sh &
+    backend_pid=$!
+    trap 'if [ -n "$backend_pid" ]; then kill "$backend_pid" 2>/dev/null || true; fi' EXIT
+fi
 
 npm run dev

@@ -33,7 +33,7 @@ def _missing_benchmark_attribution(fund_code: str, benchmark: str, quarter: str,
     }
 
 
-@router.get("/attribution/{fund_code}")
+@router.get("/attribution/{fund_code}", deprecated=True)
 async def get_brinson_attribution(
     fund_code: str,
     benchmark: str = Query("000300", description="基准指数代码"),
@@ -118,7 +118,7 @@ async def get_brinson_attribution(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/history/{fund_code}")
+@router.get("/history/{fund_code}", deprecated=True)
 async def get_brinson_history(
     fund_code: str,
     quarters: int = Query(8, ge=1, le=16, description="最近季度数"),

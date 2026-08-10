@@ -1,344 +1,74 @@
-# 基金经理评价分析系统
+# 选基助手
 
-> 架构 v2 已升级为“专业基金研究 + Newma-Desk Level 3 模组”。新版以研究范围、证据质量、同类/基准、量化轨迹、持仓风格、投资/运营尽调、决策治理、持续监控和方法审计九个阶段组织能力，不再以单一综合分数作为研究决策核心。
+面向普通用户的基金浏览、分类、评价、归因和候选推荐工具，也是 Newma Desk 的基金研究模组。
 
-## Newma-Desk 模组
+## 核心功能
 
-- Suite：`desk/suite.json`
-- 自动发现：`GET /.well-known/newma-desk-suite.json`
-- 独立入口：`/mod/fund-research/overview`（每日基金研究驾驶舱）
-- 驾驶舱：聚合真实证据覆盖、研究清单门槛、复核事件、数据健康和当前基金对象；入口不可用时明确降级，不填充演示结论
-- 兼容性：Manifest 1.1 / Bridge 1.0 / ViewSpec 1.0 / Level 3 Context
-- 验收：`npm run smoke:newma-desk`
+1. 基金数据库：同步基金档案、净值、指标、经理和持仓。
+2. 找基金：搜索基金、查看净值曲线、同类评价和多基金比较。
+3. 调研库：连接本地纪要文件夹，按基金经理归档并提取可引用标签。
+4. 综合基金数据库：合并基础数据、同类评价、纪要标签和数据质量。
+5. 业绩归因：Barra 风格/风险暴露、Brinson 行业归因，以及明确标注的净值行为补充解释。
+6. AI 分析：用户现场运行，读取评价、归因和纪要，保存分析历史。
+7. 标签推荐：按类别和风格返回不超过十只候选基金。
 
-专业方法和论文来源见 `docs/research-methodology/sources.md`，规范架构见 `docs/architecture/professional-fund-research-module-v2.md`。
+不包含交易执行、购买金额、个人适当性、观察池晋级和投资决策。
 
-一个面向基金研究的基金筛选、基金分析和基金经理评价系统，集成 Wind API 数据采集、调研报告管理、研究备忘录生成和多维度评分功能。
+## 唯一运行入口
 
-## ✨ 核心功能
+- 前端：仓库根目录 Next.js，`http://127.0.0.1:3000`
+- 后端：`backend/main.py`，`http://127.0.0.1:8005`
+- 后端健康检查：`GET /api/health`
+- Newma Desk 发现文件：`GET /.well-known/newma-desk-suite.json`
 
-### 1. 全市场基金浏览器
-- 🌐 全市场基金搜索、筛选、排序
-- 🧭 列表 / 卡片双视图切换
-- ⚡ 快捷筛选与核心指标概览
-- ➕ 从市场页直接加入候选池
+`frontend/` 是迁移前的旧独立前端，只保留作代码迁移参考，不再作为开发或部署入口。
 
-### 2. 基金池研究工作流
-- 🗂️ 候选 / 观察 / 核心 / 淘汰状态流转
-- 📝 最新结论、复查日期、风险备注维护
-- 🧾 证据 JSON 沉淀与回看
-- 🔁 面向持续跟踪的研究维护界面
+## 本地启动
 
-### 3. 预警中心
-- 🚨 预警规则创建、启停、删除
-- 📡 手动触发扫描
-- 📬 预警事件查看、过滤、处理
-- 🔍 支撑重点基金复核节奏
-
-### 4. 调研报告与基金研究
-- 📄 调研报告管理与检索
-- 🤖 基金 / 基金经理 / 对比研究报告
-- 🧠 可信度、证据数、报告数摘要
-- 📋 面向研究复核的内容沉淀
-
-### 5. 基础数据与评分能力
-- 📊 基金与基金经理基础信息管理
-- 🔄 数据同步与快照体系
-- 🏆 多维评分与筛选框架
-- 📈 为研究结论提供数据底座
-
-## 🚀 快速开始
-
-### 方式一：一键启动（推荐）
+环境要求：Node.js 20+、Python 3.11+、PostgreSQL。
 
 ```bash
-# 克隆项目
-git clone <your-repo-url>
-cd fund-analysis
-
-# 运行快速启动脚本
-./scripts/quick-start.sh
-```
-
-脚本会自动：
-- 检查环境依赖
-- 创建环境变量文件
-- 安装依赖
-- 初始化数据库
-- 启动应用
-
-### 方式二：Docker 部署
-
-```bash
-# 1. 配置环境变量
-cp .env.example .env.local
-# 编辑 .env.local 填入 API Keys
-
-# 2. 启动所有服务
-docker-compose up -d
-
-# 3. 运行数据库迁移
-docker-compose exec app npx prisma migrate deploy
-
-# 4. 访问应用
-# http://localhost:3000
-```
-
-详见 [Docker 部署指南](./DOCKER.md)
-
-### 方式三：手动安装
-
-#### 环境要求
-- Node.js 18+
-- PostgreSQL 15+ (with pgvector)
-- Python 3.8+
-- Wind 终端 (可选)
-
-#### 安装步骤
-
-1. **克隆项目**
-```bash
-git clone <your-repo-url>
-cd fund-analysis
-```
-
-2. **安装依赖**
-```bash
-npm install
-```
-
-3. **配置环境变量**
-```bash
-cp .env.example .env.local
-# 编辑 .env.local 填入实际配置
-```
-
-4. **启动数据库**
-```bash
-./scripts/start-db.sh
-```
-
-如果 Docker 数据卷或端口映射异常，可以改用本机 PostgreSQL 兜底：
-```bash
+# 1. 启动并初始化本地 PostgreSQL
 ./scripts/start-local-postgres.sh
-export DATABASE_URL="postgresql://postgres:fundanalysis2024@localhost:5432/fund_analysis"
-```
 
-5. **运行数据库迁移**
-```bash
-npx prisma migrate dev
-npx prisma generate
-```
+# 2. 启动 FastAPI
+./backend/scripts/start_backend.sh
 
-6. **启动应用**
-```bash
-# 终端 1: Next.js
+# 3. 另开终端启动正式前端
+npm install
 npm run dev
-
-# 终端 2: Wind 服务
-cd backend/wind_service
-python -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-uvicorn main:app --reload
 ```
 
-7. **访问应用**
-```
-http://localhost:3000
-```
+打开：
 
-## ✅ 基金研究模块验收
+- 找基金：`http://127.0.0.1:3000/discover`
+- AI 分析：`http://127.0.0.1:3000/analysis`
+- 业绩归因：`http://127.0.0.1:3000/analysis/advanced`
+- 标签推荐：`http://127.0.0.1:3000/recommendations`
 
-本项目当前聚焦于基金筛选、基金分析和基金经理评价。启动本地应用后，可用一条命令跑完整验收烟测，避免只看演示页面却没有真实功能闭环。
+## Docker
 
 ```bash
-# 默认验收 http://127.0.0.1:3001
-npm run smoke:fund-research
-
-# 如果本地端口不同
-FRONTEND_BASE_URL=http://127.0.0.1:3000 npm run smoke:fund-research
+docker compose up -d --build
 ```
 
-如需验收“真实数据进入本地 + 生成一组基金研究报告”的闭环：
+Docker 使用仓库根目录正式前端和 `backend/main.py`，不再构建旧 `frontend/`。
 
-```bash
-# 默认从本地最近基金中取 3 只，逐只同步 Tushare 数据并保存基金研究报告
-npm run research:real-data-report
+## 数据原则
 
-# 指定基金代码和数量
-npm run research:real-data-report -- 260104.OF 519674.OF --limit=2
+- 基金必须先分类，再做同类评价。
+- 不用短期收益冠军直接推荐。
+- 不用模拟数据或名称猜测冒充持仓、风格和归因。
+- Barra 因子库未接入时，只展示持仓行业暴露。
+- Brinson 持仓披露不足时，明确显示覆盖率和残差。
+- 净值行为解释不得标记为 Barra 或 Brinson。
 
-# 如果端口不同
-BACKEND_API_URL=http://127.0.0.1:8005 FRONTEND_BASE_URL=http://127.0.0.1:3000 npm run research:real-data-report
-```
+## 主要验证
 
-该命令会检查后端不是 mock 数据源，调用 Tushare 同步到本地 PostgreSQL，再生成并保存基金研究报告，最后确认报告能从前端报告详情读取到。
-
-验收覆盖范围：
-- 全市场基金浏览器：搜索、筛选、排序和加入基金池入口
-- 投资者筛选页：基金池状态、严格销售规则模式和缺口统计
-- 基金详情页：核心指标、分析入口、销售规则硬缺口扫描
-- 基金对比与购买前模拟：只保留基金研究相关判断，不耦合组合配置或交易执行
-- 基金池门禁：销售规则硬缺口未补齐时，禁止进入购买候选或核心状态
-- 销售规则补证：候选和观察补证范围同步检查，拒绝过薄或伪造式证据
-- 报告门禁：硬缺口未清除前，不生成或保存正式购买前、候选池、对比报告
-
-验收前请确保：
-- Next.js 本地服务正在运行
-- 数据库已迁移并有可查询基金数据
-- `DATABASE_URL` 指向当前本地验收数据库
-- 如需接入 Tushare、Wind 或大模型服务，请只通过环境变量配置密钥，不要写入代码或文档
-
-## 📖 文档
-
-- [开发进度](./PROGRESS.md) - 详细的开发进度和功能清单
-- [部署文档](./DEPLOYMENT.md) - 完整的部署指南
-- [Docker 部署](./DOCKER.md) - Docker 容器化部署
-- [常见问题](./FAQ.md) - FAQ 和故障排查
-- [贡献指南](./CONTRIBUTING.md) - 如何贡献代码
-- [更新日志](./CHANGELOG.md) - 版本更新记录
-- [最终总结](./FINAL_SUMMARY.md) - 项目完整总结
-- [Phase 4 总结](./PHASE4_SUMMARY.md) - 基金研究引擎
-- [Phase 5 总结](./PHASE5_SUMMARY.md) - 评分筛选系统
-
-## 🛠️ 技术栈
-
-### 前端
-- **框架**: Next.js 14 (App Router)
-- **语言**: TypeScript
-- **样式**: TailwindCSS
-- **图表**: Recharts
-- **图标**: Lucide React
-
-### 后端
-- **API**: Next.js API Routes
-- **ORM**: Prisma
-- **数据库**: PostgreSQL 15 + pgvector
-- **Python**: FastAPI (Wind 服务)
-
-### AI
-- **分析**: Claude 3.5 Sonnet
-- **向量**: OpenAI Embeddings
-- **流式**: Server-Sent Events
-
-## 📊 项目统计
-
-- **代码行数**: 12,500+
-- **前端页面**: 25+
-- **API 端点**: 30+
-- **React 组件**: 40+
-- **完成度**: 85%
-
-## 🎯 核心特性
-
-### 1. 流式响应
-使用 Server-Sent Events 实现研究报告的实时流式生成，用户可以看到逐字生成的过程。
-
-### 2. 语义搜索
-基于 pgvector 和 OpenAI Embeddings 实现调研报告的语义搜索，支持自然语言查询。
-
-### 3. 科学评分
-多维度评分算法，综合考虑业绩、风险、稳定性和管理能力，自动生成评级。
-
-### 4. 智能提示词
-自动构建分析提示词，整合基金数据、业绩指标、风险指标和调研报告。
-
-## 📝 环境变量
-
-```env
-# 数据库
-DATABASE_URL="postgresql://user:pass@localhost:5432/fund_analysis"
-
-# AI API
-ANTHROPIC_API_KEY="sk-ant-xxx"
-OPENAI_API_KEY="sk-xxx"
-
-# Wind 服务
-WIND_SERVICE_URL="http://localhost:8000"
-```
-
-## 🔧 开发
-
-### 运行测试
-```bash
-npm test
-```
-
-### 构建生产版本
 ```bash
 npm run build
-npm start
+PYTHONPATH=backend python3 -m py_compile backend/main.py backend/services/performance_attribution_service.py
+curl http://127.0.0.1:8005/api/health
 ```
 
-### 数据库管理
-```bash
-# 查看数据库
-npx prisma studio
-
-# 重置数据库
-npx prisma migrate reset
-
-# 生成客户端
-npx prisma generate
-```
-
-## 📦 部署
-
-详见 [部署文档](./DEPLOYMENT.md)
-
-### 使用 PM2
-```bash
-pm2 start npm --name "fund-analysis" -- start
-pm2 save
-```
-
-### 使用 Docker
-```bash
-docker-compose up -d
-```
-
-## 🐛 故障排查
-
-### 数据库连接失败
-```bash
-# 检查 PostgreSQL 状态
-sudo systemctl status postgresql
-
-# 测试连接
-psql $DATABASE_URL
-```
-
-### Prisma 迁移失败
-```bash
-# 重置数据库
-npx prisma migrate reset
-
-# 手动修复
-npx prisma migrate resolve --applied <migration-name>
-```
-
-更多问题请查看 [部署文档](./DEPLOYMENT.md#故障排查)
-
-## 🤝 贡献
-
-欢迎提交 Issue 和 Pull Request！
-
-## 📄 许可证
-
-MIT License
-
-## 🙏 致谢
-
-- Anthropic Claude
-- OpenAI
-- Next.js
-- Prisma
-- PostgreSQL
-- Wind
-
----
-
-**开发时间**: 2024-04-17 至 2024-04-18  
-**开发者**: Claude (AI Assistant)  
-**版本**: 1.0.0
+产品范围见 [CONTEXT.md](./CONTEXT.md) 和 [ADR-0002](./docs/adr/0002-simple-fund-selection-product-scope.md)。

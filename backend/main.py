@@ -29,7 +29,7 @@ import uuid
 import json
 
 from routes import funds, managers, scoring, reports, research_reports, research_memos, research_folders, screening
-from routes import barra, brinson, export, data_sync, data_health, metrics, fund_pools, alerts, investment_analysis
+from routes import attribution, barra, brinson, export, data_sync, data_health, metrics, fund_pools, alerts, investment_analysis
 from service_registry import get_data_service, get_scoring_engine, get_db
 
 logging.basicConfig(
@@ -128,7 +128,7 @@ app = FastAPI(
 
 _cors_origins = os.environ.get(
     "CORS_ORIGINS",
-    "http://localhost:3000,http://localhost:3003,http://127.0.0.1:3000,http://127.0.0.1:3003"
+    "http://localhost:3000,http://127.0.0.1:3000"
 ).split(",")
 
 app.add_middleware(GZipMiddleware, minimum_size=1000)
@@ -148,6 +148,7 @@ app.include_router(research_reports.router, tags=["调研纪要"])
 app.include_router(research_memos.router, tags=["证据研究备忘录"])
 app.include_router(research_folders.router, tags=["本地调研纪要文件夹"])
 app.include_router(screening.router, tags=["基金筛选"])
+app.include_router(attribution.router, tags=["基金业绩归因"])
 app.include_router(barra.router, tags=["Barra风险分析"])
 app.include_router(brinson.router, tags=["Brinson归因"])
 app.include_router(export.router, tags=["数据导出"])

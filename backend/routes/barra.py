@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/barra", tags=["Barra风险分析"])
 
 
-@router.get("/exposure/{fund_code}")
+@router.get("/exposure/{fund_code}", deprecated=True)
 async def get_barra_exposure(
     fund_code: str,
     quarter: str = Query(None, description="季度, 如: 2024Q1"),
@@ -89,7 +89,7 @@ async def get_barra_exposure(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/risk-decomposition/{fund_code}")
+@router.get("/risk-decomposition/{fund_code}", deprecated=True)
 async def get_risk_decomposition(
     fund_code: str,
     quarter: str = Query(None),

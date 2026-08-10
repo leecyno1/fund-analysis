@@ -156,7 +156,7 @@ def main():
     logger.info("=" * 60)
     logger.info("\n下一步:")
     logger.info("  1. 启动后端: cd backend && python main.py")
-    logger.info("  2. 启动前端: cd frontend && npm run dev")
+    logger.info("  2. 启动正式前端: 在项目根目录运行 npm run dev")
     logger.info("  3. 访问: http://localhost:3000")
 
 
