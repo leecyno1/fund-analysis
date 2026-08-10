@@ -45,6 +45,7 @@ export async function GET(request: Request) {
       evidenceEligibleCount: Number(payload.evidence_eligible_count || 0),
       styleMatchedCount: Number(payload.style_matched_count || 0),
       excludedCount: Number(payload.excluded_count || 0),
+      excludedReasonCounts: asRecord(payload.excluded_reason_counts),
       availableStyles: Array.isArray(payload.available_styles) ? payload.available_styles : [],
       methodologyVersion: String(payload.methodology_version || ''),
       source: String(payload.source || 'full_peer_group_category_evaluation'),

@@ -25,6 +25,16 @@ type Props = {
   initialError: string
 }
 
+const exclusionReasonLabels: Record<string, string> = {
+  evaluation_method_missing: '该类别尚未配置评价方法',
+  required_category_evidence_missing: '缺少该类别要求的关键指标',
+  category_score_unavailable: '类别评分暂时无法计算',
+}
+
+function exclusionReasonLabel(reason: string) {
+  return exclusionReasonLabels[reason] || '基金分类或评价证据不完整'
+}
+
 export default function RecommendationClient({ initialFunds, initialCategories, universeTotal, initialError }: Props) {
   const universe = initialFunds as SimpleFund[]
   const categories = useMemo(() => initialCategories.length
@@ -38,6 +48,9 @@ export default function RecommendationClient({ initialFunds, initialCategories, 
   const [loadError, setLoadError] = useState('')
   const [peerUniverseCount, setPeerUniverseCount] = useState(0)
   const [evidenceEligibleCount, setEvidenceEligibleCount] = useState(0)
+  const [styleMatchedCount, setStyleMatchedCount] = useState(0)
+  const [excludedCount, setExcludedCount] = useState(0)
+  const [excludedReasonCounts, setExcludedReasonCounts] = useState<Record<string, number>>({})
   const [availableStyles, setAvailableStyles] = useState<string[]>([])
   const recommendations = categoryFunds
 
@@ -45,6 +58,9 @@ export default function RecommendationClient({ initialFunds, initialCategories, 
     setCategoryFunds([])
     setPeerUniverseCount(0)
     setEvidenceEligibleCount(0)
+    setStyleMatchedCount(0)
+    setExcludedCount(0)
+    setExcludedReasonCounts({})
     setLoadError('')
     if (!nextCategory) return
     setLoading(true)
@@ -59,6 +75,11 @@ export default function RecommendationClient({ initialFunds, initialCategories, 
       setCategoryFunds(Array.isArray(payload.data) ? payload.data : [])
       setPeerUniverseCount(Number(payload.peerUniverseCount || 0))
       setEvidenceEligibleCount(Number(payload.evidenceEligibleCount || 0))
+      setStyleMatchedCount(Number(payload.styleMatchedCount || 0))
+      setExcludedCount(Number(payload.excludedCount || 0))
+      setExcludedReasonCounts(payload.excludedReasonCounts && typeof payload.excludedReasonCounts === 'object'
+        ? payload.excludedReasonCounts as Record<string, number>
+        : {})
       setAvailableStyles(Array.isArray(payload.availableStyles) ? payload.availableStyles : [])
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : '同类基金评价暂时不可用')
@@ -77,6 +98,9 @@ export default function RecommendationClient({ initialFunds, initialCategories, 
   const compareHref = `/compare?${new URLSearchParams({
     codes: recommendations.slice(0, 6).map((fund) => fund.windCode).join(','),
   }).toString()}`
+  const exclusionReasons = Object.entries(excludedReasonCounts)
+    .filter(([, count]) => Number(count) > 0)
+    .sort(([, left], [, right]) => Number(right) - Number(left))
 
   return (
     <div className="space-y-7">
@@ -122,7 +146,9 @@ export default function RecommendationClient({ initialFunds, initialCategories, 
           <div>
             <h2 className="text-xl font-bold">候选基金 <span className="text-[#28745c]">{recommendations.length}</span> / 10</h2>
             <p className="mt-1 text-xs text-[#79847e]">
-              {category ? `完整同类组 ${peerUniverseCount} 只，${evidenceEligibleCount} 只通过关键证据门槛。` : `基金数据库共 ${universeTotal.toLocaleString('zh-CN')} 只，选择类别后开始评价。`}
+              {category
+                ? `完整同类组 ${peerUniverseCount} 只，${evidenceEligibleCount} 只通过关键证据门槛${style ? `，${styleMatchedCount} 只匹配“${style}”` : ''}。`
+                : `基金数据库共 ${universeTotal.toLocaleString('zh-CN')} 只，选择类别后开始评价。`}
             </p>
           </div>
           {recommendations.length >= 2 ? (
@@ -145,8 +171,19 @@ export default function RecommendationClient({ initialFunds, initialCategories, 
         ) : recommendations.length === 0 ? (
           <div className="flex min-h-52 flex-col items-center justify-center border border-dashed border-[#cbd3cd] bg-white px-6 text-center">
             <CircleAlert className="h-6 w-6 text-[#9a7a3a]" />
-            <strong className="mt-3 text-sm">当前类别没有可用的专业评价结果</strong>
-            <span className="mt-2 text-xs leading-6 text-[#78837d]">可取消风格限制，或先补齐基金分类、基准、净值和同类样本数据。</span>
+            <strong className="mt-3 text-sm">当前没有满足条件的候选基金</strong>
+            {style && evidenceEligibleCount > 0 ? (
+              <span className="mt-2 text-xs leading-6 text-[#78837d]">该类别有 {evidenceEligibleCount} 只通过证据门槛，但没有基金匹配“{style}”标签；可以先选择“不限风格”。</span>
+            ) : excludedCount > 0 ? (
+              <div className="mt-2 max-w-xl text-left text-xs leading-6 text-[#78837d]">
+                <div>同类组共 {peerUniverseCount} 只，{excludedCount} 只因证据不足未进入候选：</div>
+                <ul className="mt-1 list-disc pl-5">
+                  {exclusionReasons.map(([reason, count]) => <li key={reason}>{exclusionReasonLabel(reason)}：{count} 只</li>)}
+                </ul>
+              </div>
+            ) : (
+              <span className="mt-2 text-xs leading-6 text-[#78837d]">当前类别尚未形成可核验的同类评价样本。</span>
+            )}
           </div>
         ) : (
           <div className="grid gap-3 lg:grid-cols-2">

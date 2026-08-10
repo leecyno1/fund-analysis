@@ -116,6 +116,8 @@ def main() -> int:
         raise AssertionError(f"Only the exact requested peer group may be counted: {result}")
     if result.get("evidence_eligible_count") != 34:
         raise AssertionError(f"Funds missing required category evidence must be excluded: {result}")
+    if result.get("excluded_reason_counts") != {"required_category_evidence_missing": 1}:
+        raise AssertionError(f"Recommendation exclusions must disclose their evidence reason: {result}")
     if result.get("style_matched_count") != 11:
         raise AssertionError(f"Style filtering must run across the full eligible peer group: {result}")
     if "仅缺证基金拥有的风格" in (result.get("available_styles") or []):

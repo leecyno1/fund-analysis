@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 const apiRoute = readFileSync('app/api/recommendations/route.ts', 'utf8')
 const client = readFileSync('app/(dashboard)/recommendations/RecommendationClient.tsx', 'utf8')
 const backendRoute = readFileSync('backend/routes/funds.py', 'utf8')
+const backendService = readFileSync('backend/services/fund_recommendation_service.py', 'utf8')
 
 function requireText(source, text, message) {
   if (!source.includes(text)) throw new Error(`${message}: ${text}`)
@@ -12,9 +13,12 @@ requireText(backendRoute, '@router.get("/recommendation-candidates")', 'backend 
 requireText(backendRoute, 'FundRecommendationService().build_candidate_group', 'backend endpoint must use the candidate-group service')
 requireText(apiRoute, '/api/funds/recommendation-candidates', 'Next API must call the full peer-group candidate endpoint')
 requireText(apiRoute, "backendParams.set('style', style)", 'Next API must pass style filtering to the backend')
+requireText(apiRoute, 'excludedReasonCounts', 'Next API must preserve candidate exclusion reasons')
+requireText(backendService, 'excluded_reason_counts', 'backend must disclose candidate exclusion reasons')
 requireText(client, 'recommendationEvidence(fund)', 'candidate cards must render backend recommendation evidence')
 requireText(client, '主要风险', 'candidate cards must show risks')
 requireText(client, '数据截至', 'candidate cards must disclose the evidence date')
+requireText(client, '同类组共', 'empty recommendation state must explain evidence gaps')
 requireText(client, 'void loadCandidates(category, nextStyle)', 'style changes must refresh the full peer candidate group')
 
 for (const forbidden of [
