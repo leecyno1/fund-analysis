@@ -74,6 +74,131 @@ def main() -> int:
             "wind_code": "980006.OF",
             "name": "审计信用债基金A",
             "type": "债券型",
+            "raw_data": {"universe": {
+                "benchmark": "中证全债指数×100%",
+                "invest_type": "债券型",
+                "contract_type": "债券型",
+            }},
+        },
+        {
+            "wind_code": "980009.OF",
+            "name": "审计价值股票A",
+            "type": "股票型",
+            "raw_data": {"universe": {
+                "benchmark": "沪深300指数×80%+中证全债指数×20%",
+                "invest_type": "股票型",
+                "contract_type": "股票型",
+            }},
+        },
+        {
+            "wind_code": "980010.OF",
+            "name": "审计价值股票C",
+            "type": "股票型",
+            "raw_data": {"universe": {
+                "benchmark": "沪深300指数×80%+中证全债指数×20%",
+                "invest_type": "股票型",
+                "contract_type": "股票型",
+            }},
+        },
+        {
+            "wind_code": "150003.SZ",
+            "name": "审计价值股票",
+            "type": "股票型",
+            "raw_data": {"universe": {
+                "benchmark": "沪深300指数×80%+中证全债指数×20%",
+                "invest_type": "股票型",
+                "contract_type": "股票型",
+            }},
+        },
+        {
+            "wind_code": "980011.OF",
+            "name": "审计成长股票A",
+            "type": "股票型",
+            "raw_data": {"universe": {
+                "benchmark": "中证1000指数收益率×95%+银行活期存款利率(税后)×5%",
+                "invest_type": "普通股票型",
+                "contract_type": "股票型",
+            }},
+        },
+        {
+            "wind_code": "980012.OF",
+            "name": "审计医药股票A",
+            "type": "股票型",
+            "raw_data": {"universe": {
+                "benchmark": "沪深300指数×80%+中证全债指数×20%",
+                "invest_type": "股票型",
+                "contract_type": "股票型",
+            }},
+        },
+        {
+            "wind_code": "980013.OF",
+            "name": "审计多元股票A",
+            "type": "股票型",
+            "raw_data": {"universe": {
+                "benchmark": "沪深300指数×80%+恒生指数×10%+中证全债指数×10%",
+                "invest_type": "股票型",
+                "contract_type": "股票型",
+            }},
+        },
+        {
+            "wind_code": "980014.OF",
+            "name": "审计均衡股票A",
+            "type": "股票型",
+            "raw_data": {"universe": {
+                "benchmark": "沪深300指数×45%+恒生指数×45%+中证全债指数×10%",
+                "invest_type": "股票型",
+                "contract_type": "股票型",
+            }},
+        },
+        {
+            "wind_code": "980015.OF",
+            "name": "审计稳健纯债A",
+            "type": "债券型",
+            "raw_data": {"universe": {
+                "benchmark": "中证全债指数×100%",
+                "invest_type": "债券型",
+                "contract_type": "债券型",
+            }},
+        },
+        {
+            "wind_code": "980016.OF",
+            "name": "审计稳健纯债C",
+            "type": "债券型",
+            "raw_data": {"universe": {
+                "benchmark": "中证全债指数收益率×100%",
+                "invest_type": "债券型",
+                "contract_type": "债券型",
+            }},
+        },
+        {
+            "wind_code": "980017.OF",
+            "name": "审计安心纯债A",
+            "type": "债券型",
+            "raw_data": {"universe": {
+                "benchmark": "中证综合债券指数×100%",
+                "invest_type": "债券型",
+                "contract_type": "债券型",
+            }},
+        },
+        {
+            "wind_code": "980018.OF",
+            "name": "审计可转债A",
+            "type": "债券型",
+            "raw_data": {"universe": {
+                "benchmark": "中证全债指数×100%",
+                "invest_type": "债券型",
+                "contract_type": "债券型",
+            }},
+        },
+        {
+            "wind_code": "980019.OF",
+            "name": "审计收益债券A",
+            "type": "债券型",
+            "raw_data": {"universe": {
+                "benchmark": "中证综合债指数收益率×90%+沪深300指数收益率×10%",
+                "invest_type": "债券型",
+                "contract_type": "债券型",
+            }},
         },
         {
             "wind_code": "0000371.OF",
@@ -83,8 +208,8 @@ def main() -> int:
     ])
 
     groups = plan.get("groups") or []
-    if plan.get("summary", {}).get("eligible_funds") != 5 or len(groups) != 4:
-        raise AssertionError(f"Only high-confidence money/passive-index funds should be eligible: {plan}")
+    if plan.get("summary", {}).get("eligible_funds") != 12 or len(groups) != 8:
+        raise AssertionError(f"Only high-confidence standardized funds should be eligible: {plan}")
     money = next(group for group in groups if group.get("strategy_family_key") == "cash_management")
     if money.get("benchmark_code") != "DR007" or len(money.get("shares") or []) != 2:
         raise AssertionError(f"Money share classes must merge into one DR007 entity: {money}")
@@ -93,7 +218,7 @@ def main() -> int:
     if sum(1 for share in money["shares"] if share.get("is_primary")) != 1:
         raise AssertionError(f"Entity must have exactly one primary share: {money}")
 
-    index = next(group for group in groups if group.get("benchmark_code") == "000300.SH")
+    index = next(group for group in groups if group.get("peer_group_key") == "peer-index-hs300")
     if index.get("benchmark_code") != "000300.SH" or index.get("peer_group_key") != "peer-index-hs300":
         raise AssertionError(f"Exact declared index benchmark mapping failed: {index}")
     a500 = next(group for group in groups if group.get("benchmark_code") == "000510.SH")
@@ -103,13 +228,41 @@ def main() -> int:
     if deposit.get("benchmark_code") != "931059.CSI" or deposit.get("asset_class") != "fixed_income":
         raise AssertionError(f"Fixed-income index must not enter equity index peers: {deposit}")
 
+    active_equity = next(group for group in groups if group.get("peer_group_key") == "peer-active-equity-stock-hs300")
+    if len(active_equity.get("shares") or []) != 3 or active_equity.get("benchmark_weight") != 80:
+        raise AssertionError(f"Active equity share classes and primary benchmark weight are wrong: {active_equity}")
+    if active_equity.get("canonical_code") != "980009.OF":
+        raise AssertionError(f"Open-end A share must take priority over legacy exchange shares: {active_equity}")
+    if active_equity.get("benchmark_type") != "composite_primary_equity_reference":
+        raise AssertionError(f"Composite benchmark must remain explicitly identified: {active_equity}")
+    active_csi1000 = next(
+        group for group in groups if group.get("peer_group_key") == "peer-active-equity-stock-csi1000"
+    )
+    if active_csi1000.get("benchmark_code") != "000852.SH":
+        raise AssertionError(f"Active equity CSI1000 reference mapping failed: {active_csi1000}")
+
+    total_bond = next(group for group in groups if group.get("benchmark_code") == "H11001.CSI")
+    if len(total_bond.get("shares") or []) != 2 or total_bond.get("benchmark_weight") != 100:
+        raise AssertionError(f"Total-bond share classes and benchmark mapping are wrong: {total_bond}")
+    composite_bond = next(group for group in groups if group.get("benchmark_code") == "H11009.CSI")
+    if composite_bond.get("strategy_family_key") != "fixed_income_general":
+        raise AssertionError(f"Composite bond must enter general fixed-income peers: {composite_bond}")
+
     reasons = plan.get("summary", {}).get("skipped_by_reason") or {}
     if reasons.get("unsupported_index_enhanced") != 1:
         raise AssertionError(f"Enhanced index must remain outside passive-index auto mapping: {plan}")
     if reasons.get("unsupported_or_ambiguous_index_benchmark") != 1:
         raise AssertionError(f"Theme index must not collapse into HS300: {plan}")
-    if reasons.get("unsupported_fund_type") != 1:
-        raise AssertionError(f"Unsupported bond classification must remain explicit: {plan}")
+    if reasons.get("unsupported_active_equity_sector_or_index_style") != 1:
+        raise AssertionError(f"Sector equity funds must not enter broad-reference peers: {plan}")
+    if reasons.get("unsupported_active_equity_secondary_reference") != 1:
+        raise AssertionError(f"Multiple equity market references must remain outside the catalog: {plan}")
+    if reasons.get("active_equity_reference_weight_below_80") != 1:
+        raise AssertionError(f"Low-weight equity references must remain outside the catalog: {plan}")
+    if reasons.get("unsupported_fixed_income_style") != 2:
+        raise AssertionError(f"Credit and convertible bond funds must remain outside general bond peers: {plan}")
+    if reasons.get("fixed_income_reference_not_100_percent") != 1:
+        raise AssertionError(f"Bond benchmarks containing equity exposure must remain outside the catalog: {plan}")
     if reasons.get("invalid_fund_code_format") != 1:
         raise AssertionError(f"Malformed fund codes must not enter standardized entities: {plan}")
 

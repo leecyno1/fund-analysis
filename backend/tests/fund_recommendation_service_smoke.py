@@ -87,7 +87,6 @@ def main() -> int:
     panels["000005.OF"] = [
         item for item in panels["000005.OF"] if item["metric_name"] != "tracking_error"
     ]
-    rows[5]["risk_metrics"] = {}
     profiles = {
         row["wind_code"]: {
             "peer_group": row["standardized_peer_group_name"],

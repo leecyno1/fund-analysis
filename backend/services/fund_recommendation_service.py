@@ -146,10 +146,7 @@ class FundRecommendationService:
         if not profile_key:
             return None, "evaluation_method_missing"
 
-        metrics = self._merge_metric_windows(
-            self._metrics_by_window(panel),
-            self.scoring_service.metric_facts_from_fund(row),
-        )
+        metrics = self._metrics_by_window(panel)
         metric_configs = self.scoring_service.methodology.peer_metric_configs(profile_key)
         if not metric_configs:
             return None, "evaluation_method_missing"
@@ -350,19 +347,6 @@ class FundRecommendationService:
                 continue
             result.setdefault(str(item.get("metric_window") or "latest"), {})[str(name)] = value
         return result
-
-    @staticmethod
-    def _merge_metric_windows(
-        primary: Dict[str, Dict[str, float]],
-        fallback: Dict[str, Dict[str, float]],
-    ) -> Dict[str, Dict[str, float]]:
-        merged = {window: values.copy() for window, values in primary.items()}
-        for window, values in fallback.items():
-            target = merged.setdefault(window, {})
-            for name, value in values.items():
-                if target.get(name) is None and value is not None:
-                    target[name] = value
-        return merged
 
     def _metric_value(self, metrics: Dict[str, Dict[str, float]], config: Dict[str, Any]) -> Optional[float]:
         value = None

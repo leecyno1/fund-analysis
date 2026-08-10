@@ -4,6 +4,8 @@
 默认仅预览；传入 --apply 才写库。当前自动规则范围：
 - 法定类型明确的货币基金；
 - 投资类型为被动指数型，且合同基准能精确映射到目录中基准代码的基金。
+- 股票型基金中，合同基准以单一支持宽基为主要权益参考的基金；
+- 债券型基金中，合同基准为中证全债或中证综合债 100% 的基金。
 
 模糊类别不会猜测，也不会生成投资建议。
 """
@@ -35,13 +37,18 @@ from services.fund_classification_ingestion_service import FundClassificationIng
 
 def load_funds(limit: int, fund_type: str) -> List[Dict[str, Any]]:
     where = [
-        "(type IN ('货币型', '指数型', 'money', 'index') OR type ILIKE '%货币%' OR type ILIKE '%指数%')",
+        "(type IN ('货币型', '指数型', '股票型', '债券型', 'money', 'index', 'stock', 'bond') "
+        "OR type ILIKE '%货币%' OR type ILIKE '%指数%')",
         "NOT (name ILIKE '%清算%' OR name ILIKE '%终止%' OR name ILIKE '%退市%')",
     ]
     if fund_type == "money":
         where.append("(type IN ('货币型', 'money') OR type ILIKE '%货币%')")
     elif fund_type == "index":
         where.append("(type IN ('指数型', 'index') OR type ILIKE '%指数%')")
+    elif fund_type == "equity":
+        where.append("type IN ('股票型', 'stock')")
+    elif fund_type == "bond":
+        where.append("type IN ('债券型', 'bond')")
 
     params: Dict[str, Any] = {}
     limit_clause = ""
@@ -70,7 +77,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="同步正式分类目录和高置信度基金分类")
     parser.add_argument("--apply", action="store_true", help="实际写入；默认只预览")
     parser.add_argument("--limit", type=int, default=0, help="最多读取基金数；0 表示不限制")
-    parser.add_argument("--fund-type", choices=("all", "money", "index"), default="all")
+    parser.add_argument(
+        "--fund-type",
+        choices=("all", "money", "index", "equity", "bond"),
+        default="all",
+    )
     parser.add_argument("--skip-samples", type=int, default=20, help="输出的跳过样本数量")
     args = parser.parse_args()
 

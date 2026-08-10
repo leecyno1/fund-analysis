@@ -17,12 +17,28 @@ class FundClassificationIngestionService:
 
     SOURCE = "tushare_classification_ingestion"
     SHARE_CLASSES = {"A", "B", "C", "D", "E", "F", "H", "I", "R", "Y"}
-    PRIMARY_SHARE_PRIORITY = {None: 0, "A": 1, "I": 2, "B": 3, "C": 4, "D": 5, "E": 6, "F": 7, "H": 8, "R": 9, "Y": 10}
+    PRIMARY_SHARE_PRIORITY = {"A": 0, None: 1, "I": 2, "B": 3, "C": 4, "D": 5, "E": 6, "F": 7, "H": 8, "R": 9, "Y": 10}
     ENHANCED_INDEX_TERMS = ("增强", "量化", "主动", "策略增强")
     TERMINATED_TERMS = ("清算", "终止", "退市")
+    ACTIVE_EQUITY_NAME_EXCLUSIONS = (
+        "etf", "fof", "联接", "指数", "增强", "量化", "行业", "主题", "医药", "医疗",
+        "健康", "科技", "半导体", "芯片", "集成电路", "新能源", "消费", "军工", "传媒",
+        "金融", "地产", "人工智能", "互联网", "农业", "制造", "环保", "绿色", "资源",
+        "能源", "材料", "低碳", "创新药", "新经济", "改革", "产业", "养老", "文化",
+        "文体", "沪港深", "港股", "全球", "外向", "专精特新", "内需", "国策", "智造",
+        "事件驱动", "大数据",
+    )
+    ACTIVE_FIXED_INCOME_NAME_EXCLUSIONS = (
+        "可转债", "转债", "二级债", "信用", "产业债", "双债", "增强", "混合",
+    )
+    ACTIVE_EQUITY_ALLOWED_SECONDARY_TERMS = (
+        "存款", "利率", "中债", "全债", "综合债", "国债", "债券", "同业存单",
+    )
     FUND_CODE_PATTERN = re.compile(r"^[0-9]{6}\.(OF|SH|SZ|BJ)$", re.IGNORECASE)
 
     INDEX_RULES = tuple(FundClassificationCatalog.TRACKED_INDEX_RULES)
+    ACTIVE_EQUITY_RULES = tuple(FundClassificationCatalog.ACTIVE_EQUITY_REFERENCE_RULES)
+    ACTIVE_FIXED_INCOME_RULES = tuple(FundClassificationCatalog.ACTIVE_FIXED_INCOME_REFERENCE_RULES)
 
     def __init__(self, repository: Optional[Any] = None):
         self._repository = repository
@@ -62,7 +78,9 @@ class FundClassificationIngestionService:
                 "mapping_method": candidate["mapping_method"],
                 "classification_confidence": candidate["classification_confidence"],
                 "benchmark_confidence": candidate["benchmark_confidence"],
+                "benchmark_weight": candidate.get("benchmark_weight"),
                 "rationale": candidate["rationale"],
+                "automatic_rule_scope": candidate["automatic_rule_scope"],
                 "normalized_name": candidate["normalized_name"],
                 "shares": [],
             })
@@ -124,49 +142,32 @@ class FundClassificationIngestionService:
         contract_type = self._raw_classification_value(fund, "contract_type")
 
         if "货币" in fund_type or fund_type == "money":
-            classification = {
-                "strategy_family_key": "cash_management",
-                "asset_class": "money_market",
-                "active_passive": "active",
-                "peer_group_key": "peer-money-cash-management",
-                "benchmark_code": "DR007",
-                "benchmark_name": "DR007",
-                "benchmark_type": "money_market_rate",
-                "mapping_method": "legal_type_cash_rate_policy",
-                "classification_confidence": 0.97,
-                "benchmark_confidence": 0.86,
-                "rationale": "基金法定类型明确为货币基金；DR007 仅作为资金利率参照，不生成净值跟踪误差。",
-            }
+            classification, reason = self._money_market_candidate()
         elif "指数" in fund_type or fund_type == "index":
-            combined = f"{name} {declared_benchmark} {invest_type}"
-            if any(term in combined for term in self.ENHANCED_INDEX_TERMS):
-                return None, "unsupported_index_enhanced"
-            if invest_type and invest_type != "被动指数型":
-                return None, "unsupported_index_investment_type"
-            matched = [rule for rule in self.INDEX_RULES if self._matches_index_rule(rule, declared_benchmark)]
-            if len(matched) != 1:
-                return None, "unsupported_or_ambiguous_index_benchmark"
-            rule = matched[0]
-            required_contract_term = rule.get("required_contract_term")
-            if required_contract_term and required_contract_term not in contract_type:
-                return None, "index_contract_type_conflict"
-            if rule["asset_class"] == "index" and "债券" in contract_type:
-                return None, "index_contract_type_conflict"
-            classification = {
-                "strategy_family_key": rule["strategy_family_key"],
-                "asset_class": rule["asset_class"],
-                "active_passive": "passive",
-                "peer_group_key": rule["peer_group_key"],
-                "benchmark_code": rule["benchmark_code"],
-                "benchmark_name": rule["benchmark_name"],
-                "benchmark_type": "tracked_index",
-                "mapping_method": "declared_benchmark_exact_alias",
-                "classification_confidence": 0.99,
-                "benchmark_confidence": 0.99,
-                "rationale": f"投资类型为被动指数型，合同业绩比较基准明确引用{rule['benchmark_name']}指数。",
-            }
+            classification, reason = self._passive_index_candidate(
+                name,
+                declared_benchmark,
+                invest_type,
+                contract_type,
+            )
+        elif fund_type in {"股票型", "stock"}:
+            classification, reason = self._active_equity_candidate(
+                name,
+                declared_benchmark,
+                invest_type,
+                contract_type,
+            )
+        elif fund_type in {"债券型", "bond"}:
+            classification, reason = self._active_fixed_income_candidate(
+                name,
+                declared_benchmark,
+                invest_type,
+                contract_type,
+            )
         else:
             return None, "unsupported_fund_type"
+        if classification is None:
+            return None, reason
 
         established_at = self._date_text(fund.get("establishment_date") or fund.get("found_date"))
         return {
@@ -187,10 +188,154 @@ class FundClassificationIngestionService:
             },
         }, "eligible"
 
+    def _money_market_candidate(self) -> Tuple[Dict[str, Any], str]:
+        return {
+            "strategy_family_key": "cash_management",
+            "asset_class": "money_market",
+            "active_passive": "active",
+            "peer_group_key": "peer-money-cash-management",
+            "benchmark_code": "DR007",
+            "benchmark_name": "DR007",
+            "benchmark_type": "money_market_rate",
+            "mapping_method": "legal_type_cash_rate_policy",
+            "classification_confidence": 0.97,
+            "benchmark_confidence": 0.86,
+            "benchmark_weight": None,
+            "automatic_rule_scope": "legal_money_market",
+            "rationale": "基金法定类型明确为货币基金；DR007 仅作为资金利率参照，不生成净值跟踪误差。",
+        }, "eligible"
+
+    def _passive_index_candidate(
+        self,
+        name: str,
+        declared_benchmark: str,
+        invest_type: str,
+        contract_type: str,
+    ) -> Tuple[Optional[Dict[str, Any]], str]:
+        combined = f"{name} {declared_benchmark} {invest_type}"
+        if any(term in combined for term in self.ENHANCED_INDEX_TERMS):
+            return None, "unsupported_index_enhanced"
+        if invest_type and invest_type != "被动指数型":
+            return None, "unsupported_index_investment_type"
+        matched = [rule for rule in self.INDEX_RULES if self._matches_index_rule(rule, declared_benchmark)]
+        if len(matched) != 1:
+            return None, "unsupported_or_ambiguous_index_benchmark"
+        rule = matched[0]
+        required_contract_term = rule.get("required_contract_term")
+        if required_contract_term and required_contract_term not in contract_type:
+            return None, "index_contract_type_conflict"
+        if rule["asset_class"] == "index" and "债券" in contract_type:
+            return None, "index_contract_type_conflict"
+        return {
+            "strategy_family_key": rule["strategy_family_key"],
+            "asset_class": rule["asset_class"],
+            "active_passive": "passive",
+            "peer_group_key": rule["peer_group_key"],
+            "benchmark_code": rule["benchmark_code"],
+            "benchmark_name": rule["benchmark_name"],
+            "benchmark_type": "tracked_index",
+            "mapping_method": "declared_benchmark_exact_alias",
+            "classification_confidence": 0.99,
+            "benchmark_confidence": 0.99,
+            "benchmark_weight": None,
+            "automatic_rule_scope": "exact_supported_passive_index",
+            "rationale": f"投资类型为被动指数型，合同业绩比较基准明确引用{rule['benchmark_name']}指数。",
+        }, "eligible"
+
+    def _active_equity_candidate(
+        self,
+        name: str,
+        declared_benchmark: str,
+        invest_type: str,
+        contract_type: str,
+    ) -> Tuple[Optional[Dict[str, Any]], str]:
+        if invest_type not in {"股票型", "普通股票型"}:
+            return None, "unsupported_active_equity_investment_type"
+        if contract_type != "股票型":
+            return None, "active_equity_contract_type_conflict"
+        if not declared_benchmark:
+            return None, "missing_declared_benchmark"
+        lower_name = name.lower()
+        if any(term in lower_name for term in self.ACTIVE_EQUITY_NAME_EXCLUSIONS):
+            return None, "unsupported_active_equity_sector_or_index_style"
+
+        matched = self._weighted_rule_matches(self.ACTIVE_EQUITY_RULES, declared_benchmark)
+        if len(matched) != 1:
+            return None, "unsupported_or_ambiguous_active_equity_benchmark"
+        match = matched[0]
+        if match["weight"] < 80:
+            return None, "active_equity_reference_weight_below_80"
+        if self._has_unsupported_equity_secondary(declared_benchmark, match["alias"]):
+            return None, "unsupported_active_equity_secondary_reference"
+
+        rule = match["rule"]
+        return {
+            "strategy_family_key": "active_equity_core",
+            "asset_class": "equity",
+            "active_passive": "active",
+            "peer_group_key": rule["peer_group_key"],
+            "benchmark_code": rule["benchmark_code"],
+            "benchmark_name": rule["benchmark_name"],
+            "benchmark_type": "composite_primary_equity_reference",
+            "mapping_method": "declared_benchmark_primary_equity_alias_and_weight",
+            "classification_confidence": 0.96,
+            "benchmark_confidence": 0.96,
+            "benchmark_weight": match["weight"],
+            "automatic_rule_scope": "active_stock_single_broad_equity_reference",
+            "rationale": (
+                f"基金法定、投资与合同类型均为股票型；合同组合基准以{rule['benchmark_name']}"
+                f"为主权益参考（权重{match['weight']:g}%）。基准代码仅表示主权益参考，不代表完整复合基准。"
+            ),
+        }, "eligible"
+
+    def _active_fixed_income_candidate(
+        self,
+        name: str,
+        declared_benchmark: str,
+        invest_type: str,
+        contract_type: str,
+    ) -> Tuple[Optional[Dict[str, Any]], str]:
+        if invest_type != "债券型":
+            return None, "unsupported_fixed_income_investment_type"
+        if contract_type != "债券型":
+            return None, "fixed_income_contract_type_conflict"
+        if not declared_benchmark:
+            return None, "missing_declared_benchmark"
+        if any(term in name for term in self.ACTIVE_FIXED_INCOME_NAME_EXCLUSIONS):
+            return None, "unsupported_fixed_income_style"
+
+        matched = self._weighted_rule_matches(self.ACTIVE_FIXED_INCOME_RULES, declared_benchmark)
+        if len(matched) != 1:
+            return None, "unsupported_or_ambiguous_fixed_income_benchmark"
+        match = matched[0]
+        if match["weight"] != 100 or "+" in unicodedata.normalize("NFKC", declared_benchmark):
+            return None, "fixed_income_reference_not_100_percent"
+
+        rule = match["rule"]
+        return {
+            "strategy_family_key": "fixed_income_general",
+            "asset_class": "fixed_income",
+            "active_passive": "active",
+            "peer_group_key": rule["peer_group_key"],
+            "benchmark_code": rule["benchmark_code"],
+            "benchmark_name": rule["benchmark_name"],
+            "benchmark_type": "declared_bond_index",
+            "mapping_method": "declared_benchmark_exact_bond_alias_and_weight",
+            "classification_confidence": 0.98,
+            "benchmark_confidence": 0.99,
+            "benchmark_weight": match["weight"],
+            "automatic_rule_scope": "active_bond_exact_supported_100_percent_reference",
+            "rationale": (
+                f"基金法定、投资与合同类型均为债券型；合同业绩比较基准为"
+                f"{rule['benchmark_name']}指数100%，且未混入权益或转债基准。"
+            ),
+        }, "eligible"
+
     def _finalize_group(self, group: Dict[str, Any]) -> Dict[str, Any]:
         shares = sorted(
             group["shares"],
             key=lambda share: (
+                0 if str(share.get("wind_code") or "").upper().endswith(".OF") else 1,
                 self.PRIMARY_SHARE_PRIORITY.get(share.get("share_class"), 99),
                 share.get("established_at") or "9999-12-31",
                 share["wind_code"],
@@ -218,9 +363,50 @@ class FundClassificationIngestionService:
                 "declaredBenchmark": primary.get("declared_benchmark"),
                 "shareCodes": [share["wind_code"] for share in shares],
                 "catalogVersion": FundClassificationCatalog.VERSION,
-                "automaticRuleScope": "money_market_or_exact_supported_passive_index",
+                "primaryReferenceWeight": group.get("benchmark_weight"),
+                "automaticRuleScope": group.get("automatic_rule_scope"),
             },
         }
+
+    def _weighted_rule_matches(
+        self,
+        rules: Iterable[Dict[str, Any]],
+        benchmark: str,
+    ) -> List[Dict[str, Any]]:
+        matches: List[Dict[str, Any]] = []
+        normalized = unicodedata.normalize("NFKC", benchmark)
+        operator = r"(?:\*|×|x|X)"
+        suffix = r"(?:收益率|涨跌幅)?"
+        for rule in rules:
+            for alias in rule.get("aliases") or []:
+                after = re.compile(
+                    re.escape(alias) + suffix + r"\s*" + operator + r"\s*(\d+(?:\.\d+)?)\s*%",
+                    re.IGNORECASE,
+                )
+                before = re.compile(
+                    r"(\d+(?:\.\d+)?)\s*%\s*" + operator + r"\s*" + re.escape(alias) + suffix,
+                    re.IGNORECASE,
+                )
+                for pattern in (after, before):
+                    for item in pattern.finditer(normalized):
+                        matches.append({
+                            "rule": rule,
+                            "alias": alias,
+                            "weight": float(item.group(1)),
+                        })
+        return matches
+
+    def _has_unsupported_equity_secondary(self, benchmark: str, primary_alias: str) -> bool:
+        components = re.split(r"\s*\+\s*", unicodedata.normalize("NFKC", benchmark))
+        for component in components:
+            if primary_alias in component:
+                continue
+            if any(term in component for term in ("可转债", "可转换债券", "可交换债")):
+                return True
+            if any(term in component for term in self.ACTIVE_EQUITY_ALLOWED_SECONDARY_TERMS):
+                continue
+            return True
+        return False
 
     def _matches_index_rule(self, rule: Dict[str, Any], benchmark: str) -> bool:
         if not benchmark or benchmark.count("指数") > 1:

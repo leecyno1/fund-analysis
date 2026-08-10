@@ -177,10 +177,7 @@ class PeerComparisonService:
                 continue
             wind_code = fund.get("wind_code")
             profile = profile_repo.get_profile(wind_code) or {}
-            panel = self._merge_metric_windows(
-                self._metrics_by_window(metric_repo.get_latest_panel("fund", wind_code)),
-                self._fund_fallback_metrics(fund),
-            )
+            panel = self._metrics_by_window(metric_repo.get_latest_panel("fund", wind_code))
             scoring = self._safe_score(wind_code)
             percentiles = self.build_peer_percentiles(wind_code, window=window)
             classification = percentiles.get("classification") or scoring.get("classification") or {}
@@ -357,33 +354,13 @@ class PeerComparisonService:
         from repositories import get_metric_snapshot_repo
 
         repo = get_metric_snapshot_repo()
-        fund_map = {fund.get("wind_code"): fund for fund in (fund_rows or []) if fund.get("wind_code")}
         loaded_panels = preloaded_panels or {}
         missing_codes = [code for code in wind_codes if code not in loaded_panels]
         batch_panels = repo.get_latest_panels("fund", missing_codes) if missing_codes else {}
         return {
-            code: self._merge_metric_windows(
-                self._metrics_by_window(loaded_panels.get(code, batch_panels.get(code, []))),
-                self._fund_fallback_metrics(fund_map.get(code, {})),
-            )
+            code: self._metrics_by_window(loaded_panels.get(code, batch_panels.get(code, [])))
             for code in wind_codes
         }
-
-    def _merge_metric_windows(
-        self,
-        primary: Dict[str, Dict[str, float]],
-        fallback: Dict[str, Dict[str, float]],
-    ) -> Dict[str, Dict[str, float]]:
-        merged = {window: values.copy() for window, values in primary.items()}
-        for window, values in fallback.items():
-            target = merged.setdefault(window, {})
-            for metric_name, value in values.items():
-                if target.get(metric_name) is None and value is not None:
-                    target[metric_name] = value
-        return merged
-
-    def _fund_fallback_metrics(self, fund: Dict[str, Any]) -> Dict[str, Dict[str, float]]:
-        return self.scoring_service.metric_facts_from_fund(fund)
 
     def _metrics_by_window(self, panel: List[Dict[str, Any]]) -> Dict[str, Dict[str, float]]:
         metrics: Dict[str, Dict[str, float]] = {}
@@ -668,7 +645,11 @@ class PeerComparisonService:
                 if isinstance(raw_data.get("ranking_metrics"), dict)
                 else None
             )
-            if ranking_status in {"nav_unavailable", "invalid_nav"}:
+            if ranking_status in {"nav_unavailable", "invalid_nav", "insufficient_metric_history"}:
+                continue
+            if ranking_status == "synced" and int(
+                raw_data.get("ranking_metrics", {}).get("nav_points") or 0
+            ) < 151:
                 continue
             missing_metrics = [
                 metric_name

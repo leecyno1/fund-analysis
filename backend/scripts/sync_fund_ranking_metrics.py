@@ -289,6 +289,7 @@ def select_peer_evaluation_coverage_codes(
           WHERE pgm.peer_group_id = pg.id
             AND pgm.role <> 'excluded'
           ORDER BY
+            fsc.is_primary DESC,
             CASE WHEN EXISTS (
               SELECT 1
               FROM metric_snapshots ms
@@ -298,7 +299,6 @@ def select_peer_evaluation_coverage_codes(
                 AND ms.metric_name = 'annualized_return'
             ) THEN 0 ELSE 1 END,
             f.total_asset DESC NULLS LAST,
-            fsc.is_primary DESC,
             fsc.wind_code ASC
           LIMIT 1
         ) candidate ON TRUE
@@ -414,6 +414,15 @@ def sync_one_fund(
     metric_payload = build_fund_metric_payload(panel)
     metric_payload["performance_data"].update(enrichment.get("performance_facts") or {})
     latest_payload = latest_nav_payload(nav_series)
+    one_year_ready = all(
+        metric_payload[section].get(metric_name) is not None
+        for section, metric_name in (
+            ("performance_data", "annualized_return_1y"),
+            ("risk_metrics", "max_drawdown_1y"),
+            ("performance_data", "sharpe_ratio"),
+        )
+    )
+    ranking_status = "synced" if one_year_ready else "insufficient_metric_history"
 
     ok = fund_repo.upsert_fund(
         wind_code,
@@ -430,7 +439,7 @@ def sync_one_fund(
             "raw_data": {
                 "source": "tushare",
                 "ranking_metrics": {
-                    "status": "synced",
+                    "status": ranking_status,
                     "source": "tushare.fund_nav",
                     "synced_at": datetime.now(UTC).isoformat(),
                     "start_date": start_date.isoformat(),
@@ -454,9 +463,9 @@ def sync_one_fund(
         },
     )
 
-    return {
+    result = {
         "wind_code": wind_code,
-        "status": "synced" if ok else "failed",
+        "status": "synced" if ok and one_year_ready else "skipped" if ok else "failed",
         "nav_points": len(nav_series),
         "saved_metric_snapshots": rolling_result.get("saved", 0),
         "latest_nav_date": latest_payload.get("nav_date"),
@@ -464,6 +473,9 @@ def sync_one_fund(
         "max_drawdown_1y": metric_payload["risk_metrics"].get("max_drawdown_1y"),
         "sharpe_1y": metric_payload["performance_data"].get("sharpe_ratio"),
     }
+    if ok and not one_year_ready:
+        result["reason"] = f"1Y 滚动指标观察不足，当前净值点 {len(nav_series)}"
+    return result
 
 
 def main() -> int:

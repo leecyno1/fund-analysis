@@ -233,6 +233,7 @@ class FundClassificationRepo:
                 LEFT JOIN funds f ON f.wind_code = fsc.wind_code
                 WHERE pgm.peer_group_id = :peer_group_id
                   AND pgm.role <> 'excluded'
+                  AND fe.lifecycle_stage = 'active'
                 ORDER BY
                     fe.id,
                     CASE WHEN fsc.wind_code = :target_wind_code THEN 0 ELSE 1 END,
@@ -360,6 +361,7 @@ class FundClassificationRepo:
                 JOIN funds f ON f.wind_code = fsc.wind_code
                 WHERE (pg.name = :peer_group OR pg.key = :peer_group)
                   AND pgm.role <> 'excluded'
+                  AND fe.lifecycle_stage = 'active'
                   AND (
                     :keyword = ''
                     OR f.name ILIKE :keyword_pattern
@@ -367,9 +369,9 @@ class FundClassificationRepo:
                   )
                 ORDER BY
                     fe.id,
+                    fsc.is_primary DESC,
                     CASE WHEN f.performance_data IS NULL OR f.performance_data = '{}'::jsonb THEN 1 ELSE 0 END,
                     CASE WHEN f.risk_metrics IS NULL OR f.risk_metrics = '{}'::jsonb THEN 1 ELSE 0 END,
-                    fsc.is_primary DESC,
                     f.nav_date DESC NULLS LAST,
                     fsc.wind_code ASC
             ) peer_funds
@@ -409,6 +411,7 @@ class FundClassificationRepo:
             JOIN funds f ON f.wind_code = fsc.wind_code
             WHERE (pg.name = :peer_group OR pg.key = :peer_group)
               AND pgm.role <> 'excluded'
+              AND fe.lifecycle_stage = 'active'
               AND (
                 :keyword = ''
                 OR f.name ILIKE :keyword_pattern

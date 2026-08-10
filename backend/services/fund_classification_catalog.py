@@ -8,18 +8,18 @@ from typing import Any, Dict, List
 class FundClassificationCatalog:
     """标准分类定义的唯一来源。"""
 
-    VERSION = "fund_classification_catalog_v1"
+    VERSION = "fund_classification_catalog_v2"
 
     STRATEGY_FAMILIES: List[Dict[str, Any]] = [
         {
             "id": "strategy-family-active-equity-core",
             "key": "active_equity_core",
-            "name": "主动权益-核心/均衡",
+            "name": "主动权益-宽基参考",
             "asset_class": "equity",
             "active_passive": "active",
             "evaluation_profile_key": "active_equity",
-            "compatible_fund_types": ["stock", "股票型", "普通股票型", "hybrid", "偏股混合型", "偏股混合"],
-            "style_tags": ["主动权益", "核心", "均衡"],
+            "compatible_fund_types": ["stock", "股票型", "普通股票型"],
+            "style_tags": ["主动权益", "宽基参考"],
         },
         {
             "id": "strategy-family-active-equity-sector",
@@ -213,6 +213,48 @@ class FundClassificationCatalog:
         },
     ]
 
+    ACTIVE_EQUITY_REFERENCE_RULES: List[Dict[str, Any]] = [
+        {
+            "aliases": ["沪深300指数"],
+            "benchmark_code": "000300.SH",
+            "benchmark_name": "沪深300",
+            "peer_group_key": "peer-active-equity-stock-hs300",
+        },
+        {
+            "aliases": ["中证500指数", "中证小盘500指数"],
+            "benchmark_code": "000905.SH",
+            "benchmark_name": "中证500",
+            "peer_group_key": "peer-active-equity-stock-csi500",
+        },
+        {
+            "aliases": ["中证800指数"],
+            "benchmark_code": "000906.SH",
+            "benchmark_name": "中证800",
+            "peer_group_key": "peer-active-equity-stock-csi800",
+        },
+        {
+            "aliases": ["中证1000指数"],
+            "benchmark_code": "000852.SH",
+            "benchmark_name": "中证1000",
+            "peer_group_key": "peer-active-equity-stock-csi1000",
+        },
+    ]
+
+    ACTIVE_FIXED_INCOME_REFERENCE_RULES: List[Dict[str, Any]] = [
+        {
+            "aliases": ["中证全债指数"],
+            "benchmark_code": "H11001.CSI",
+            "benchmark_name": "中证全债",
+            "peer_group_key": "peer-fixed-income-csi-total-bond",
+        },
+        {
+            "aliases": ["中证综合债指数", "中证综合债券指数"],
+            "benchmark_code": "H11009.CSI",
+            "benchmark_name": "中证综合债",
+            "peer_group_key": "peer-fixed-income-csi-composite-bond",
+        },
+    ]
+
     @classmethod
     def family_meta(cls) -> Dict[str, Dict[str, Any]]:
         return {
@@ -258,6 +300,48 @@ class FundClassificationCatalog:
                     "declaredBenchmarkRequired": True,
                 },
                 "exclusion_rules": {"exclude": ["指数增强", "非同指数"]},
+                "minimum_peer_count": 5,
+            })
+        for rule in cls.ACTIVE_EQUITY_REFERENCE_RULES:
+            groups.append({
+                "id": rule["peer_group_key"],
+                "key": rule["peer_group_key"],
+                "name": f"主动权益-{rule['benchmark_name']}参考",
+                "strategy_family_key": "active_equity_core",
+                "asset_class": "equity",
+                "active_passive": "active",
+                "benchmark_code": rule["benchmark_code"],
+                "benchmark_name": rule["benchmark_name"],
+                "inclusion_rules": {
+                    "legalType": "股票型",
+                    "primaryEquityReference": rule["benchmark_code"],
+                    "minimumPrimaryWeight": 80,
+                    "declaredBenchmarkRequired": True,
+                },
+                "exclusion_rules": {
+                    "exclude": ["指数基金", "指数增强", "行业主题", "多权益市场基准"],
+                },
+                "minimum_peer_count": 5,
+            })
+        for rule in cls.ACTIVE_FIXED_INCOME_REFERENCE_RULES:
+            groups.append({
+                "id": rule["peer_group_key"],
+                "key": rule["peer_group_key"],
+                "name": f"固收-{rule['benchmark_name']}参考",
+                "strategy_family_key": "fixed_income_general",
+                "asset_class": "fixed_income",
+                "active_passive": "active",
+                "benchmark_code": rule["benchmark_code"],
+                "benchmark_name": rule["benchmark_name"],
+                "inclusion_rules": {
+                    "legalType": "债券型",
+                    "bondReference": rule["benchmark_code"],
+                    "requiredWeight": 100,
+                    "declaredBenchmarkRequired": True,
+                },
+                "exclusion_rules": {
+                    "exclude": ["可转债", "二级债", "含权益基准", "复合基准"],
+                },
                 "minimum_peer_count": 5,
             })
         return groups
