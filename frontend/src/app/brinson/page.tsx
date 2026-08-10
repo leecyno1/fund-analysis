@@ -6,8 +6,9 @@ import { BrinsonWaterfall, BrinsonReturns } from '@/components/brinson/BrinsonWa
 
 interface BrinsonAnalysis {
   fund_code: string
-  benchmark: string
+  benchmark: string | null
   quarter: string
+  status: 'ok' | 'partial_evidence' | 'insufficient_evidence' | 'not_applicable'
   returns: { portfolio: number; benchmark: number; active: number }
   attribution: {
     allocation_effect: number
@@ -25,11 +26,12 @@ interface BrinsonAnalysis {
     allocation_contrib: number
     selection_contrib: number
   }>
+  missing_items: string[]
 }
 
 export default function BrinsonPage() {
   const [fundCode, setFundCode] = useState('000001.OF')
-  const [benchmark, setBenchmark] = useState('000300')
+  const [benchmark, setBenchmark] = useState('')
   const [quarter, setQuarter] = useState('')
   const [data, setData] = useState<BrinsonAnalysis | null>(null)
   const [loading, setLoading] = useState(false)
@@ -41,7 +43,8 @@ export default function BrinsonPage() {
     setError('')
 
     try {
-      const params = new URLSearchParams({ benchmark })
+      const params = new URLSearchParams()
+      if (benchmark) params.set('benchmark', benchmark)
       if (quarter) params.set('quarter', quarter)
       const res = await fetch(`/api/brinson/attribution/${fundCode}?${params}`)
       if (!res.ok) throw new Error('归因分析失败')
@@ -85,6 +88,7 @@ export default function BrinsonPage() {
             onChange={e => setBenchmark(e.target.value)}
             className="px-4 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"
           >
+            <option value="">自动使用基金分类基准</option>
             <option value="000300">沪深300</option>
             <option value="000905">中证500</option>
             <option value="000852">中证1000</option>
@@ -118,7 +122,12 @@ export default function BrinsonPage() {
       )}
 
       {data && !loading && (
-        <div className="grid grid-cols-2 gap-6">
+        data.attribution.total == null ? (
+          <div className="bg-amber-50 text-amber-800 px-5 py-4 rounded-lg">
+            <div className="font-medium">当前证据不足，无法输出 Brinson 结论</div>
+            <div className="text-sm mt-2">{data.missing_items.join('；')}</div>
+          </div>
+        ) : <div className="grid grid-cols-2 gap-6">
           {/* 收益对比 */}
           <div className="bg-white rounded-xl p-6 shadow-sm border border-slate-100">
             <h3 className="text-md font-semibold text-slate-700 mb-4">收益对比</h3>

@@ -1,154 +1,95 @@
-"""
-Barra 风险因子 API 路由
-"""
-from fastapi import APIRouter, HTTPException, Query
-from datetime import datetime
-import logging
+"""旧 Barra 路由的统一归因兼容 Adapter。"""
+from typing import Any, Dict, Optional
 
-logger = logging.getLogger(__name__)
+from fastapi import APIRouter, HTTPException, Query
+from sqlalchemy.exc import SQLAlchemyError
+
 router = APIRouter(prefix="/api/barra", tags=["Barra风险分析"])
+
+
+def _legacy_exposure_payload(bundle: Dict[str, Any]) -> Dict[str, Any]:
+    barra = bundle.get("barra") or {}
+    factor_exposures = barra.get("factor_exposures") or []
+    return {
+        "fund_code": (bundle.get("fund") or {}).get("wind_code"),
+        "quarter": barra.get("quarter") or bundle.get("holding_snapshot_quarter"),
+        "attribution_quarter": bundle.get("quarter"),
+        "status": barra.get("status", "insufficient_evidence"),
+        "source": barra.get("source", "evidence_gate"),
+        "formal_model_ready": bool(barra.get("formal_model_ready")),
+        "exposures": factor_exposures,
+        "industry_exposures": barra.get("industry_exposures") or {},
+        "risk_contributions": barra.get("risk_contributions") or [],
+        "total_factor_risk": None,
+        "specific_risk": None,
+        "r_squared": barra.get("r_squared"),
+        "num_holdings": barra.get("holdings_count", 0),
+        "top10_weight": barra.get("holdings_disclosed_weight", 0),
+        "missing_items": barra.get("missing_items") or [],
+        "replacement_endpoint": f"/api/attribution/fund/{(bundle.get('fund') or {}).get('wind_code')}",
+    }
+
+
+def _run_attribution(fund_code: str, quarter: Optional[str]) -> Dict[str, Any]:
+    from services.performance_attribution_service import PerformanceAttributionService
+
+    return PerformanceAttributionService().analyze(wind_code=fund_code, quarter=quarter)
+
+
+def _raise_http_error(exc: Exception) -> None:
+    if isinstance(exc, ValueError):
+        status_code = 404 if str(exc).startswith("Fund not found") else 400
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+    if isinstance(exc, SQLAlchemyError):
+        raise HTTPException(status_code=503, detail=f"Attribution store unavailable: {exc.__class__.__name__}") from exc
+    raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @router.get("/exposure/{fund_code}", deprecated=True)
 async def get_barra_exposure(
     fund_code: str,
-    quarter: str = Query(None, description="季度, 如: 2024Q1"),
-):
-    """获取基金 Barra 因子暴露度"""
+    quarter: Optional[str] = Query(None, description="归因季度，如 2026Q2"),
+) -> Dict[str, Any]:
+    """兼容旧调用方；结果由统一业绩归因 Module 生成。"""
     try:
-        from lib.barra.factor_calculation import BarraCalculator
-        from service_registry import get_data_service
-
-        data_svc = get_data_service()
-        calculator = BarraCalculator()
-
-        if quarter is None:
-            year = datetime.now().year
-            q = (datetime.now().month - 1) // 3 + 1
-            quarter = f"{year}Q{q}"
-
-        holdings = data_svc.get_fund_holdings(fund_code, quarter)
-        style_factors = data_svc.get_fund_style(fund_code)
-        result = calculator.get_exposure_result(holdings, style_factors, quarter)
-        if result.get("status") == "insufficient_evidence":
-            return {
-                "fund_code": fund_code,
-                "quarter": quarter,
-                "status": "insufficient_evidence",
-                "source": "evidence_gate",
-                "exposures": [],
-                "industry_exposures": {},
-                "risk_contributions": [],
-                "total_factor_risk": None,
-                "specific_risk": None,
-                "r_squared": None,
-                "num_holdings": result.get("num_holdings", 0),
-                "top10_weight": result.get("top10_weight", 0),
-                "missing_items": result.get("missing_items", []),
-            }
-
-        # 持久化到数据库
-        try:
-            from repositories import get_factor_repo
-            factor_repo = get_factor_repo()
-            factor_repo.save_exposures(
-                fund_code, quarter,
-                result.get("style_exposures", {}),
-                result.get("risk_contributions", [])
-            )
-        except Exception as db_err:
-            logger.warning(f"Failed to save Barra exposures to DB: {db_err}")
-
-        return {
-            "fund_code": fund_code,
-            "quarter": quarter,
-            "exposures": [
-                {
-                    "factor": k,
-                    "exposure": v,
-                    "factor_vol": 0.12,
-                    "risk_contribution": next(
-                        (r["risk_contribution"] for r in result.get("risk_contributions", []) if r["factor"] == k),
-                        0.0
-                    ),
-                }
-                for k, v in result.get("style_exposures", {}).items()
-            ],
-            "industry_exposures": result.get("industry_exposures", {}),
-            "risk_contributions": result.get("risk_contributions", []),
-            "total_factor_risk": result.get("total_factor_risk", 0),
-            "specific_risk": result.get("specific_risk", 0.02),
-            "r_squared": result.get("r_squared", 0),
-            "num_holdings": result.get("num_holdings", 0),
-            "top10_weight": result.get("top10_weight", 0),
-            "status": result.get("status", "ok"),
-            "missing_items": result.get("missing_items", []),
-        }
-    except Exception as e:
-        logger.error(f"Barra exposure error for {fund_code}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        return _legacy_exposure_payload(_run_attribution(fund_code, quarter))
+    except Exception as exc:
+        _raise_http_error(exc)
 
 
 @router.get("/risk-decomposition/{fund_code}", deprecated=True)
 async def get_risk_decomposition(
     fund_code: str,
-    quarter: str = Query(None),
-):
-    """获取风险分解"""
+    quarter: Optional[str] = Query(None, description="归因季度，如 2026Q2"),
+) -> Dict[str, Any]:
+    """兼容旧调用方；无正式协方差矩阵时不输出风险贡献。"""
     try:
-        from lib.barra.factor_calculation import BarraCalculator
-        from service_registry import get_data_service
-
-        data_svc = get_data_service()
-        calculator = BarraCalculator()
-
-        if quarter is None:
-            year = datetime.now().year
-            q = (datetime.now().month - 1) // 3 + 1
-            quarter = f"{year}Q{q}"
-
-        holdings = data_svc.get_fund_holdings(fund_code, quarter)
-        style_factors = data_svc.get_fund_style(fund_code)
-        result = calculator.get_exposure_result(holdings, style_factors, quarter)
-        if result.get("status") == "insufficient_evidence":
-            return {
-                "fund_code": fund_code,
-                "quarter": quarter,
-                "status": "insufficient_evidence",
-                "source": "evidence_gate",
-                "factor_risk": None,
-                "specific_risk": None,
-                "factor_risk_pct": None,
-                "specific_risk_pct": None,
-                "r_squared": None,
-                "risk_contributions": [],
-                "missing_items": result.get("missing_items", []),
-            }
-
-        total = result.get("total_factor_risk", 0) + result.get("specific_risk", 0)
-        factor_risk_pct = result.get("total_factor_risk", 0) / max(total, 0.001)
-        specific_risk_pct = result.get("specific_risk", 0) / max(total, 0.001)
-
+        payload = _legacy_exposure_payload(_run_attribution(fund_code, quarter))
         return {
-            "fund_code": fund_code,
-            "quarter": quarter,
-            "factor_risk": round(result.get("total_factor_risk", 0), 6),
-            "specific_risk": round(result.get("specific_risk", 0), 6),
-            "factor_risk_pct": round(factor_risk_pct, 4),
-            "specific_risk_pct": round(specific_risk_pct, 4),
-            "r_squared": result.get("r_squared", 0),
-            "risk_contributions": result.get("risk_contributions", []),
+            "fund_code": payload["fund_code"],
+            "quarter": payload["quarter"],
+            "attribution_quarter": payload["attribution_quarter"],
+            "status": payload["status"],
+            "source": payload["source"],
+            "formal_model_ready": payload["formal_model_ready"],
+            "factor_risk": None,
+            "specific_risk": None,
+            "factor_risk_pct": None,
+            "specific_risk_pct": None,
+            "r_squared": payload["r_squared"],
+            "risk_contributions": payload["risk_contributions"],
+            "missing_items": payload["missing_items"],
+            "replacement_endpoint": payload["replacement_endpoint"],
         }
-    except Exception as e:
-        logger.error(f"Risk decomposition error for {fund_code}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as exc:
+        _raise_http_error(exc)
 
 
 @router.get("/score/{fund_code}", deprecated=True)
 async def get_barra_score(
     fund_code: str,
-    quarter: str = Query(None),
-):
+    quarter: Optional[str] = Query(None),
+) -> Dict[str, Any]:
     """兼容旧调用方：Barra 不再生成基金评价分数。"""
     return {
         "fund_code": fund_code,

@@ -4,7 +4,7 @@ import { useMemo } from 'react'
 
 interface BarraRadarProps {
   exposures: Record<string, number>
-  riskContributions?: Array<{ factor: string; risk_contribution: number; exposure: number }>
+  riskContributions?: Array<{ factor: string; risk_contribution: number; exposure?: number }>
   compact?: boolean
 }
 

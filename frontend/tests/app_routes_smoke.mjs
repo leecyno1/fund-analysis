@@ -12,7 +12,7 @@ const checks = [
   '/api/research-reports?page=1',
   '/api/managers?page=1&page_size=2',
   '/api/barra/exposure/000001.OF',
-  '/api/brinson/attribution/000001.OF?benchmark=000300',
+  '/api/brinson/attribution/000001.OF',
 ]
 
 for (const path of checks) {

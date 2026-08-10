@@ -167,7 +167,7 @@ interface BrinsonReturnsProps {
 }
 
 export function BrinsonReturns({ attribution }: BrinsonReturnsProps) {
-  const { returns, attr } = attribution
+  const { returns, attribution: attr } = attribution
   const activePct = returns.active * 100
   const allocPct = attr.allocation_effect * 100
   const selPct = attr.selection_effect * 100

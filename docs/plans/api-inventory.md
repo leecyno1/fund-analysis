@@ -36,11 +36,12 @@
 | Endpoint | Current | Owner | Target | Risk | Notes |
 |---|---|---|---|---|---|
 | `/api/reports/manager/{manager_id}` | FastAPI | FastAPI | FastAPI | Low | AI 报告主入口。 |
-| `/api/barra/exposure/{fund_code}` | FastAPI | FastAPI | FastAPI | Low | 风格暴露权威接口。 |
-| `/api/barra/risk-decomposition/{fund_code}` | FastAPI | FastAPI | FastAPI | Low | 风险分解权威接口。 |
-| `/api/barra/score/{fund_code}` | FastAPI | FastAPI | FastAPI | Low | 风险评分权威接口。 |
-| `/api/brinson/attribution/{fund_code}` | FastAPI | FastAPI | FastAPI | Low | 业绩归因权威接口。 |
-| `/api/brinson/history/{fund_code}` | FastAPI | FastAPI | FastAPI | Low | 历史归因查询。 |
+| `/api/attribution/fund/{wind_code}` | FastAPI | FastAPI | FastAPI | Low | 统一业绩归因权威接口。 |
+| `/api/barra/exposure/{fund_code}` | FastAPI | FastAPI | Compatibility | Low | 旧兼容 Adapter，映射统一归因中的 Barra 证据。 |
+| `/api/barra/risk-decomposition/{fund_code}` | FastAPI | FastAPI | Deprecated | Low | 无正式风险模型输入时不输出风险贡献、特异风险和 R²。 |
+| `/api/barra/score/{fund_code}` | FastAPI | FastAPI | Deprecated | Low | Barra 只作解释证据，不生成基金评价分数。 |
+| `/api/brinson/attribution/{fund_code}` | FastAPI | FastAPI | Compatibility | Low | 旧兼容 Adapter，默认基准来自基金分类目录。 |
+| `/api/brinson/history/{fund_code}` | FastAPI | FastAPI | Deprecated | Low | 停止用一年收益复制季度历史；历史归因按季度现场运行。 |
 | `/api/data-sync/funds/{wind_code}` | FastAPI | FastAPI | FastAPI | Low | 单基金同步。 |
 | `/api/data-sync/managers/{manager_id}` | FastAPI | FastAPI | FastAPI | Low | 单经理同步。 |
 | `/api/data-sync/batch` | FastAPI | FastAPI | FastAPI | Low | 批量同步任务。 |

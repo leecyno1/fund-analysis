@@ -1,221 +1,108 @@
-"""
-Brinson 业绩归因 API 路由
-"""
-from fastapi import APIRouter, HTTPException, Query
-from datetime import datetime
-import logging
+"""旧 Brinson 路由的统一归因兼容 Adapter。"""
+from typing import Any, Dict, Optional
 
-logger = logging.getLogger(__name__)
+from fastapi import APIRouter, HTTPException, Query
+from sqlalchemy.exc import SQLAlchemyError
+
 router = APIRouter(prefix="/api/brinson", tags=["Brinson业绩归因"])
 
 
-def _missing_benchmark_attribution(fund_code: str, benchmark: str, quarter: str, fund_return: float):
+def _legacy_brinson_payload(bundle: Dict[str, Any]) -> Dict[str, Any]:
+    brinson = bundle.get("brinson") or {}
+    returns = brinson.get("returns") or {}
+    effects = {
+        item.get("name"): item.get("value")
+        for item in brinson.get("effects") or []
+        if item.get("name")
+    }
+    active_return = returns.get("active")
+    fund_code = (bundle.get("fund") or {}).get("wind_code")
     return {
         "fund_code": fund_code,
-        "benchmark": benchmark,
-        "quarter": quarter,
-        "status": "insufficient_evidence",
-        "source": "evidence_gate",
+        "benchmark": bundle.get("benchmark"),
+        "benchmark_source": bundle.get("benchmark_source"),
+        "quarter": bundle.get("quarter"),
+        "holding_snapshot_quarter": bundle.get("holding_snapshot_quarter"),
+        "status": brinson.get("status", "insufficient_evidence"),
+        "source": brinson.get("source", "evidence_gate"),
         "returns": {
-            "fund": round(fund_return, 4),
-            "benchmark": None,
-            "active": None,
+            "fund": returns.get("fund"),
+            "portfolio": returns.get("fund"),
+            "benchmark": returns.get("benchmark"),
+            "active": active_return,
         },
         "attribution": {
-            "allocation_effect": None,
-            "selection_effect": None,
-            "interaction_effect": None,
-            "residual": None,
-            "total": None,
+            "allocation_effect": effects.get("allocation"),
+            "selection_effect": effects.get("selection"),
+            "interaction_effect": effects.get("interaction"),
+            "residual": effects.get("residual"),
+            "total": active_return if effects else None,
         },
-        "industry_detail": [],
-        "missing_items": ["基准区间收益缺失，不能输出可验证的 Brinson 归因"],
+        "industry_detail": brinson.get("industry_detail") or [],
+        "coverage": brinson.get("coverage") or {},
+        "missing_items": brinson.get("missing_items") or [],
+        "replacement_endpoint": f"/api/attribution/fund/{fund_code}",
     }
+
+
+def _run_attribution(
+    fund_code: str,
+    benchmark: Optional[str],
+    quarter: Optional[str],
+) -> Dict[str, Any]:
+    from services.performance_attribution_service import PerformanceAttributionService
+
+    return PerformanceAttributionService().analyze(
+        wind_code=fund_code,
+        benchmark=benchmark,
+        quarter=quarter,
+    )
+
+
+def _raise_http_error(exc: Exception) -> None:
+    if isinstance(exc, ValueError):
+        status_code = 404 if str(exc).startswith("Fund not found") else 400
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+    if isinstance(exc, SQLAlchemyError):
+        raise HTTPException(status_code=503, detail=f"Attribution store unavailable: {exc.__class__.__name__}") from exc
+    raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @router.get("/attribution/{fund_code}", deprecated=True)
 async def get_brinson_attribution(
     fund_code: str,
-    benchmark: str = Query("000300", description="基准指数代码"),
-    quarter: str = Query(None, description="季度, 如: 2024Q1"),
-):
-    """获取 Brinson 业绩归因"""
+    benchmark: Optional[str] = Query(None, description="留空时使用基金分类目录基准"),
+    quarter: Optional[str] = Query(None, description="归因季度，如 2026Q2"),
+) -> Dict[str, Any]:
+    """兼容旧调用方；结果由统一业绩归因 Module 生成。"""
     try:
-        from lib.brinson.attribution import BrinsonAttributor
-        from service_registry import get_data_service
-
-        data_svc = get_data_service()
-        attributor = BrinsonAttributor()
-
-        if quarter is None:
-            year = datetime.now().year
-            q = (datetime.now().month - 1) // 3 + 1
-            quarter = f"{year}Q{q}"
-
-        # 获取基金收益
-        perf = data_svc.get_fund_performance(fund_code)
-        fund_return = perf.get("annualized_return_1y", 0)
-
-        benchmark_return = perf.get("benchmark_return_1y")
-        if benchmark_return is None:
-            return _missing_benchmark_attribution(fund_code, benchmark, quarter, fund_return)
-
-        # 获取持仓
-        holdings = data_svc.get_fund_holdings(fund_code, quarter)
-
-        # 计算归因
-        attribution = attributor.calculate_attribution(
-            holdings, fund_return, benchmark_return
-        )
-        if attribution.get("status") == "insufficient_evidence":
-            return {
-                "fund_code": fund_code,
-                "benchmark": benchmark,
-                "quarter": quarter,
-                "status": "insufficient_evidence",
-                "source": "evidence_gate",
-                "returns": {
-                    "fund": round(fund_return, 4),
-                    "benchmark": round(benchmark_return, 4),
-                    "active": round(fund_return - benchmark_return, 4),
-                },
-                "attribution": {
-                    "allocation_effect": None,
-                    "selection_effect": None,
-                    "interaction_effect": None,
-                    "residual": None,
-                    "total": None,
-                },
-                "industry_detail": [],
-                "missing_items": attribution.get("missing_items", []),
-            }
-
-        return {
-            "fund_code": fund_code,
-            "benchmark": benchmark,
-            "quarter": quarter,
-            "returns": {
-                "fund": round(fund_return, 4),
-                "benchmark": round(benchmark_return, 4),
-                "active": round(fund_return - benchmark_return, 4),
-            },
-            "attribution": {
-                "allocation_effect": attribution.get("allocation_effect", 0),
-                "selection_effect": attribution.get("selection_effect", 0),
-                "interaction_effect": attribution.get("interaction_effect", 0),
-                "residual": attribution.get("residual", 0),
-                "total": round(
-                    attribution.get("allocation_effect", 0)
-                    + attribution.get("selection_effect", 0)
-                    + attribution.get("interaction_effect", 0),
-                    4
-                ),
-            },
-            "industry_detail": attribution.get("industry_details", []),
-        }
-    except Exception as e:
-        logger.error(f"Brinson attribution error for {fund_code}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        bundle = _run_attribution(fund_code, benchmark, quarter)
+        return _legacy_brinson_payload(bundle)
+    except Exception as exc:
+        _raise_http_error(exc)
 
 
 @router.get("/history/{fund_code}", deprecated=True)
 async def get_brinson_history(
     fund_code: str,
-    quarters: int = Query(8, ge=1, le=16, description="最近季度数"),
-):
-    """获取归因历史"""
-    try:
-        from lib.brinson.attribution import BrinsonAttributor
-        from service_registry import get_data_service
-
-        data_svc = get_data_service()
-        attributor = BrinsonAttributor()
-
-        attributions = []
-        perf = data_svc.get_fund_performance(fund_code)
-        fund_return = perf.get("annualized_return_1y", 0)
-        benchmark_return = perf.get("benchmark_return_1y")
-        if benchmark_return is None:
-            return {
-                "fund_code": fund_code,
-                "status": "insufficient_evidence",
-                "source": "evidence_gate",
-                "attributions": [],
-                "summary": {
-                    "avg_allocation": None,
-                    "avg_selection": None,
-                    "total_active": None,
-                    "information_ratio": None,
-                },
-                "missing_items": ["基准区间收益缺失，不能输出可验证的 Brinson 历史归因"],
-            }
-
-        for i in range(quarters):
-            year = datetime.now().year
-            q = (datetime.now().month - 1) // 3 + 1 - i
-            while q <= 0:
-                q += 4
-                year -= 1
-            quarter = f"{year}Q{q}"
-
-            holdings = data_svc.get_fund_holdings(fund_code, quarter)
-            attr = attributor.calculate_attribution(holdings, fund_return * 0.25, benchmark_return * 0.25)
-            if attr.get("status") == "insufficient_evidence":
-                attributions.append({
-                    "quarter": quarter,
-                    "status": "insufficient_evidence",
-                    "active_return": attr.get("active_return", 0),
-                    "allocation_effect": None,
-                    "selection_effect": None,
-                    "interaction_effect": None,
-                    "missing_items": attr.get("missing_items", []),
-                })
-                continue
-            attributions.append({
-                "quarter": quarter,
-                "active_return": attr.get("active_return", 0),
-                "allocation_effect": attr.get("allocation_effect", 0),
-                "selection_effect": attr.get("selection_effect", 0),
-                "interaction_effect": attr.get("interaction_effect", 0),
-            })
-
-        # 汇总统计
-        available_attributions = [item for item in attributions if item.get("status") != "insufficient_evidence"]
-        if not available_attributions:
-            return {
-                "fund_code": fund_code,
-                "status": "insufficient_evidence",
-                "source": "evidence_gate",
-                "attributions": attributions,
-                "summary": {
-                    "avg_allocation": None,
-                    "avg_selection": None,
-                    "total_active": round(sum(a["active_return"] for a in attributions), 4),
-                    "information_ratio": None,
-                },
-                "missing_items": sorted({
-                    missing
-                    for item in attributions
-                    for missing in item.get("missing_items", [])
-                }),
-            }
-
-        avg_alloc = sum(a["allocation_effect"] for a in available_attributions) / len(available_attributions)
-        avg_sel = sum(a["selection_effect"] for a in available_attributions) / len(available_attributions)
-        total_active = sum(a["active_return"] for a in attributions)
-        active_returns = [a["active_return"] for a in attributions if a["active_return"] != 0]
-        ir = (sum(active_returns) / len(active_returns)) / (sum((r - sum(active_returns)/len(active_returns))**2 for r in active_returns) / len(active_returns)) ** 0.5 if len(active_returns) > 1 else 0
-
-        return {
-            "fund_code": fund_code,
-            "attributions": attributions,
-            "summary": {
-                "avg_allocation": round(avg_alloc, 4),
-                "avg_selection": round(avg_sel, 4),
-                "total_active": round(total_active, 4),
-                "information_ratio": round(ir, 4),
-            },
-        }
-    except Exception as e:
-        logger.error(f"Brinson history error for {fund_code}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    quarters: int = Query(8, ge=1, le=16, description="已弃用，仅保留参数兼容"),
+) -> Dict[str, Any]:
+    """停止用一年收益复制季度历史；历史分析应由用户逐季度现场运行。"""
+    return {
+        "fund_code": fund_code,
+        "status": "deprecated",
+        "source": "methodology_scope",
+        "requested_quarters": quarters,
+        "attributions": [],
+        "summary": {
+            "avg_allocation": None,
+            "avg_selection": None,
+            "total_active": None,
+            "information_ratio": None,
+        },
+        "replacement_endpoint": f"/api/attribution/fund/{fund_code}?quarter=YYYYQ1",
+        "missing_items": [
+            "旧接口曾把同一个一年收益拆成多个季度，口径错误，现已停止输出",
+            "需要历史归因时，请按季度现场运行统一业绩归因",
+        ],
+    }

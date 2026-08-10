@@ -8,14 +8,20 @@ import { BarraRadarChart, BarraStyleExposure } from '@/components/barra/BarraRad
 interface BarraAnalysis {
   fund_code: string
   quarter: string
+  status: 'ok' | 'partial_evidence' | 'insufficient_evidence'
   exposures: Array<{ factor: string; exposure: number }>
   industry_exposures: Record<string, number>
   risk_contributions: Array<{ factor: string; risk_contribution: number }>
-  total_factor_risk: number
-  specific_risk: number
-  r_squared: number
+  total_factor_risk: number | null
+  specific_risk: number | null
+  r_squared: number | null
   num_holdings: number
   top10_weight: number
+  missing_items: string[]
+}
+
+function formatPercent(value: number | null) {
+  return value == null ? '—' : `${(value * 100).toFixed(1)}%`
 }
 
 export default function BarraPage() {
@@ -58,7 +64,7 @@ export default function BarraPage() {
           <BarChart2 className="w-6 h-6 text-blue-600" />
           Barra 风险因子分析
         </h1>
-        <p className="text-slate-500 mt-1">基于 Barra 多因子模型的风格暴露与风险归因</p>
+        <p className="text-slate-500 mt-1">展示可核验的风格与行业暴露；风险输入不完整时不估算 R²</p>
       </div>
 
       {/* 搜索框 */}
@@ -95,6 +101,11 @@ export default function BarraPage() {
 
       {data && !loading && (
         <div className="grid grid-cols-2 gap-6">
+          {data.missing_items.length > 0 && (
+            <div className="col-span-2 bg-amber-50 text-amber-800 px-5 py-4 rounded-lg text-sm">
+              {data.missing_items.join('；')}
+            </div>
+          )}
           {/* 风格因子雷达图 */}
           <div className="bg-white rounded-xl p-6 shadow-sm border border-slate-100">
             <h3 className="text-md font-semibold text-slate-700 mb-4">风格因子暴露</h3>
@@ -111,7 +122,7 @@ export default function BarraPage() {
               <div className="grid grid-cols-2 gap-4">
                 <div className="bg-slate-50 rounded-lg p-4 text-center">
                   <div className="text-2xl font-bold text-blue-600">
-                    {(data.r_squared * 100).toFixed(1)}%
+                    {formatPercent(data.r_squared)}
                   </div>
                   <div className="text-xs text-slate-500 mt-1">R² 解释度</div>
                 </div>
@@ -132,7 +143,7 @@ export default function BarraPage() {
                 </div>
                 <div className="bg-slate-50 rounded-lg p-4 text-center">
                   <div className="text-2xl font-bold text-amber-600">
-                    {(data.total_factor_risk * 100).toFixed(1)}%
+                    {formatPercent(data.total_factor_risk)}
                   </div>
                   <div className="text-xs text-slate-500 mt-1">因子风险</div>
                 </div>

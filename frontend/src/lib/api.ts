@@ -170,8 +170,9 @@ export async function getBarraFactorReturns(factor: string, startDate?: string, 
 
 // ============ Brinson 归因 API ============
 
-export async function getBrinsonAttribution(fundCode: string, benchmark = '000300', quarter?: string) {
-  const params = new URLSearchParams({ benchmark })
+export async function getBrinsonAttribution(fundCode: string, benchmark?: string, quarter?: string) {
+  const params = new URLSearchParams()
+  if (benchmark) params.set('benchmark', benchmark)
   if (quarter) params.set('quarter', quarter)
   return request<BrinsonResult>(`/brinson/attribution/${fundCode}?${params}`)
 }
@@ -365,35 +366,40 @@ export interface AIReport {
 export interface BarraExposureResult {
   fund_code: string
   quarter: string
+  status: 'ok' | 'partial_evidence' | 'insufficient_evidence'
   exposures: BarraFactor[]
-  total_factor_risk: number
-  specific_risk: number
-  r_squared: number
+  total_factor_risk: number | null
+  specific_risk: number | null
+  r_squared: number | null
+  missing_items: string[]
 }
 
 export interface BarraFactor {
   factor: string
   exposure: number
-  factor_vol: number
-  risk_contribution: number
+  factor_vol?: number
+  risk_contribution?: number
 }
 
 export interface BrinsonResult {
   fund_code: string
-  benchmark: string
+  benchmark: string | null
   quarter: string
+  status: 'ok' | 'partial_evidence' | 'insufficient_evidence' | 'not_applicable'
   returns: {
-    portfolio: number
-    benchmark: number
-    active: number
+    portfolio: number | null
+    benchmark: number | null
+    active: number | null
   }
   attribution: {
-    allocation_effect: number
-    selection_effect: number
-    interaction_effect: number
-    total: number
+    allocation_effect: number | null
+    selection_effect: number | null
+    interaction_effect: number | null
+    residual: number | null
+    total: number | null
   }
   industry_detail: IndustryAttribution[]
+  missing_items: string[]
 }
 
 export interface IndustryAttribution {
