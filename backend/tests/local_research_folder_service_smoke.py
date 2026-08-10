@@ -260,6 +260,10 @@ def main() -> int:
         second = service.scan_folder(folder["id"])
         if second.get("counts") != {"created": 0, "updated": 0, "unchanged": 5, "failed": 0, "supported": 5}:
             raise AssertionError(f"Unchanged files should not be reparsed: {second}")
+        if second.get("profile_projection", {}).get("projected_count") != 1:
+            raise AssertionError(f"A repeat scan should rebuild profiles from reviewed memos: {second}")
+        if projection_calls[-1][1] != ["000001.OF"]:
+            raise AssertionError(f"Scan projection should include confirmed fund identities: {projection_calls[-1]}")
 
         time.sleep(0.002)
         notes_path.write_text("基金经理：李四\n风格：均衡、大盘\n更新后的风险控制记录。", encoding="utf-8")

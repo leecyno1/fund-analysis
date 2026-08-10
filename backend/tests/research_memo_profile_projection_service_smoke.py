@@ -126,9 +126,9 @@ def main() -> int:
         classification_adapter=FakeClassificationAdapter(),
     )
 
-    result = service.project_report(reports[1], ["000001.C"])
+    result = service.project_report(reports[1], ["000001.C", "000001.OF"])
     profile = profile_repo.get_profile("000001.OF")
-    if result.get("projected_count") != 1 or not profile:
+    if result.get("projected_count") != 1 or len(result.get("funds") or []) != 1 or not profile:
         raise AssertionError(f"Confirmed memo labels should create a profile: {result}")
     if profile.get("style_label") != "成长":
         raise AssertionError(f"Most frequently confirmed style should be primary: {profile}")

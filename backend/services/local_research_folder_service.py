@@ -108,12 +108,14 @@ class LocalResearchFolderService:
             "last_scan_counts": counts,
             "updated_at": scanned_at,
         })
+        profile_projection = self._project_scan_results(results)
         return {
             "folder_id": folder_id,
             "folder_path": str(root),
             "scanned_at": scanned_at,
             "counts": counts,
             "results": results,
+            "profile_projection": profile_projection,
         }
 
     def list_pending_reviews(self, folder_id: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -163,6 +165,31 @@ class LocalResearchFolderService:
             "proposal": target,
             "profile_projection": projection,
         }
+
+    def _project_scan_results(self, results: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        if not self.profile_projector:
+            return None
+        reports = []
+        for report_id in dict.fromkeys(
+            result.get("report_id") for result in results if result.get("report_id")
+        ):
+            report = self.repo.get_report(report_id)
+            if report:
+                reports.append(report)
+        fund_ids = list(dict.fromkeys(
+            fund_id
+            for report in reports
+            for fund_id in report.get("fund_ids", [])
+            if fund_id
+        ))
+        if not fund_ids:
+            return {
+                "projected_count": 0,
+                "deleted_count": 0,
+                "skipped_count": 0,
+                "funds": [],
+            }
+        return self.profile_projector(reports[0], fund_ids)
 
     def _index_file(self, folder_id: str, root: Path, path: Path) -> Dict[str, Any]:
         relative_path = path.relative_to(root).as_posix()

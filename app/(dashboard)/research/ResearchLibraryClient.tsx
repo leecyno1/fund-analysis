@@ -228,7 +228,14 @@ export default function ResearchLibraryClient() {
       const payload = await response.json().catch(() => ({}))
       if (!response.ok) throw new Error(payload.error || '扫描失败')
       setLastScanCounts(payload.counts || emptyCounts)
-      setFolderMessage(payload.counts?.failed ? '扫描完成，部分文件需要处理' : '扫描完成')
+      const projectedCount = Number(payload.profile_projection?.projected_count || 0)
+      const deletedCount = Number(payload.profile_projection?.deleted_count || 0)
+      const profileMessage = projectedCount
+        ? `，已更新 ${projectedCount} 只基金画像`
+        : deletedCount
+          ? `，已清理 ${deletedCount} 个失效画像`
+          : ''
+      setFolderMessage(`${payload.counts?.failed ? '扫描完成，部分文件需要处理' : '扫描完成'}${profileMessage}`)
       await Promise.all([loadMemos(), loadFolders(selectedFolder.id)])
     } catch (scanError) {
       setFolderMessage(scanError instanceof Error ? scanError.message : '扫描失败')
@@ -252,6 +259,15 @@ export default function ResearchLibraryClient() {
       const payload = await response.json().catch(() => ({}))
       if (!response.ok) throw new Error(payload.error || '无法保存复核结果')
       setPendingReviews((items) => items.filter((item) => item.id !== review.id))
+      const projectedCount = Number(payload.profile_projection?.projected_count || 0)
+      const deletedCount = Number(payload.profile_projection?.deleted_count || 0)
+      setFolderMessage(
+        projectedCount
+          ? `已保存，并更新 ${projectedCount} 只基金画像`
+          : deletedCount
+            ? `已保存，并清理 ${deletedCount} 个失效画像`
+            : '已保存',
+      )
       await loadMemos()
     } catch (reviewError) {
       setFolderMessage(reviewError instanceof Error ? reviewError.message : '无法保存复核结果')
