@@ -31,6 +31,7 @@ for (const expected of [
   '拒绝',
   '来源原文',
   '经理归类',
+  '确认高置信经理',
   '当前只识别基金经理、基金代码和原文明示的分类/风格字段',
   '不会把普通关键词当成已确认风格',
 ]) {
@@ -41,6 +42,7 @@ for (const expected of [
   "fetch('/api/research-folders'",
   '/scan`, { method: \'POST\' }',
   "fetch('/api/research-folders/reviews'",
+  "fetch('/api/research-folders/reviews/confirm-managers'",
   "method: 'PATCH'",
 ]) {
   assertIncludes(page, expected, 'research library API wiring')
@@ -55,6 +57,7 @@ for (const route of [
   'app/api/research-folders/route.ts',
   'app/api/research-folders/[folderId]/scan/route.ts',
   'app/api/research-folders/reviews/route.ts',
+  'app/api/research-folders/reviews/confirm-managers/route.ts',
   'app/api/research-folders/reviews/[reportId]/[proposalId]/route.ts',
 ]) {
   if (!fs.existsSync(path.join(root, route))) throw new Error(`missing Next.js API bridge: ${route}`)

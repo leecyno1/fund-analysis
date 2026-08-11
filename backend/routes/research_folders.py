@@ -21,6 +21,11 @@ class ReviewDecisionRequest(BaseModel):
     action: Literal["confirmed", "rejected"]
 
 
+class BulkManagerReviewRequest(BaseModel):
+    folder_id: Optional[str] = None
+    min_confidence: float = Field(default=0.88, ge=0, le=1)
+
+
 @lru_cache(maxsize=1)
 def _get_service() -> LocalResearchFolderService:
     from repositories.local_research_folder_repo import PostgresLocalResearchFolderRepo
@@ -79,6 +84,14 @@ async def scan_folder(folder_id: str):
 async def list_pending_reviews(folder_id: Optional[str] = Query(None)):
     data = _get_service().list_pending_reviews(folder_id)
     return {"total": len(data), "data": data}
+
+
+@router.post("/reviews/confirm-managers")
+async def confirm_manager_reviews(payload: BulkManagerReviewRequest):
+    return _get_service().confirm_manager_proposals(
+        folder_id=payload.folder_id,
+        min_confidence=payload.min_confidence,
+    )
 
 
 @router.patch("/reviews/{report_id}/{proposal_id}")

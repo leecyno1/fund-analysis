@@ -323,6 +323,54 @@ def main() -> int:
         if updated_document.get("content_hash") != expected_hash:
             raise AssertionError(f"Updated hash was not stored: {updated_document}")
 
+    bulk_repo = MemoryResearchFolderRepo()
+    bulk_repo.reports["report-high"] = {
+        "id": "report-high",
+        "title": "高置信经理纪要",
+        "local_folder_id": "folder-bulk",
+        "manager_id": "",
+        "manager_name": "",
+        "classifications": [],
+        "style_labels": [],
+        "tags": [],
+        "fund_ids": [],
+        "review_status": "pending",
+        "review_proposals": [{
+            "id": "manager-high",
+            "kind": "manager",
+            "value": "张三",
+            "confidence": 0.92,
+            "review_status": "pending",
+            "source_ref": {"relative_path": "张三.docx", "excerpt": "文件名：张三.docx"},
+        }],
+    }
+    bulk_repo.reports["report-low"] = {
+        "id": "report-low",
+        "title": "低置信经理纪要",
+        "local_folder_id": "folder-bulk",
+        "manager_id": "",
+        "manager_name": "",
+        "classifications": [],
+        "style_labels": [],
+        "tags": [],
+        "fund_ids": [],
+        "review_status": "pending",
+        "review_proposals": [{
+            "id": "manager-low",
+            "kind": "manager",
+            "value": "李四",
+            "confidence": 0.7,
+            "review_status": "pending",
+            "source_ref": {"relative_path": "访谈.docx", "excerpt": "疑似李四"},
+        }],
+    }
+    bulk_service = LocalResearchFolderService(repo=bulk_repo)
+    bulk_result = bulk_service.confirm_manager_proposals("folder-bulk", 0.88)
+    if bulk_result.get("confirmed") != 1 or bulk_repo.reports["report-high"].get("manager_name") != "张三":
+        raise AssertionError(f"High-confidence manager reviews must be confirmable in one action: {bulk_result}")
+    if bulk_repo.reports["report-low"]["review_proposals"][0].get("review_status") != "pending":
+        raise AssertionError("Low-confidence manager reviews must remain pending")
+
     for unsafe in ("/", str(Path.home()), "/path/that/does/not/exist"):
         try:
             service.add_folder(unsafe)

@@ -103,6 +103,7 @@ export default function ResearchLibraryClient() {
   const [connecting, setConnecting] = useState(false)
   const [scanning, setScanning] = useState(false)
   const [reviewingId, setReviewingId] = useState('')
+  const [bulkReviewing, setBulkReviewing] = useState(false)
   const [reviewFilter, setReviewFilter] = useState<ReviewFilter>('manager')
   const [error, setError] = useState('')
   const [folderMessage, setFolderMessage] = useState('')
@@ -124,6 +125,10 @@ export default function ResearchLibraryClient() {
     if (reviewFilter === 'labels') return ['classification', 'style_label', 'tag'].includes(review.kind)
     return true
   }), [pendingReviews, reviewFilter])
+  const highConfidenceManagerCount = useMemo(
+    () => pendingReviews.filter((review) => review.kind === 'manager' && review.confidence >= 0.88).length,
+    [pendingReviews],
+  )
   const reviewGroups = useMemo(() => {
     const groups = new Map<string, { reportId: string; title: string; relativePath: string; items: PendingReview[] }>()
     for (const review of visibleReviews) {
@@ -326,6 +331,27 @@ export default function ResearchLibraryClient() {
     }
   }
 
+  async function confirmHighConfidenceManagers() {
+    if (!highConfidenceManagerCount) return
+    setBulkReviewing(true)
+    setFolderMessage('')
+    try {
+      const response = await fetch('/api/research-folders/reviews/confirm-managers', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ folder_id: selectedFolder?.id || null, min_confidence: 0.88 }),
+      })
+      const payload = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(payload.error || '批量确认失败')
+      setFolderMessage(`已确认 ${Number(payload.confirmed || 0)} 份高置信经理归类，关联 ${Number(payload.linked_fund_count || 0)} 只任期基金`)
+      await Promise.all([loadMemos(), loadReviews(selectedFolder?.id || '')])
+    } catch (bulkError) {
+      setFolderMessage(bulkError instanceof Error ? bulkError.message : '批量确认失败')
+    } finally {
+      setBulkReviewing(false)
+    }
+  }
+
   async function openMemo(memo: ResearchMemo) {
     setSelectedMemo(memo)
     setDetailLoading(true)
@@ -411,7 +437,13 @@ export default function ResearchLibraryClient() {
       <section aria-labelledby="review-heading" className="border-t border-[#dce1dc] pt-5">
         <div className="flex flex-wrap items-end justify-between gap-4 pb-3">
           <div><h2 id="review-heading" className="text-lg font-bold">待确认</h2><p className="mt-1 text-xs text-[#748078]">先确认基金经理；系统会自动关联 Tushare 已核验的任期基金。</p></div>
-          <span className="text-xs text-[#748078]">当前 {reviewGroups.length} 份纪要 · {visibleReviews.length} 项</span>
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="text-xs text-[#748078]">当前 {reviewGroups.length} 份纪要 · {visibleReviews.length} 项</span>
+            <button type="button" onClick={() => void confirmHighConfidenceManagers()} disabled={!highConfidenceManagerCount || bulkReviewing} className="inline-flex h-9 items-center gap-2 rounded-md border border-[#8fa99b] bg-white px-3 text-xs font-bold text-[#285d49] disabled:opacity-45">
+              {bulkReviewing ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
+              确认高置信经理 {highConfidenceManagerCount}
+            </button>
+          </div>
         </div>
         <div className="mb-3 flex flex-wrap gap-2" aria-label="待确认类型">
           {([
