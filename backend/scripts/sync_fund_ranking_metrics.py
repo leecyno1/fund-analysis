@@ -294,6 +294,43 @@ def select_target_codes(
         return [row.wind_code for row in conn.execute(sql, params).fetchall()]
 
 
+def select_research_linked_codes(limit: int, missing_only: bool) -> List[str]:
+    """只选择本地调研纪要关联且已完成标准分类的基金。"""
+    missing_sql = ""
+    if missing_only:
+        missing_sql = """
+          AND NOT EXISTS (
+            SELECT 1 FROM metric_snapshots ms
+            WHERE ms.target_type = 'fund'
+              AND ms.target_id = linked.wind_code
+              AND ms.metric_window = '1y'
+              AND ms.metric_name = 'annualized_return'
+          )
+        """
+    sql = text(f"""
+        WITH linked AS (
+          SELECT DISTINCT proposal->>'value' AS wind_code
+          FROM research_reports report
+          CROSS JOIN LATERAL jsonb_array_elements(COALESCE(report.review_proposals, '[]')) proposal
+          WHERE proposal->>'kind' = 'fund'
+            AND proposal->>'extraction_source' = 'tushare.fund_manager'
+        )
+        SELECT linked.wind_code
+        FROM linked
+        JOIN fund_share_classes share
+          ON share.wind_code = linked.wind_code
+         AND share.status = 'active'
+        JOIN funds fund ON fund.wind_code = linked.wind_code
+        WHERE linked.wind_code LIKE '%.OF'
+          AND NOT (fund.name ILIKE '%清算%' OR fund.name ILIKE '%终止%' OR fund.name ILIKE '%退市%')
+          {missing_sql}
+        ORDER BY linked.wind_code
+        LIMIT :limit
+    """)
+    with get_engine().connect() as conn:
+        return [row.wind_code for row in conn.execute(sql, {"limit": limit}).fetchall()]
+
+
 def select_peer_evaluation_coverage_codes(
     limit: int,
     peer_group_keys: List[str],
@@ -531,6 +568,7 @@ def main() -> int:
     parser.add_argument("--min-age-days", type=int, default=430, help="自动选样时要求基金至少成立天数")
     parser.add_argument("--throttle", type=float, default=0.2, help="每只基金之间的等待秒数")
     parser.add_argument("--include-existing", action="store_true", help="不跳过已有 1Y 指标基金")
+    parser.add_argument("--research-linked", action="store_true", help="只同步调研纪要关联且已分类的基金")
     parser.add_argument("--include-exchange-funds", action="store_true", help="自动选样时包含 .SH/.SZ 交易所代码")
     parser.add_argument(
         "--peer-evaluation-coverage",
@@ -551,7 +589,12 @@ def main() -> int:
         raise RuntimeError("Tushare 未连接真实 API。请配置 TUSHARE_TOKEN 后重试。")
 
     codes = [code.strip().upper() for code in args.codes.split(",") if code.strip()]
-    if not codes and args.peer_evaluation_coverage:
+    if not codes and args.research_linked:
+        codes = select_research_linked_codes(
+            limit=max(1, args.limit),
+            missing_only=not args.include_existing,
+        )
+    elif not codes and args.peer_evaluation_coverage:
         codes = select_peer_evaluation_coverage_codes(
             limit=max(1, args.limit),
             peer_group_keys=[key for key in args.peer_group_keys.split(",") if key.strip()],
