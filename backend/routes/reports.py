@@ -81,6 +81,7 @@ def _evaluation_analysis_fallback(
     evaluation: dict,
     factor_evidence: dict,
     attribution_evidence: dict,
+    managers: list,
     research_reports: list,
     question: str,
 ) -> str:
@@ -88,6 +89,7 @@ def _evaluation_analysis_fallback(
     classification = evaluation.get("classification") or {}
     peer_context = evaluation.get("peer_context") or {}
     result = evaluation.get("evaluation") or {}
+    metric_scores = result.get("metric_scores") or {}
     attribution_benchmark_detail = attribution_evidence.get("benchmark_detail") or {}
     score = result.get("overall_score")
     missing = list(dict.fromkeys(str(item) for item in evaluation.get("missing_items", []) if item))
@@ -137,11 +139,38 @@ def _evaluation_analysis_fallback(
             label = item.get("label") or item.get("metric_name")
             percentile = item.get("percentile")
             raw_value = item.get("value")
-            lines.append(f"- {label}：数值 {raw_value if raw_value is not None else '待补'}，同类分位 {percentile if percentile is not None else '待补'}")
+            unit = item.get("unit")
+            if raw_value is None:
+                display_value = "待补"
+            elif unit == "percent":
+                display_value = f"{float(raw_value) * 100:.2f}%"
+            elif unit == "cny_100m":
+                display_value = f"{float(raw_value):.2f} 亿元"
+            elif unit == "score":
+                display_value = f"{float(raw_value):.1f} 分"
+            else:
+                display_value = str(raw_value)
+            rank = item.get("rank")
+            peer_count = item.get("peer_count")
+            comparison = (
+                f"同类有利分位 {float(percentile):.1f}，排名 {rank}/{peer_count}"
+                if percentile is not None and rank is not None and peer_count
+                else "同类排序待补"
+            )
+            lines.append(f"- {label}：{display_value}；{comparison}")
     else:
         lines.append("- 当前没有可用的同类分位数据。")
 
     lines.extend(["", "## 风险与归因"])
+    risk_rows = [
+        ("近 1 年最大回撤", metric_scores.get("1y.max_drawdown"), True),
+        ("近 1 年年化波动", metric_scores.get("1y.annualized_volatility"), True),
+        ("近 1 年夏普比率", metric_scores.get("1y.sharpe_ratio"), False),
+    ]
+    for label, value, is_percent in risk_rows:
+        if value is not None:
+            display = f"{float(value) * 100:.2f}%" if is_percent else f"{float(value):.2f}"
+            lines.append(f"- {label}：{display}")
     if factor_evidence.get("status") == "ok":
         for item in (factor_evidence.get("risk_contributions") or [])[:4]:
             lines.append(f"- {item.get('label') or item.get('factor')}风险贡献：{float(item.get('risk_contribution') or 0) * 100:.1f}%")
@@ -167,6 +196,14 @@ def _evaluation_analysis_fallback(
         lines.append(f"- 补充净值行为解释：主动收益 {float(nav_returns.get('active') or 0) * 100:.2f}%（不是 Brinson）。")
 
     lines.extend(["", "## 经理与纪要证据"])
+    if managers:
+        for manager in managers:
+            manager_name = manager.get("name") or manager.get("manager_id") or "姓名待补"
+            management_years = manager.get("management_years")
+            tenure = f"，管理年限约 {float(management_years):.1f} 年" if management_years is not None else ""
+            lines.append(f"- 当前基金经理：{manager_name}{tenure}；来源为 Tushare 基金经理任职记录。")
+    else:
+        lines.append("- 当前基金经理资料待补。")
     if research_reports:
         for memo in research_reports[:5]:
             lines.append(f"- 《{memo.get('title') or '无标题纪要'}》（{memo.get('report_date') or '日期待补'}）：{memo.get('summary') or '暂无摘要'}")
@@ -478,6 +515,7 @@ async def generate_fund_evaluation_analysis(
             research_limit=5,
         )
         fund_data = snapshot.get("fund") or {}
+        managers = snapshot.get("managers") or []
         evaluation = snapshot.get("evaluation") or {}
         attribution_bundle = snapshot.get("attribution") or {}
         factor_evidence = {
@@ -499,6 +537,7 @@ async def generate_fund_evaluation_analysis(
                 evaluation_data=evaluation,
                 factor_evidence=factor_evidence,
                 attribution_evidence=attribution_evidence,
+                managers=managers,
                 research_reports=research_reports,
                 user_question=payload.question,
             )
@@ -508,6 +547,7 @@ async def generate_fund_evaluation_analysis(
                 evaluation=evaluation,
                 factor_evidence=factor_evidence,
                 attribution_evidence=attribution_evidence,
+                managers=managers,
                 research_reports=research_reports,
                 question=payload.question,
             )
@@ -529,6 +569,9 @@ async def generate_fund_evaluation_analysis(
                 "mode": generation_mode,
                 "include_research": payload.include_research,
                 "question": payload.question,
+                "fund_name": fund_data.get("name"),
+                "fund_type": fund_data.get("type"),
+                "peer_group": (evaluation.get("peer_context") or {}).get("peer_group"),
                 "provider": generator.provider,
                 "model": generator.model,
             },
@@ -552,7 +595,11 @@ async def generate_fund_evaluation_analysis(
                 "mode": generation_mode,
                 "provider": generator.provider,
                 "model": generator.model,
+                "fund_name": fund_data.get("name"),
+                "fund_type": fund_data.get("type"),
+                "peer_group": (evaluation.get("peer_context") or {}).get("peer_group"),
                 "research_reports_count": len(research_reports),
+                "manager_count": len(managers),
                 "evaluation_status": evaluation.get("status"),
                 "factor_status": factor_evidence.get("status"),
                 "attribution_status": attribution_evidence.get("status"),

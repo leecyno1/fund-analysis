@@ -78,6 +78,15 @@ function analysisModeLabel(metadata?: Record<string, unknown>) {
   return metadata?.mode === 'llm_evaluation_evidence' ? '模型综合评价' : '本地证据评价'
 }
 
+function historyFundName(item: AnalysisHistory) {
+  const name = typeof item.metadata?.fund_name === 'string' ? item.metadata.fund_name.trim() : ''
+  return name || item.targetId
+}
+
+function historyPeerGroup(item: AnalysisHistory) {
+  return typeof item.metadata?.peer_group === 'string' ? item.metadata.peer_group.trim() : ''
+}
+
 function healthCopy(health: LlmHealth | null) {
   if (!health) return { label: '模型状态读取中', detail: '分析仍可使用本地证据评价。', tone: 'text-[#65716b]' }
   if (health.status === 'ready') return { label: 'AI 模型已配置', detail: `${health.provider || '模型服务'} · ${health.model || '默认模型'}`, tone: 'text-[#28745c]' }
@@ -331,7 +340,8 @@ export default function FundAnalysisWorkspace({ initialFund = null }: { initialF
           <div className="divide-y divide-[#e0e5e1]">
             {history.map((item) => (
               <button key={item.id} type="button" onClick={() => void openHistory(item)} className="block w-full py-4 text-left hover:text-[#28745c]">
-                <div className="flex items-center justify-between gap-3"><strong className="text-sm">{item.targetId}</strong><FileText className="h-4 w-4 shrink-0 text-[#849088]" /></div>
+                <div className="flex items-center justify-between gap-3"><strong className="truncate text-sm">{historyFundName(item)}</strong><FileText className="h-4 w-4 shrink-0 text-[#849088]" /></div>
+                <p className="mt-1 text-[11px] text-[#929b96]">{item.targetId}{historyPeerGroup(item) ? ` · ${historyPeerGroup(item)}` : ''}</p>
                 <p className="mt-2 line-clamp-2 text-xs leading-5 text-[#6c7871]">{item.content || '基金评价分析'}</p>
                 <span className="mt-2 block text-[11px] text-[#929b96]">{formatDate(item.createdAt)}</span>
               </button>

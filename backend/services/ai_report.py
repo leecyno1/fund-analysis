@@ -149,6 +149,7 @@ class ClaudeReportGenerator:
         evaluation_data: Dict[str, Any],
         factor_evidence: Dict[str, Any],
         attribution_evidence: Dict[str, Any],
+        managers: List[Dict[str, Any]],
         research_reports: List[Dict],
         user_question: str = "",
     ) -> str:
@@ -168,6 +169,7 @@ class ClaudeReportGenerator:
             "\n## Barra 与持仓行业暴露证据\n```json\n" + self._to_json(factor_evidence) + "\n```",
             "\n## Brinson 与补充净值行为解释\n```json\n" + self._to_json(attribution_evidence) + "\n```",
             "\n## 模型边界\n正式 Barra/Brinson 与净值行为解释必须分开表述；不得把 supplementary_nav_factor 标成 Barra，不得把 supplementary_nav_return 标成 Brinson。",
+            "\n## 当前基金经理\n```json\n" + self._to_json(managers) + "\n```",
             "\n## 关联调研纪要\n```json\n" + self._to_json(research_reports) + "\n```",
         ])
         return self._call_llm(prompt, "fund_analysis")
