@@ -5,7 +5,6 @@ import {
   isFundResearchWorkspace,
   type FundSelection,
 } from '@/lib/newma-desk/context'
-import { loadDailyResearchCockpit } from '@/lib/fund-research/cockpit/load-daily-research-cockpit'
 import FundResearchDeskModule from './FundResearchDeskModule'
 
 export const dynamic = 'force-dynamic'
@@ -47,16 +46,11 @@ export default async function FundResearchWorkspacePage({
       assetType,
     }
     : null
-  const initialCockpitSnapshot = workspace === 'overview'
-    ? await loadDailyResearchCockpit({ symbol })
-    : null
-
   return (
     <FundResearchDeskModule
       key={`${workspace}:${symbol ?? 'none'}:${assetType}`}
       workspace={fundResearchWorkspaceById(workspace)}
       initialSelection={initialSelection}
-      initialCockpitSnapshot={initialCockpitSnapshot}
     />
   )
 }

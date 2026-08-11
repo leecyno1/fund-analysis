@@ -1,37 +1,37 @@
 {
   "schemaVersion": "1.0",
   "id": "professional-fund-research-suite",
-  "name": "专业基金研究",
-  "description": "以每日研究驾驶舱为入口，连接公开基金研究文献、机构经理选择流程、基金准入、同类评价、尽调、决策治理和持续监控。",
-  "version": "0.3.0",
+  "name": "基金选择助手",
+  "description": "帮助普通用户找基金、看调研、做现场分析、查看业绩归因并获得同类候选基金。",
+  "version": "0.4.0",
   "publisher": "leecyno1",
   "upstream": "https://github.com/leecyno1/fund-analysis",
-  "tags": ["基金研究", "基金选择", "尽调", "监控", "方法论"],
+  "tags": ["基金浏览", "基金评价", "基金分类", "业绩归因", "基金推荐"],
   "agentWorkspace": { "type": "desk" },
   "runtime": {
     "type": "external",
     "baseUrlEnv": "NEWMA_DESK_FUND_RESEARCH_WEB_URL",
-    "defaultBaseUrl": "http://127.0.0.1:3001"
+    "defaultBaseUrl": "http://127.0.0.1:3000"
   },
   "manifest": {
     "schemaVersion": "1.1",
     "category": "research",
     "navigation": {
-      "groupLabel": "专业基金研究",
+      "groupLabel": "基金选择助手",
       "groupOrder": 20,
       "itemOrder": 100,
       "project": {
         "id": "professional-fund-research",
-        "name": "专业基金研究",
+        "name": "基金选择助手",
         "order": 22,
-        "description": "从研究范围、证据和同类评价，到投资/运营尽调、决策审计与持续监控。"
+        "description": "从真实基金数据、调研纪要和量化归因出发，完成基金浏览、评价和候选筛选。"
       },
       "icon": "research"
     },
     "compatibility": {
       "level": 3,
       "bridgeProtocol": "1.0",
-      "sdkVersion": "fund-research-adapter-0.1.0",
+      "sdkVersion": "fund-research-adapter-0.2.0",
       "viewSpecVersion": "1.0"
     },
     "permissions": ["research.read", "research.local-write"],
@@ -41,50 +41,16 @@
       "adapter": "fund-research-postgres"
     },
     "actions": {
-      "fund.universe.query": {
-        "binding": {
-          "type": "data",
-          "service": "fund-research-data",
-          "capability": "fund.universe.query"
-        },
+      "fund.search": {
+        "binding": { "type": "data", "service": "fund-research-data", "capability": "fund.search" },
         "execution": "request",
         "permission": "research.read",
         "inputSchema": {
           "type": "object",
           "properties": {
             "search": { "type": "string", "maxLength": 80 },
-            "type": { "type": "string", "maxLength": 80 },
             "page": { "type": "integer", "minimum": 1 },
-            "limit": { "type": "integer", "minimum": 1, "maximum": 100 }
-          },
-          "additionalProperties": false
-        },
-        "outputSchema": {
-          "type": "object",
-          "required": ["data", "pagination"],
-          "properties": {
-            "data": { "type": "array" },
-            "pagination": { "type": "object" },
-            "summary": { "type": "object" },
-            "source": { "type": "string" }
-          },
-          "additionalProperties": true
-        },
-        "confirmation": "none",
-        "timeoutSeconds": 30
-      },
-      "fund.evidence.snapshot": {
-        "binding": {
-          "type": "data",
-          "service": "fund-research-data",
-          "capability": "fund.evidence.snapshot"
-        },
-        "execution": "request",
-        "permission": "research.read",
-        "inputSchema": {
-          "type": "object",
-          "properties": {
-            "symbol": { "type": "string", "maxLength": 24 }
+            "page_size": { "type": "integer", "minimum": 1, "maximum": 100 }
           },
           "additionalProperties": false
         },
@@ -92,12 +58,22 @@
         "confirmation": "none",
         "timeoutSeconds": 30
       },
-      "fund.peer.evaluate": {
-        "binding": {
-          "type": "data",
-          "service": "fund-research-data",
-          "capability": "fund.peer.evaluate"
+      "fund.research.snapshot": {
+        "binding": { "type": "data", "service": "fund-research-data", "capability": "fund.research.snapshot" },
+        "execution": "request",
+        "permission": "research.read",
+        "inputSchema": {
+          "type": "object",
+          "required": ["symbol"],
+          "properties": { "symbol": { "type": "string", "maxLength": 24 } },
+          "additionalProperties": false
         },
+        "outputSchema": { "type": "object", "additionalProperties": true },
+        "confirmation": "none",
+        "timeoutSeconds": 60
+      },
+      "fund.compare": {
+        "binding": { "type": "data", "service": "fund-research-data", "capability": "fund.compare" },
         "execution": "request",
         "permission": "research.read",
         "inputSchema": {
@@ -114,96 +90,60 @@
           },
           "additionalProperties": false
         },
-        "outputSchema": {
-          "type": "object",
-          "required": ["funds"],
-          "properties": { "funds": { "type": "array" } },
-          "additionalProperties": true
-        },
+        "outputSchema": { "type": "object", "additionalProperties": true },
         "confirmation": "none",
         "timeoutSeconds": 60
       },
-      "fund.due-diligence.evaluate": {
-        "binding": {
-          "type": "agent",
-          "capability": "fund.due-diligence.evaluate",
-          "memoryScope": "user-agent-mod"
-        },
-        "execution": "task",
+      "fund.attribution.run": {
+        "binding": { "type": "data", "service": "fund-research-data", "capability": "fund.attribution.run" },
+        "execution": "request",
         "permission": "research.read",
         "inputSchema": {
           "type": "object",
           "required": ["symbol"],
           "properties": {
             "symbol": { "type": "string", "maxLength": 24 },
-            "focus": { "enum": ["people", "process", "parent", "price", "operations", "full"] }
+            "quarter": { "type": "string", "maxLength": 8 }
           },
           "additionalProperties": false
         },
         "outputSchema": { "type": "object", "additionalProperties": true },
         "confirmation": "none",
-        "timeoutSeconds": 300
+        "timeoutSeconds": 120
       },
-      "fund.monitoring.review": {
-        "binding": {
-          "type": "agent",
-          "capability": "fund.monitoring.review",
-          "memoryScope": "user-agent-mod"
-        },
-        "execution": "task",
+      "fund.analysis.run": {
+        "binding": { "type": "data", "service": "fund-research-data", "capability": "fund.analysis.run" },
+        "execution": "request",
         "permission": "research.local-write",
         "inputSchema": {
           "type": "object",
-          "required": ["symbol", "trigger"],
+          "required": ["windCode"],
           "properties": {
-            "symbol": { "type": "string", "maxLength": 24 },
-            "trigger": { "type": "string", "maxLength": 240 }
+            "windCode": { "type": "string", "maxLength": 24 },
+            "question": { "type": "string", "maxLength": 1000 }
           },
           "additionalProperties": false
         },
         "outputSchema": { "type": "object", "additionalProperties": true },
         "confirmation": "user",
-        "timeoutSeconds": 300
+        "timeoutSeconds": 180
       },
-      "fund.methodology.audit": {
-        "binding": {
-          "type": "agent",
-          "capability": "fund.methodology.audit",
-          "memoryScope": "task"
-        },
-        "execution": "task",
+      "fund.recommendations.list": {
+        "binding": { "type": "data", "service": "fund-research-data", "capability": "fund.recommendations.list" },
+        "execution": "request",
         "permission": "research.read",
         "inputSchema": {
           "type": "object",
+          "required": ["category"],
           "properties": {
-            "version": { "type": "string", "maxLength": 32 },
-            "scope": { "type": "string", "maxLength": 120 }
+            "category": { "type": "string", "maxLength": 120 },
+            "style": { "type": "string", "maxLength": 80 }
           },
           "additionalProperties": false
         },
         "outputSchema": { "type": "object", "additionalProperties": true },
         "confirmation": "none",
-        "timeoutSeconds": 300
-      },
-      "fund.research.explain": {
-        "binding": {
-          "type": "agent",
-          "capability": "fund.research.explain",
-          "memoryScope": "user-agent-mod"
-        },
-        "execution": "task",
-        "permission": "research.read",
-        "inputSchema": {
-          "type": "object",
-          "properties": {
-            "symbol": { "type": "string", "maxLength": 24 },
-            "question": { "type": "string", "maxLength": 2000 }
-          },
-          "additionalProperties": false
-        },
-        "outputSchema": { "type": "object", "additionalProperties": true },
-        "confirmation": "none",
-        "timeoutSeconds": 300
+        "timeoutSeconds": 120
       }
     },
     "events": {
@@ -214,87 +154,48 @@
   },
   "pages": [
     {
-      "id": "fund-research-overview",
-      "name": "每日基金研究驾驶舱",
-      "description": "聚合证据健康、当前研究对象、补证任务、复核事件和九段式研究内核。",
-      "tags": ["基金研究", "驾驶舱", "证据", "复核"],
-      "route": "/mod/fund-research/overview",
-      "navigation": { "itemOrder": 10, "label": "每日驾驶舱" },
+      "id": "fund-discover",
+      "name": "找基金",
+      "description": "搜索基金，查看净值、指标、基金详情并进入多基金比较。",
+      "tags": ["基金浏览", "净值", "比较"],
+      "route": "/mod/fund-research/discover",
+      "navigation": { "itemOrder": 10, "label": "找基金" },
       "defaultInstall": true
     },
     {
-      "id": "fund-selection",
-      "name": "基金准入与初筛",
-      "description": "处理研究范围、份额合并、证据覆盖、同类基准与量化准入门槛。",
-      "tags": ["基金选择", "准入", "初筛"],
-      "route": "/mod/fund-research/selection",
-      "navigation": { "itemOrder": 20, "label": "准入初筛" },
+      "id": "fund-research-library",
+      "name": "调研库",
+      "description": "连接本地调研纪要，按基金经理归类并确认基金分类和风格标签。",
+      "tags": ["调研纪要", "基金经理", "风格标签"],
+      "route": "/mod/fund-research/research",
+      "navigation": { "itemOrder": 20, "label": "调研库" },
       "defaultInstall": true
     },
     {
-      "id": "fund-due-diligence",
-      "name": "基金投资与运营尽调",
-      "description": "围绕 People、Process、Parent、Price、载体与运营完整性开展结构化尽调。",
-      "tags": ["基金尽调", "经理", "运营"],
-      "route": "/mod/fund-research/due-diligence",
-      "navigation": { "itemOrder": 30, "label": "尽调工作台" },
+      "id": "fund-ai-analysis",
+      "name": "AI 分析",
+      "description": "按需运行基金评价，使用研究快照和业绩归因证据并保存分析历史。",
+      "tags": ["基金评价", "AI 分析", "历史记录"],
+      "route": "/mod/fund-research/analysis",
+      "navigation": { "itemOrder": 30, "label": "AI 分析" },
       "defaultInstall": true
     },
     {
-      "id": "fund-peer-comparison",
-      "name": "同类组、基准与风格横评",
-      "description": "在可解释同类组和适配基准中比较滚动表现、风险、风格、主动程度与容量。",
-      "tags": ["同类组", "基准", "风格"],
-      "route": "/mod/fund-research/peer-comparison",
-      "navigation": { "itemOrder": 40, "label": "同类横评" },
+      "id": "fund-recommendations",
+      "name": "标签推荐",
+      "description": "按基金类别和风格标签返回不超过十只真实候选基金。",
+      "tags": ["基金推荐", "同类评价", "风格标签"],
+      "route": "/mod/fund-research/recommendations",
+      "navigation": { "itemOrder": 40, "label": "标签推荐" },
       "defaultInstall": true
     },
     {
-      "id": "fund-monitoring",
-      "name": "基金持续监控与复核",
-      "description": "根据经理、持仓、风格、风险、费用和数据变化触发研究复核。",
-      "tags": ["基金监控", "复核", "事件"],
-      "route": "/mod/fund-research/monitoring",
-      "navigation": { "itemOrder": 50, "label": "监控复核" },
-      "manifest": {
-        "permissions": ["research.read", "research.local-write", "storage.read", "storage.write"],
-        "storage": {
-          "mode": "desk-managed",
-          "namespaces": [
-            {
-              "id": "review-index",
-              "scope": "user-workspace",
-              "schemaVersion": 1,
-              "quotaMb": 4,
-              "maxItemKb": 64
-            }
-          ]
-        }
-      },
-      "defaultInstall": true
-    },
-    {
-      "id": "fund-methodology",
-      "name": "基金研究方法论与审计",
-      "description": "公开方法来源、版本、门槛、能力映射与可复现审计要求。",
-      "tags": ["方法论", "审计", "来源"],
-      "route": "/mod/fund-research/methodology",
-      "navigation": { "itemOrder": 60, "label": "方法论", "role": "settings" },
-      "manifest": {
-        "permissions": ["research.read", "research.local-write", "storage.read", "storage.write"],
-        "storage": {
-          "mode": "desk-managed",
-          "namespaces": [
-            {
-              "id": "methodology-preferences",
-              "scope": "user-workspace",
-              "schemaVersion": 1,
-              "quotaMb": 2,
-              "maxItemKb": 64
-            }
-          ]
-        }
-      },
+      "id": "fund-attribution",
+      "name": "业绩归因",
+      "description": "查看 Barra 风格与风险暴露、Brinson 配置与选择效应及证据覆盖。",
+      "tags": ["Barra", "Brinson", "业绩归因"],
+      "route": "/mod/fund-research/advanced",
+      "navigation": { "itemOrder": 50, "label": "业绩归因" },
       "defaultInstall": true
     }
   ]
