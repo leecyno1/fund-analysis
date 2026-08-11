@@ -348,8 +348,8 @@ export default function FundAnalysisWorkspace({ initialFund = null }: { initialF
             ))}
           </div>
           {!historyLoading && !history.length ? <p className="py-5 text-xs leading-6 text-[#7a8580]">完成第一次分析后，记录会保存在这里。</p> : null}
-          <Link href="/analysis/comparison" className="mt-5 flex items-center justify-between border border-[#dbe1dc] bg-white px-4 py-3 text-sm font-bold text-[#315e4d] hover:border-[#90ad9f]">
-            <span className="inline-flex items-center gap-2"><GitCompareArrows className="h-4 w-4" />比较多只基金</span><ArrowRight className="h-4 w-4" />
+          <Link href="/discover" className="mt-5 flex items-center justify-between border border-[#dbe1dc] bg-white px-4 py-3 text-sm font-bold text-[#315e4d] hover:border-[#90ad9f]">
+            <span className="inline-flex items-center gap-2"><GitCompareArrows className="h-4 w-4" />选择同类基金比较</span><ArrowRight className="h-4 w-4" />
           </Link>
         </aside>
       </section>
