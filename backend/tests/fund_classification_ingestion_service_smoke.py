@@ -211,6 +211,16 @@ def main() -> int:
             }},
         },
         {
+            "wind_code": "980024.OF",
+            "name": "审计高权益债券A",
+            "type": "债券型",
+            "raw_data": {"universe": {
+                "benchmark": "中债综合指数收益率×70%+沪深300指数收益率×30%",
+                "invest_type": "债券型",
+                "contract_type": "债券型",
+            }},
+        },
+        {
             "wind_code": "980021.OF",
             "name": "审计平衡配置混合A",
             "type": "混合型",
@@ -248,7 +258,7 @@ def main() -> int:
     ])
 
     groups = plan.get("groups") or []
-    if plan.get("summary", {}).get("eligible_funds") != 15 or len(groups) != 11:
+    if plan.get("summary", {}).get("eligible_funds") != 16 or len(groups) != 12:
         raise AssertionError(f"Only high-confidence standardized funds should be eligible: {plan}")
     money = next(group for group in groups if group.get("strategy_family_key") == "cash_management")
     if money.get("benchmark_code") != "DR007" or len(money.get("shares") or []) != 2:
@@ -287,6 +297,9 @@ def main() -> int:
     composite_bond = next(group for group in groups if group.get("benchmark_code") == "H11009.CSI")
     if composite_bond.get("strategy_family_key") != "fixed_income_general":
         raise AssertionError(f"Composite bond must enter general fixed-income peers: {composite_bond}")
+    enhanced_bond = next(group for group in groups if group.get("strategy_family_key") == "fixed_income_equity_allocation")
+    if enhanced_bond.get("benchmark_weight") != 10:
+        raise AssertionError(f"Bond fund equity allocation bucket failed: {enhanced_bond}")
 
     mixed_groups = {group.get("strategy_family_key"): group for group in groups if group.get("asset_class") == "multi_asset"}
     if mixed_groups.get("mixed_equity_allocation", {}).get("benchmark_weight") != 80:
@@ -309,8 +322,8 @@ def main() -> int:
         raise AssertionError(f"Low-weight equity references must remain outside the catalog: {plan}")
     if reasons.get("unsupported_fixed_income_style") != 2:
         raise AssertionError(f"Credit and convertible bond funds must remain outside general bond peers: {plan}")
-    if reasons.get("fixed_income_reference_not_100_percent") != 1:
-        raise AssertionError(f"Bond benchmarks containing equity exposure must remain outside the catalog: {plan}")
+    if reasons.get("fixed_income_equity_weight_out_of_range") != 1:
+        raise AssertionError(f"Bond funds with equity benchmark weight above 20% must remain outside the catalog: {plan}")
     if reasons.get("mixed_benchmark_weights_incomplete") != 1:
         raise AssertionError(f"Incomplete mixed benchmark weights must remain unclassified: {plan}")
     if reasons.get("invalid_fund_code_format") != 1:

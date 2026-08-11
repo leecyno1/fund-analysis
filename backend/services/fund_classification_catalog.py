@@ -8,7 +8,7 @@ from typing import Any, Dict, List
 class FundClassificationCatalog:
     """标准分类定义的唯一来源。"""
 
-    VERSION = "fund_classification_catalog_v3"
+    VERSION = "fund_classification_catalog_v4"
 
     STRATEGY_FAMILIES: List[Dict[str, Any]] = [
         {
@@ -50,6 +50,16 @@ class FundClassificationCatalog:
             "evaluation_profile_key": "fixed_income",
             "compatible_fund_types": ["bond", "债券型", "中长期纯债型", "短期纯债型", "混合债券型", "纯债"],
             "style_tags": ["固收", "纯债", "综合债券"],
+        },
+        {
+            "id": "strategy-family-fixed-income-equity-allocation",
+            "key": "fixed_income_equity_allocation",
+            "name": "债券型-含权益配置",
+            "asset_class": "fixed_income",
+            "active_passive": "active",
+            "evaluation_profile_key": "fixed_income_plus",
+            "compatible_fund_types": ["bond", "债券型", "混合债券型", "强化收益型", "稳健增长型"],
+            "style_tags": ["固收", "含权益配置", "收益增强"],
         },
         {
             "id": "strategy-family-index-broad",
@@ -315,6 +325,19 @@ class FundClassificationCatalog:
             }
         ]
         groups.extend([
+            {
+                "id": "peer-fixed-income-equity-allocation",
+                "key": "peer-fixed-income-equity-allocation",
+                "name": "债券型-含权益配置",
+                "strategy_family_key": "fixed_income_equity_allocation",
+                "asset_class": "fixed_income",
+                "active_passive": "active",
+                "benchmark_code": "FIXED-INCOME-EQUITY-20",
+                "benchmark_name": "合同基准权益权重>0%且≤20%",
+                "inclusion_rules": {"legalType": "债券型", "equityBenchmarkWeightRange": [0, 20], "declaredBenchmarkRequired": True},
+                "exclusion_rules": {"exclude": ["可转债主题", "权重不完整", "无法识别资产类别"]},
+                "minimum_peer_count": 5,
+            },
             {
                 "id": "peer-mixed-equity-allocation",
                 "key": "peer-mixed-equity-allocation",

@@ -26,6 +26,13 @@ def _nav_series(start: date, days: int) -> list[dict]:
 
 def main() -> int:
     methodology = FundEvaluationMethodology()
+    fixed_income_plus = methodology.evaluate(
+        "fixed_income_plus",
+        {"1y": {"annualized_return": 0.06, "max_drawdown": -0.06, "sharpe_ratio": 0.8}},
+        {"score": 90, "issues": []},
+    )
+    if fixed_income_plus.get("status") not in {"ok", "partial"}:
+        raise AssertionError(f"含权益配置债券评价不可用: {fixed_income_plus}")
     mixed_profiles = ["multi_asset_equity", "multi_asset_balanced", "multi_asset_bond"]
     for profile_key in mixed_profiles:
         configs = methodology.peer_metric_configs(profile_key)

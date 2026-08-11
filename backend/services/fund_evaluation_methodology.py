@@ -20,6 +20,11 @@ class FundEvaluationMethodology:
             "drawdown_range": (-0.08, -0.005),
             "volatility_range": (0.08, 0.01),
         },
+        "fixed_income_plus": {
+            "return_range": (-0.02, 0.12),
+            "drawdown_range": (-0.16, -0.01),
+            "volatility_range": (0.16, 0.025),
+        },
         "multi_asset_equity": {
             "return_range": (-0.08, 0.20),
             "drawdown_range": (-0.30, -0.02),
@@ -73,7 +78,7 @@ class FundEvaluationMethodology:
             {"metric_name": "benchmark_yield_spread", "label": "相对 DR007 收益利差", "unit": "percent", "higher_is_better": True, "paths": [("latest", "benchmark_yield_spread")], "required_for_sample": False},
         ],
     }
-    for _profile_key in ("multi_asset_equity", "multi_asset_balanced", "multi_asset_bond"):
+    for _profile_key in ("fixed_income_plus", "multi_asset_equity", "multi_asset_balanced", "multi_asset_bond"):
         PEER_METRIC_CONFIGS[_profile_key] = [dict(config) for config in PEER_METRIC_CONFIGS["active_equity"]]
     del _profile_key
 
@@ -93,7 +98,7 @@ class FundEvaluationMethodology:
                 [f"{profile_key} 专属基金评价方法尚未实现"],
                 profile_key,
             )
-        if profile_key in {"active_equity", "fixed_income", "multi_asset_equity", "multi_asset_balanced", "multi_asset_bond"}:
+        if profile_key in {"active_equity", "fixed_income", "fixed_income_plus", "multi_asset_equity", "multi_asset_balanced", "multi_asset_bond"}:
             return self._evaluate_return_risk(profile_key, metrics, quality)
         if profile_key == "index_fund":
             return self._evaluate_index(metrics, quality)
@@ -101,7 +106,7 @@ class FundEvaluationMethodology:
 
     def score_peer(self, profile_key: str, metrics: Dict[str, Any]) -> Optional[float]:
         """用同一类别方法生成轻量同类代理分，不跨类别复用指标。"""
-        if profile_key in {"active_equity", "fixed_income", "multi_asset_equity", "multi_asset_balanced", "multi_asset_bond"}:
+        if profile_key in {"active_equity", "fixed_income", "fixed_income_plus", "multi_asset_equity", "multi_asset_balanced", "multi_asset_bond"}:
             profile = self.PROFILES[profile_key]
             return_low, return_high = profile["return_range"]
             drawdown_low, drawdown_high = profile["drawdown_range"]
@@ -148,6 +153,7 @@ class FundEvaluationMethodology:
         weights = {
             "active_equity": {"return": 0.25, "risk": 0.25, "risk_adjusted": 0.20, "consistency": 0.15, "manager_tenure": 0.10, "data_quality": 0.05},
             "fixed_income": {"return": 0.20, "risk": 0.35, "risk_adjusted": 0.15, "consistency": 0.10, "manager_tenure": 0.10, "data_quality": 0.10},
+            "fixed_income_plus": {"return": 0.20, "risk": 0.38, "risk_adjusted": 0.17, "consistency": 0.10, "manager_tenure": 0.10, "data_quality": 0.05},
             "multi_asset_equity": {"return": 0.25, "risk": 0.30, "risk_adjusted": 0.20, "consistency": 0.10, "manager_tenure": 0.10, "data_quality": 0.05},
             "multi_asset_balanced": {"return": 0.20, "risk": 0.35, "risk_adjusted": 0.20, "consistency": 0.10, "manager_tenure": 0.10, "data_quality": 0.05},
             "multi_asset_bond": {"return": 0.15, "risk": 0.40, "risk_adjusted": 0.20, "consistency": 0.10, "manager_tenure": 0.10, "data_quality": 0.05},

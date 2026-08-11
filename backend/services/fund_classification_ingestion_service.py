@@ -306,12 +306,49 @@ class FundClassificationIngestionService:
         invest_type: str,
         contract_type: str,
     ) -> Tuple[Optional[Dict[str, Any]], str]:
-        if invest_type != "债券型":
+        if invest_type not in {"债券型", "强化收益型", "稳健增长型"}:
             return None, "unsupported_fixed_income_investment_type"
         if contract_type != "债券型":
             return None, "fixed_income_contract_type_conflict"
         if not declared_benchmark:
             return None, "missing_declared_benchmark"
+        if any(term in name for term in ("可转债", "转债")):
+            return None, "unsupported_fixed_income_style"
+
+        components = re.findall(r"([^+＋]+?)[×xX*]\s*(\d+(?:\.\d+)?)\s*%", declared_benchmark)
+        if components:
+            total_weight = sum(float(weight) for _, weight in components)
+            if 95 <= total_weight <= 105:
+                equity_weight = 0.0
+                defensive_weight = 0.0
+                ambiguous = False
+                for component, raw_weight in components:
+                    weight = float(raw_weight)
+                    if any(term.lower() in component.lower() for term in self.MIXED_DEFENSIVE_BENCHMARK_TERMS):
+                        defensive_weight += weight
+                    elif any(term.lower() in component.lower() for term in self.MIXED_EQUITY_BENCHMARK_TERMS):
+                        equity_weight += weight
+                    else:
+                        ambiguous = True
+                if not ambiguous and equity_weight > 0:
+                    if equity_weight > 20 or defensive_weight < 80:
+                        return None, "fixed_income_equity_weight_out_of_range"
+                    return {
+                        "strategy_family_key": "fixed_income_equity_allocation",
+                        "asset_class": "fixed_income",
+                        "active_passive": "active",
+                        "peer_group_key": "peer-fixed-income-equity-allocation",
+                        "benchmark_code": "FIXED-INCOME-EQUITY-20",
+                        "benchmark_name": "合同基准权益权重>0%且≤20%",
+                        "benchmark_type": "declared_allocation_bucket",
+                        "mapping_method": "declared_benchmark_bond_equity_weight_bucket",
+                        "classification_confidence": 0.96,
+                        "benchmark_confidence": 0.96,
+                        "benchmark_weight": round(equity_weight, 4),
+                        "automatic_rule_scope": "bond_fund_explicit_equity_allocation",
+                        "rationale": f"合同类型为债券型；基准权重合计{total_weight:g}%，其中债券/现金{defensive_weight:g}%、权益{equity_weight:g}%。",
+                    }, "eligible"
+
         if any(term in name for term in self.ACTIVE_FIXED_INCOME_NAME_EXCLUSIONS):
             return None, "unsupported_fixed_income_style"
 
