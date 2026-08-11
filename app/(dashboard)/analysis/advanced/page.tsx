@@ -17,6 +17,7 @@ export default async function PerformanceAttributionPage({
       initialFundCode={query.fundCode || '000051.OF'}
       initialBenchmark={query.benchmark || ''}
       initialQuarter={query.quarter || latestCompletedQuarter()}
+      autoRun={Boolean(query.fundCode)}
     />
   )
 }

@@ -1,7 +1,7 @@
 'use client'
 
 import Link from 'next/link'
-import { useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   ArrowLeft,
   BarChart3,
@@ -107,10 +107,12 @@ export default function AttributionWorkspace({
   initialFundCode,
   initialBenchmark,
   initialQuarter,
+  autoRun,
 }: {
   initialFundCode: string
   initialBenchmark: string
   initialQuarter: string
+  autoRun: boolean
 }) {
   const [fundCode, setFundCode] = useState(initialFundCode)
   const [benchmark, setBenchmark] = useState(initialBenchmark)
@@ -118,8 +120,9 @@ export default function AttributionWorkspace({
   const [result, setResult] = useState<AttributionBundle | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const hasAutoRun = useRef(false)
 
-  async function runAttribution() {
+  const runAttribution = useCallback(async () => {
     const code = fundCode.trim().toUpperCase()
     if (!code) return
     setLoading(true)
@@ -135,7 +138,13 @@ export default function AttributionWorkspace({
     } finally {
       setLoading(false)
     }
-  }
+  }, [benchmark, fundCode, quarter])
+
+  useEffect(() => {
+    if (!autoRun || hasAutoRun.current) return
+    hasAutoRun.current = true
+    void runAttribution()
+  }, [autoRun, runAttribution])
 
   const industries = Object.entries(result?.barra.industry_exposures || {})
   const largestIndustry = Math.max(...industries.map(([, weight]) => weight), 0.01)
