@@ -209,10 +209,10 @@ export default function SimpleFundDetailClient({ fund, nav, evaluation, research
       <section className="grid overflow-hidden border border-[#dbe1dc] bg-white sm:grid-cols-2 xl:grid-cols-7">
         {[
           ['最新净值', fund.nav == null ? '—' : fund.nav.toFixed(4), formatDate(fund.navDate)],
-          ['近 1 年收益', formatPercent(returnMetric(typedFund, '1y')), '基金数据口径'],
-          ['近 1 年最大回撤', formatPercent(drawdownMetric(typedFund, '1y')), '越小通常越稳'],
-          ['近 1 年年化波动', formatPercent(volatilityMetric(typedFund, '1y')), '波动幅度'],
-          ['近 1 年 Sharpe', sharpeMetric(typedFund, '1y')?.toFixed(2) || '—', '风险调整后收益'],
+          ['近 1 年收益', professionalScoreReady ? formatPercent(returnMetric(typedFund, '1y')) : '—', professionalScoreReady ? '基金数据口径' : '评价证据待补'],
+          ['近 1 年最大回撤', professionalScoreReady ? formatPercent(drawdownMetric(typedFund, '1y')) : '—', professionalScoreReady ? '越小通常越稳' : '评价证据待补'],
+          ['近 1 年年化波动', professionalScoreReady ? formatPercent(volatilityMetric(typedFund, '1y')) : '—', professionalScoreReady ? '波动幅度' : '评价证据待补'],
+          ['近 1 年 Sharpe', professionalScoreReady ? sharpeMetric(typedFund, '1y')?.toFixed(2) || '—' : '—', professionalScoreReady ? '风险调整后收益' : '评价证据待补'],
           ['基金规模', formatAsset(fund.totalAsset), '单位：亿元'],
           ['成立日期', formatDate(fund.establishmentDate), '基础档案'],
         ].map(([label, value, note], index) => (
@@ -237,7 +237,7 @@ export default function SimpleFundDetailClient({ fund, nav, evaluation, research
               ))}
             </div>
           </div>
-          {chartData.length ? (
+          {professionalScoreReady && chartData.length ? (
             <div className="mt-6 h-[310px] w-full sm:h-[390px]">
               <ResponsiveContainer width="100%" height="100%" minWidth={0} initialDimension={{ width: 320, height: 310 }}>
                 <LineChart data={chartData} margin={{ top: 8, right: 8, bottom: 4, left: -12 }}>
@@ -249,7 +249,7 @@ export default function SimpleFundDetailClient({ fund, nav, evaluation, research
                 </LineChart>
               </ResponsiveContainer>
             </div>
-          ) : <div className="mt-6 grid h-[310px] place-items-center border border-dashed border-[#cdd5cf] px-5 text-center text-sm text-[#79847e]">当前区间没有可用净值数据</div>}
+          ) : <div className="mt-6 grid h-[310px] place-items-center border border-dashed border-[#cdd5cf] px-5 text-center text-sm text-[#79847e]">{professionalScoreReady ? '当前区间没有可用净值数据' : '净值序列尚未通过当前类别的评价证据门禁'}</div>}
         </div>
 
         <div className="border border-[#dbe1dc] bg-white">

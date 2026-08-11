@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { useCallback, useMemo, useState } from 'react'
 import { ArrowRight, BarChart3, Check, CircleAlert, GitCompareArrows, Search, Sparkles } from 'lucide-react'
 import type { CamelFund } from '@/lib/backend-api'
+import { fundCategoryPresets } from '@/lib/fund-category-presets'
 import {
   drawdownMetric,
   evidenceCoverage,
@@ -62,8 +63,10 @@ export default function FundDiscoverClient({ initialFunds, initialCategories, in
   const compareHref = `/compare?${new URLSearchParams({ codes: compareCodes.join(',') }).toString()}`
   const lockedPeerGroup = compareFunds.length ? professionalPeerGroup(compareFunds[0]) : ''
   const quickCategories = useMemo(() => {
-    const preferred = ['混合型-偏债配置', '混合型-平衡配置', '混合型-偏股配置', '债券型-含权益配置']
-    return preferred.map((name) => initialCategories.find((item) => item.name === name)).filter((item): item is { id: string; name: string; count: number } => Boolean(item))
+    return fundCategoryPresets.flatMap((preset) => {
+      const category = initialCategories.find((item) => item.name === preset.category)
+      return category ? [{ ...preset, ...category }] : []
+    })
   }, [initialCategories])
 
   function toggleCompare(fund: SimpleFund) {
@@ -72,6 +75,10 @@ export default function FundDiscoverClient({ initialFunds, initialCategories, in
       return
     }
     if (compareFunds.length >= 6) return
+    if (professionalFundScore(fund) == null) {
+      setError('这只基金的分类内评价证据尚未齐全，可以浏览，但暂不能加入比较。')
+      return
+    }
     const selectedGroupId = professionalPeerGroupId(fund)
     if (!selectedGroupId) {
       setError('这只基金尚未完成专业分类，可以浏览，但暂不能加入同类比较。')
@@ -141,16 +148,16 @@ export default function FundDiscoverClient({ initialFunds, initialCategories, in
             <span className="mr-1 text-[#7a8580]">快速选择：</span>
             {quickCategories.map((item) => (
               <button
-                key={item.id}
-                type="button"
-                onClick={() => {
-                  setPeerGroupFilter(item.name)
+              key={item.category}
+              type="button"
+              onClick={() => {
+                  setPeerGroupFilter(item.category)
                   setCompareFunds([])
-                  void runSearch(item.name)
+                  void runSearch(item.category)
                 }}
-                className={`rounded-full border px-3 py-1.5 font-semibold transition ${peerGroupFilter === item.name ? 'border-[#28745c] bg-[#e8f1ec] text-[#245f4b]' : 'border-[#d3dad5] bg-white text-[#5f6b65] hover:border-[#8caf9f]'}`}
+                className={`rounded-full border px-3 py-1.5 font-semibold transition ${peerGroupFilter === item.category ? 'border-[#28745c] bg-[#e8f1ec] text-[#245f4b]' : 'border-[#d3dad5] bg-white text-[#5f6b65] hover:border-[#8caf9f]'}`}
               >
-                {item.name.replace('混合型-', '').replace('债券型-', '')} · {item.count}
+                {item.label} · {item.count}
               </button>
             ))}
           </div>
@@ -221,8 +228,9 @@ export default function FundDiscoverClient({ initialFunds, initialCategories, in
               <tbody className="divide-y divide-[#e5e9e5]">
                 {funds.map((fund) => {
                   const selected = compareCodes.includes(fund.windCode)
-                  const annualReturn = returnMetric(fund)
                   const professionalScore = professionalFundScore(fund)
+                  const evaluationReady = professionalScore != null
+                  const annualReturn = evaluationReady ? returnMetric(fund) : null
                   const scoreStatus = professionalScoreStatus(fund)
                   return (
                     <tr key={fund.windCode} className="transition hover:bg-[#f7faf7]">
@@ -230,9 +238,9 @@ export default function FundDiscoverClient({ initialFunds, initialCategories, in
                         <button
                           type="button"
                           onClick={() => toggleCompare(fund)}
-                          disabled={!selected && compareCodes.length >= 6}
-                          className={`grid h-7 w-7 place-items-center rounded border ${selected ? 'border-[#2c765d] bg-[#2c765d] text-white' : 'border-[#c7d0ca] text-transparent hover:border-[#2c765d]'}`}
-                          aria-label={selected ? `移出对比：${fund.name}` : `加入对比：${fund.name}`}
+                          disabled={!selected && (compareCodes.length >= 6 || !evaluationReady)}
+                          className={`grid h-7 w-7 place-items-center rounded border ${selected ? 'border-[#2c765d] bg-[#2c765d] text-white' : evaluationReady ? 'border-[#c7d0ca] text-transparent hover:border-[#2c765d]' : 'cursor-not-allowed border-[#e0e4e1] bg-[#f3f5f3] text-transparent'}`}
+                          aria-label={selected ? `移出对比：${fund.name}` : evaluationReady ? `加入对比：${fund.name}` : `评价证据不足：${fund.name}`}
                         >
                           <Check className="h-4 w-4" />
                         </button>
@@ -246,11 +254,12 @@ export default function FundDiscoverClient({ initialFunds, initialCategories, in
                         <div className="mt-1 flex flex-wrap gap-2"><span className="inline-flex rounded-sm bg-[#edf1ed] px-2 py-1 text-xs text-[#5f6b65]">{styleLabel(fund)}</span><span className="inline-flex px-1 py-1 text-xs text-[#8a948f]">{fund.type || '法律类型待补'}</span></div>
                       </td>
                       <td className={`px-4 py-4 text-right font-bold ${annualReturn != null && annualReturn < 0 ? 'text-[#a84d47]' : 'text-[#267257]'}`}>{formatPercent(annualReturn)}</td>
-                      <td className="px-4 py-4 text-right text-[#8b4f48]">{formatPercent(drawdownMetric(fund))}</td>
-                      <td className="px-4 py-4 text-right">{sharpeMetric(fund)?.toFixed(2) || '—'}</td>
+                      <td className="px-4 py-4 text-right text-[#8b4f48]">{formatPercent(evaluationReady ? drawdownMetric(fund) : null)}</td>
+                      <td className="px-4 py-4 text-right">{evaluationReady ? sharpeMetric(fund)?.toFixed(2) || '—' : '—'}</td>
                       <td className="px-4 py-4 text-right">
                         <strong className="text-[#245f4b]">{professionalScore == null ? '—' : professionalScore.toFixed(1)}</strong>
                         {professionalScore != null && scoreStatus === 'partial' ? <span className="mt-1 block text-[10px] text-[#9a7334]">部分评价</span> : null}
+                        {!evaluationReady ? <span className="mt-1 block text-[10px] text-[#9a7334]">评价待补</span> : null}
                       </td>
                       <td className="px-4 py-4 text-right">{formatAsset(fund.totalAsset)}</td>
                       <td className="px-4 py-4">{managerName(fund)}</td>

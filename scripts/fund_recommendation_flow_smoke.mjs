@@ -6,6 +6,7 @@ const backendRoute = readFileSync('backend/routes/funds.py', 'utf8')
 const backendService = readFileSync('backend/services/fund_recommendation_service.py', 'utf8')
 const recommendationPage = readFileSync('app/(dashboard)/recommendations/page.tsx', 'utf8')
 const backendMapper = readFileSync('lib/backend-api.ts', 'utf8')
+const categoryPresets = readFileSync('lib/fund-category-presets.ts', 'utf8')
 
 function requireText(source, text, message) {
   if (!source.includes(text)) throw new Error(`${message}: ${text}`)
@@ -25,7 +26,8 @@ requireText(client, '现场分析这只基金', 'candidate cards must link direc
 requireText(client, '同类组共', 'empty recommendation state must explain evidence gaps')
 requireText(client, '数据准备情况', 'recommendation page must show category coverage')
 requireText(client, '你想先看哪一类', 'ordinary users need a plain-language category starting point')
-requireText(client, '大盘核心', 'recommendation page must expose common category presets')
+requireText(categoryPresets, '大盘核心', 'recommendation page must expose common category presets')
+requireText(client, 'fundCategoryPresets', 'recommendation page must use the shared category presets')
 requireText(client, '该类别暂无可核验的风格标签', 'empty style coverage must be explained honestly')
 requireText(client, '不冒充已确认风格', 'memo suggestions must be visibly separated from confirmed styles')
 requireText(backendMapper, 'memoStyleSuggestions', 'frontend mapping must preserve memo style suggestion provenance')

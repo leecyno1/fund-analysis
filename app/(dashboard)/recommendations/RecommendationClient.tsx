@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { useMemo, useState } from 'react'
 import { ArrowRight, Bot, CheckCircle2, CircleAlert, GitCompareArrows, LoaderCircle, Tags } from 'lucide-react'
 import type { CamelFund } from '@/lib/backend-api'
+import { fundCategoryPresets } from '@/lib/fund-category-presets'
 import {
   drawdownMetric,
   formatAsset,
@@ -63,15 +64,6 @@ const exclusionReasonLabels: Record<string, string> = {
   category_score_unavailable: '类别评分暂时无法计算',
 }
 
-const categoryPresets = [
-  { category: '指数-沪深300', label: '大盘核心', description: '跟踪中国大盘蓝筹股', mark: '01' },
-  { category: '指数-中证A500', label: '全市场核心', description: '更广泛覆盖各行业龙头', mark: '02' },
-  { category: '指数-中证500', label: '中小盘指数', description: '关注中等市值公司', mark: '03' },
-  { category: '主动权益-沪深300参考', label: '主动选股', description: '由基金经理主动选择股票', mark: '04' },
-  { category: '混合型-偏股配置', label: '偏股混合', description: '股票为主，配置更灵活', mark: '05' },
-  { category: '固收-中证全债参考', label: '稳健债券', description: '以债券收益和回撤控制为主', mark: '06' },
-] as const
-
 function exclusionReasonLabel(reason: string) {
   return exclusionReasonLabels[reason] || '基金分类或评价证据不完整'
 }
@@ -83,7 +75,7 @@ export default function RecommendationClient({ initialFunds, initialCategories, 
     : Array.from(new Set(universe.map((fund) => peerGroup(fund)).filter((value) => value !== '类别待确认'))),
   [initialCategories, universe])
   const quickCategories = useMemo(
-    () => categoryPresets.filter((preset) => categories.includes(preset.category)),
+    () => fundCategoryPresets.filter((preset) => categories.includes(preset.category)),
     [categories],
   )
   const [category, setCategory] = useState('')
