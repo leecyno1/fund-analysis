@@ -20,6 +20,7 @@ requireText(backendService, 'excluded_reason_counts', 'backend must disclose can
 requireText(client, 'recommendationEvidence(fund)', 'candidate cards must render backend recommendation evidence')
 requireText(client, '主要风险', 'candidate cards must show risks')
 requireText(client, '数据截至', 'candidate cards must disclose the evidence date')
+requireText(client, '现场分析这只基金', 'candidate cards must link directly to on-demand fund analysis')
 requireText(client, '同类组共', 'empty recommendation state must explain evidence gaps')
 requireText(client, '数据准备情况', 'recommendation page must show category coverage')
 requireText(client, '指标缺口只通过真实净值数据补齐', 'coverage UI must reject mock metric backfills')

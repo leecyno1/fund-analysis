@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { useMemo, useState } from 'react'
-import { ArrowLeft, BarChart3, CircleAlert, ExternalLink, GitCompareArrows } from 'lucide-react'
+import { ArrowLeft, BarChart3, Bot, CircleAlert, ExternalLink, GitCompareArrows, ShieldCheck, Sparkles } from 'lucide-react'
 import { CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import type { CamelFund } from '@/lib/backend-api'
 import {
@@ -76,6 +76,17 @@ function volatilityMetric(fund: SimpleFund, window: string) {
   )
 }
 
+function metricLeader(
+  funds: ComparisonFund[],
+  value: (fund: SimpleFund) => number | null,
+  direction: 'high' | 'low' = 'high',
+) {
+  return funds
+    .map((item) => ({ item, value: value(item.fund as SimpleFund) }))
+    .filter((row): row is { item: ComparisonFund; value: number } => row.value != null && Number.isFinite(row.value))
+    .sort((left, right) => direction === 'high' ? right.value - left.value : left.value - right.value)[0] || null
+}
+
 export default function SimpleComparisonClient({ funds }: { funds: ComparisonFund[] }) {
   const [window, setWindow] = useState<(typeof windows)[number]['value']>('1y')
   const selectedWindow = windows.find((item) => item.value === window) || windows[1]
@@ -84,6 +95,16 @@ export default function SimpleComparisonClient({ funds }: { funds: ComparisonFun
   const comparable = fullyClassified && peerGroupIds.length === 1
   const chartData = useMemo(() => normalizedChartData(funds, selectedWindow.days), [funds, selectedWindow.days])
   const peerGroup = comparable ? funds[0].classification.peerGroup : ''
+  const scoreRanking = [...funds]
+    .filter((item) => item.evaluation.score != null)
+    .sort((left, right) => Number(right.evaluation.score) - Number(left.evaluation.score))
+  const scoreLeader = scoreRanking[0] || null
+  const scoreGap = scoreRanking.length >= 2
+    ? Number(scoreRanking[0].evaluation.score) - Number(scoreRanking[1].evaluation.score)
+    : null
+  const returnLeader = metricLeader(funds, (fund) => returnMetric(fund, window))
+  const drawdownLeader = metricLeader(funds, (fund) => drawdownMetric(fund, window), 'high')
+  const sharpeLeader = metricLeader(funds, (fund) => sharpeMetric(fund, window))
 
   return (
     <div className="space-y-7">
@@ -117,6 +138,31 @@ export default function SimpleComparisonClient({ funds }: { funds: ComparisonFun
         </section>
       )}
 
+      {comparable && scoreLeader ? (
+        <section className="border border-[#dbe1dc] bg-white p-5 sm:p-6">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <div className="flex items-center gap-2 text-xs font-bold text-[#28745c]"><Sparkles className="h-4 w-4" />横向比较结论</div>
+              <h2 className="mt-2 text-xl font-bold text-[#18231e]">综合评价暂列前：{scoreLeader.fund.name || scoreLeader.fund.windCode}</h2>
+              <p className="mt-2 text-sm leading-7 text-[#65716b]">
+                专业评分 {Number(scoreLeader.evaluation.score).toFixed(1)}
+                {scoreGap != null ? `，领先第二名 ${scoreGap.toFixed(1)} 分` : ''}。这只代表同类研究优先级，不是买卖建议。
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-3">
+              <Link href={`/funds/${encodeURIComponent(scoreLeader.fund.windCode)}`} className="inline-flex h-10 items-center gap-2 rounded-md border border-[#9ab3a8] px-4 text-xs font-bold text-[#285d4b]">查看详情<ExternalLink className="h-3.5 w-3.5" /></Link>
+              <Link href={`/analysis?${new URLSearchParams({ fundCode: scoreLeader.fund.windCode }).toString()}`} className="inline-flex h-10 items-center gap-2 rounded-md bg-[#173f35] px-4 text-xs font-bold text-white"><Bot className="h-3.5 w-3.5" />现场综合分析</Link>
+            </div>
+          </div>
+          <div className="mt-5 grid gap-px overflow-hidden border border-[#e1e6e2] bg-[#e1e6e2] sm:grid-cols-3">
+            <div className="bg-[#f8faf8] p-4"><div className="text-xs text-[#748079]">{selectedWindow.label}收益领先</div><strong className="mt-2 block text-sm">{returnLeader?.item.fund.name || '数据待补'}</strong><span className="mt-1 block text-xs text-[#66726c]">{formatPercent(returnLeader?.value)}</span></div>
+            <div className="bg-[#f8faf8] p-4"><div className="text-xs text-[#748079]">回撤控制较好</div><strong className="mt-2 block text-sm">{drawdownLeader?.item.fund.name || '数据待补'}</strong><span className="mt-1 block text-xs text-[#66726c]">{formatPercent(drawdownLeader?.value)}</span></div>
+            <div className="bg-[#f8faf8] p-4"><div className="text-xs text-[#748079]">Sharpe 较高</div><strong className="mt-2 block text-sm">{sharpeLeader?.item.fund.name || '数据待补'}</strong><span className="mt-1 block text-xs text-[#66726c]">{sharpeLeader?.value?.toFixed(2) || '—'}</span></div>
+          </div>
+          <div className="mt-4 flex gap-3 text-xs leading-6 text-[#65716b]"><ShieldCheck className="mt-1 h-4 w-4 shrink-0 text-[#28745c]" /><span>如果收益、回撤和 Sharpe 由不同基金领先，说明没有单一维度全面胜出，应继续查看经理、风格和归因证据。</span></div>
+        </section>
+      ) : null}
+
       <section className="overflow-x-auto border border-[#dbe1dc] bg-white">
         <table className="w-full min-w-[720px] border-collapse text-left text-sm">
           <thead className="bg-[#f1f4f1] text-xs text-[#66726c]">
@@ -137,6 +183,7 @@ export default function SimpleComparisonClient({ funds }: { funds: ComparisonFun
                     {item.fund.name || item.fund.windCode}<ExternalLink className="h-3.5 w-3.5" />
                   </Link>
                   <div className="mt-1 text-xs text-[#78837d]">{item.fund.windCode}</div>
+                  <Link href={`/analysis?${new URLSearchParams({ fundCode: item.fund.windCode }).toString()}`} className="mt-2 inline-flex items-center gap-1 text-[11px] font-bold text-[#6a5840]"><Bot className="h-3 w-3" />现场分析</Link>
                 </td>
                 <td className="px-4 py-4">{item.classification.peerGroup || '分类待确认'}</td>
                 <td className="px-4 py-4">{styleLabel(item.fund)}</td>

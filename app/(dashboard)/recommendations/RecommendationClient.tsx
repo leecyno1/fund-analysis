@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { useMemo, useState } from 'react'
-import { ArrowRight, CheckCircle2, CircleAlert, GitCompareArrows, LoaderCircle, Tags } from 'lucide-react'
+import { ArrowRight, Bot, CheckCircle2, CircleAlert, GitCompareArrows, LoaderCircle, Tags } from 'lucide-react'
 import type { CamelFund } from '@/lib/backend-api'
 import {
   drawdownMetric,
@@ -301,7 +301,10 @@ export default function RecommendationClient({ initialFunds, initialCategories, 
                       </div>
                     ) : null}
                     <p className="mt-3 text-[11px] text-[#89928d]">数据截至 {evidence.dataAsOf || fund.navDate || '待补'} · 仅在“{category}”同类组内评价</p>
-                    <Link href={`/funds/${encodeURIComponent(fund.windCode)}`} className="mt-4 inline-flex items-center gap-1 text-xs font-bold text-[#28745c]">查看基金与风险 <ArrowRight className="h-3.5 w-3.5" /></Link>
+                    <div className="mt-4 flex flex-wrap gap-4">
+                      <Link href={`/funds/${encodeURIComponent(fund.windCode)}`} className="inline-flex items-center gap-1 text-xs font-bold text-[#28745c]">查看基金与风险 <ArrowRight className="h-3.5 w-3.5" /></Link>
+                      <Link href={`/analysis?${new URLSearchParams({ fundCode: fund.windCode }).toString()}`} className="inline-flex items-center gap-1 text-xs font-bold text-[#6a5840]"><Bot className="h-3.5 w-3.5" />现场分析这只基金</Link>
+                    </div>
                   </div>
                 </article>
               )

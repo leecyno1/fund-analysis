@@ -81,6 +81,8 @@ for (const route of ['/discover', '/research', '/analysis', '/recommendations'])
 assertIncludes(dashboardLayout, 'AppNavigation', 'dashboard uses the simple shared navigation')
 assertIncludes(simpleProductScope, '必须先确认基金类别，再进行同类比较', 'simple product scope preserves peer comparison boundary')
 assertIncludes(comparisonPage, 'peerGroupIds.length === 1', 'simple comparison enforces one professional peer group')
+assertIncludes(comparisonPage, '横向比较结论', 'simple comparison summarizes research priority for ordinary users')
+assertIncludes(comparisonPage, '现场综合分析', 'simple comparison links the leading candidate to on-demand analysis')
 assertNotIncludes(comparisonPage, 'purchasePlan', 'simple comparison excludes purchase workflow state')
 
 assertIncludes(legacyRedirect, 'redirect(mergedResearchRouteTarget(pathname))', 'legacy redirect helper centralizes page redirect')
