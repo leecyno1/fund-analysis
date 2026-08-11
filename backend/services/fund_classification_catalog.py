@@ -8,7 +8,7 @@ from typing import Any, Dict, List
 class FundClassificationCatalog:
     """标准分类定义的唯一来源。"""
 
-    VERSION = "fund_classification_catalog_v2"
+    VERSION = "fund_classification_catalog_v3"
 
     STRATEGY_FAMILIES: List[Dict[str, Any]] = [
         {
@@ -110,6 +110,36 @@ class FundClassificationCatalog:
             "evaluation_profile_key": "multi_asset",
             "compatible_fund_types": ["hybrid", "混合型", "灵活配置型", "平衡混合型"],
             "style_tags": ["多资产", "配置", "平衡"],
+        },
+        {
+            "id": "strategy-family-mixed-equity-allocation",
+            "key": "mixed_equity_allocation",
+            "name": "混合型-偏股配置",
+            "asset_class": "multi_asset",
+            "active_passive": "active",
+            "evaluation_profile_key": "multi_asset_equity",
+            "compatible_fund_types": ["hybrid", "混合型", "灵活配置型", "偏股混合型"],
+            "style_tags": ["混合型", "偏股", "权益配置"],
+        },
+        {
+            "id": "strategy-family-mixed-balanced-allocation",
+            "key": "mixed_balanced_allocation",
+            "name": "混合型-平衡配置",
+            "asset_class": "multi_asset",
+            "active_passive": "active",
+            "evaluation_profile_key": "multi_asset_balanced",
+            "compatible_fund_types": ["hybrid", "混合型", "灵活配置型", "平衡混合型"],
+            "style_tags": ["混合型", "平衡", "股债配置"],
+        },
+        {
+            "id": "strategy-family-mixed-bond-allocation",
+            "key": "mixed_bond_allocation",
+            "name": "混合型-偏债配置",
+            "asset_class": "multi_asset",
+            "active_passive": "active",
+            "evaluation_profile_key": "multi_asset_bond",
+            "compatible_fund_types": ["hybrid", "混合型", "灵活配置型", "偏债混合型"],
+            "style_tags": ["混合型", "偏债", "稳健配置"],
         },
     ]
 
@@ -284,6 +314,47 @@ class FundClassificationCatalog:
                 "minimum_peer_count": 5,
             }
         ]
+        groups.extend([
+            {
+                "id": "peer-mixed-equity-allocation",
+                "key": "peer-mixed-equity-allocation",
+                "name": "混合型-偏股配置",
+                "strategy_family_key": "mixed_equity_allocation",
+                "asset_class": "multi_asset",
+                "active_passive": "active",
+                "benchmark_code": "MIXED-EQUITY-60",
+                "benchmark_name": "合同基准权益权重≥60%",
+                "inclusion_rules": {"legalType": "混合型", "minimumEquityBenchmarkWeight": 60, "declaredBenchmarkRequired": True},
+                "exclusion_rules": {"exclude": ["权重不完整", "无法识别资产类别"]},
+                "minimum_peer_count": 5,
+            },
+            {
+                "id": "peer-mixed-balanced-allocation",
+                "key": "peer-mixed-balanced-allocation",
+                "name": "混合型-平衡配置",
+                "strategy_family_key": "mixed_balanced_allocation",
+                "asset_class": "multi_asset",
+                "active_passive": "active",
+                "benchmark_code": "MIXED-BALANCED-30-60",
+                "benchmark_name": "合同基准权益权重>30%且<60%",
+                "inclusion_rules": {"legalType": "混合型", "equityBenchmarkWeightRange": [30, 60], "declaredBenchmarkRequired": True},
+                "exclusion_rules": {"exclude": ["权重不完整", "无法识别资产类别"]},
+                "minimum_peer_count": 5,
+            },
+            {
+                "id": "peer-mixed-bond-allocation",
+                "key": "peer-mixed-bond-allocation",
+                "name": "混合型-偏债配置",
+                "strategy_family_key": "mixed_bond_allocation",
+                "asset_class": "multi_asset",
+                "active_passive": "active",
+                "benchmark_code": "MIXED-BOND-30",
+                "benchmark_name": "合同基准权益权重≤30%",
+                "inclusion_rules": {"legalType": "混合型", "maximumEquityBenchmarkWeight": 30, "declaredBenchmarkRequired": True},
+                "exclusion_rules": {"exclude": ["权重不完整", "无法识别资产类别"]},
+                "minimum_peer_count": 5,
+            },
+        ])
         for rule in cls.TRACKED_INDEX_RULES:
             groups.append({
                 "id": rule["peer_group_key"],

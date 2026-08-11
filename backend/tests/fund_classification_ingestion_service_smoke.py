@@ -201,6 +201,46 @@ def main() -> int:
             }},
         },
         {
+            "wind_code": "980020.OF",
+            "name": "审计偏股配置混合A",
+            "type": "混合型",
+            "raw_data": {"universe": {
+                "benchmark": "沪深300指数收益率×65%+中证港股通综合指数收益率×15%+中债综合全价指数收益率×20%",
+                "invest_type": "混合型",
+                "contract_type": "混合型",
+            }},
+        },
+        {
+            "wind_code": "980021.OF",
+            "name": "审计平衡配置混合A",
+            "type": "混合型",
+            "raw_data": {"universe": {
+                "benchmark": "沪深300指数收益率×50%+中债综合指数收益率×50%",
+                "invest_type": "灵活配置型",
+                "contract_type": "混合型",
+            }},
+        },
+        {
+            "wind_code": "980022.OF",
+            "name": "审计偏债配置混合A",
+            "type": "混合型",
+            "raw_data": {"universe": {
+                "benchmark": "沪深300指数收益率×20%+中债综合财富指数收益率×80%",
+                "invest_type": "混合型",
+                "contract_type": "混合型",
+            }},
+        },
+        {
+            "wind_code": "980023.OF",
+            "name": "审计权重缺失混合A",
+            "type": "混合型",
+            "raw_data": {"universe": {
+                "benchmark": "沪深300指数收益率×60%+中债综合指数收益率×20%",
+                "invest_type": "混合型",
+                "contract_type": "混合型",
+            }},
+        },
+        {
             "wind_code": "0000371.OF",
             "name": "审计脏代码货币A",
             "type": "货币型",
@@ -208,7 +248,7 @@ def main() -> int:
     ])
 
     groups = plan.get("groups") or []
-    if plan.get("summary", {}).get("eligible_funds") != 12 or len(groups) != 8:
+    if plan.get("summary", {}).get("eligible_funds") != 15 or len(groups) != 11:
         raise AssertionError(f"Only high-confidence standardized funds should be eligible: {plan}")
     money = next(group for group in groups if group.get("strategy_family_key") == "cash_management")
     if money.get("benchmark_code") != "DR007" or len(money.get("shares") or []) != 2:
@@ -248,6 +288,14 @@ def main() -> int:
     if composite_bond.get("strategy_family_key") != "fixed_income_general":
         raise AssertionError(f"Composite bond must enter general fixed-income peers: {composite_bond}")
 
+    mixed_groups = {group.get("strategy_family_key"): group for group in groups if group.get("asset_class") == "multi_asset"}
+    if mixed_groups.get("mixed_equity_allocation", {}).get("benchmark_weight") != 80:
+        raise AssertionError(f"Equity-oriented mixed fund weight bucket failed: {mixed_groups}")
+    if mixed_groups.get("mixed_balanced_allocation", {}).get("benchmark_weight") != 50:
+        raise AssertionError(f"Balanced mixed fund weight bucket failed: {mixed_groups}")
+    if mixed_groups.get("mixed_bond_allocation", {}).get("benchmark_weight") != 20:
+        raise AssertionError(f"Bond-oriented mixed fund weight bucket failed: {mixed_groups}")
+
     reasons = plan.get("summary", {}).get("skipped_by_reason") or {}
     if reasons.get("unsupported_index_enhanced") != 1:
         raise AssertionError(f"Enhanced index must remain outside passive-index auto mapping: {plan}")
@@ -263,6 +311,8 @@ def main() -> int:
         raise AssertionError(f"Credit and convertible bond funds must remain outside general bond peers: {plan}")
     if reasons.get("fixed_income_reference_not_100_percent") != 1:
         raise AssertionError(f"Bond benchmarks containing equity exposure must remain outside the catalog: {plan}")
+    if reasons.get("mixed_benchmark_weights_incomplete") != 1:
+        raise AssertionError(f"Incomplete mixed benchmark weights must remain unclassified: {plan}")
     if reasons.get("invalid_fund_code_format") != 1:
         raise AssertionError(f"Malformed fund codes must not enter standardized entities: {plan}")
 

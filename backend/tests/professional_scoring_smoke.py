@@ -8,6 +8,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 from database import init_database
 from repositories import get_fund_repo, get_nav_repo, get_research_profile_repo
 from services.manager_tenure_metric_service import ManagerTenureMetricService
+from services.fund_evaluation_methodology import FundEvaluationMethodology
 from services.professional_scoring_service import ProfessionalScoringService
 from services.rolling_metric_service import RollingMetricService
 
@@ -24,6 +25,44 @@ def _nav_series(start: date, days: int) -> list[dict]:
 
 
 def main() -> int:
+    methodology = FundEvaluationMethodology()
+    mixed_profiles = ["multi_asset_equity", "multi_asset_balanced", "multi_asset_bond"]
+    for profile_key in mixed_profiles:
+        configs = methodology.peer_metric_configs(profile_key)
+        required_metrics = {"annualized_return", "max_drawdown", "sharpe_ratio"}
+        if not required_metrics.issubset({item["metric_name"] for item in configs}):
+            raise AssertionError(f"{profile_key} 缺少核心同类指标: {configs}")
+        evaluation = methodology.evaluate(
+            profile_key,
+            {
+                "1y": {
+                    "annualized_return": 0.08,
+                    "max_drawdown": -0.08,
+                    "sharpe_ratio": 0.9,
+                    "annualized_volatility": 0.12,
+                    "positive_return_ratio": 0.58,
+                },
+                "manager_tenure": {"annualized_return": 0.07, "max_drawdown": -0.10},
+            },
+            {"score": 90, "issues": []},
+        )
+        if evaluation.get("status") not in {"ok", "partial"}:
+            raise AssertionError(f"{profile_key} 应可用核心指标评价: {evaluation}")
+
+    risk_weights = {
+        key: methodology.evaluate(
+            key,
+            {
+                "1y": {"annualized_return": 0.08, "max_drawdown": -0.08, "sharpe_ratio": 0.9},
+                "manager_tenure": {},
+            },
+            {"score": 90, "issues": []},
+        )["dimensions"]["risk"]["weight"]
+        for key in mixed_profiles
+    }
+    if not (risk_weights["multi_asset_equity"] < risk_weights["multi_asset_balanced"] < risk_weights["multi_asset_bond"]):
+        raise AssertionError(f"混合型风险权重顺序错误: {risk_weights}")
+
     init_database()
 
     fund_code = "PROSCORE.TEST"

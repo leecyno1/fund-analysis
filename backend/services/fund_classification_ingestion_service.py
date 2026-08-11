@@ -34,6 +34,11 @@ class FundClassificationIngestionService:
     ACTIVE_EQUITY_ALLOWED_SECONDARY_TERMS = (
         "存款", "利率", "中债", "全债", "综合债", "国债", "债券", "同业存单",
     )
+    MIXED_DEFENSIVE_BENCHMARK_TERMS = ("债", "国债", "存款", "利率", "现金", "DR007", "同业存单")
+    MIXED_EQUITY_BENCHMARK_TERMS = (
+        "沪深", "中证", "上证", "上海证券交易所", "深证", "创业板", "恒生", "港股", "国证", "股票",
+        "金融", "地产", "消费", "产业", "科技", "互联网", "数字经济", "战略新兴",
+    )
     FUND_CODE_PATTERN = re.compile(r"^[0-9]{6}\.(OF|SH|SZ|BJ)$", re.IGNORECASE)
 
     INDEX_RULES = tuple(FundClassificationCatalog.TRACKED_INDEX_RULES)
@@ -160,6 +165,12 @@ class FundClassificationIngestionService:
         elif fund_type in {"债券型", "bond"}:
             classification, reason = self._active_fixed_income_candidate(
                 name,
+                declared_benchmark,
+                invest_type,
+                contract_type,
+            )
+        elif fund_type in {"混合型", "hybrid"} or contract_type == "混合型":
+            classification, reason = self._mixed_allocation_candidate(
                 declared_benchmark,
                 invest_type,
                 contract_type,
@@ -329,6 +340,67 @@ class FundClassificationIngestionService:
                 f"基金法定、投资与合同类型均为债券型；合同业绩比较基准为"
                 f"{rule['benchmark_name']}指数100%，且未混入权益或转债基准。"
             ),
+        }, "eligible"
+
+    def _mixed_allocation_candidate(
+        self,
+        declared_benchmark: str,
+        invest_type: str,
+        contract_type: str,
+    ) -> Tuple[Optional[Dict[str, Any]], str]:
+        if contract_type != "混合型":
+            return None, "mixed_contract_type_conflict"
+        if invest_type not in {"混合型", "灵活配置型", "稳健增长型", "股债配置型", ""}:
+            return None, "unsupported_mixed_investment_type"
+        if not declared_benchmark:
+            return None, "missing_declared_benchmark"
+
+        components = re.findall(r"([^+＋]+?)[×xX*]\s*(\d+(?:\.\d+)?)\s*%", declared_benchmark)
+        if not components:
+            return None, "mixed_benchmark_weights_unavailable"
+        total_weight = sum(float(weight) for _, weight in components)
+        if total_weight < 95 or total_weight > 105:
+            return None, "mixed_benchmark_weights_incomplete"
+
+        equity_weight = 0.0
+        for component, raw_weight in components:
+            weight = float(raw_weight)
+            if any(term.lower() in component.lower() for term in self.MIXED_DEFENSIVE_BENCHMARK_TERMS):
+                continue
+            if any(term.lower() in component.lower() for term in self.MIXED_EQUITY_BENCHMARK_TERMS):
+                equity_weight += weight
+                continue
+            return None, "mixed_benchmark_asset_class_ambiguous"
+
+        if equity_weight >= 60:
+            family_key = "mixed_equity_allocation"
+            peer_group_key = "peer-mixed-equity-allocation"
+            benchmark_code = "MIXED-EQUITY-60"
+            benchmark_name = "合同基准权益权重≥60%"
+        elif equity_weight <= 30:
+            family_key = "mixed_bond_allocation"
+            peer_group_key = "peer-mixed-bond-allocation"
+            benchmark_code = "MIXED-BOND-30"
+            benchmark_name = "合同基准权益权重≤30%"
+        else:
+            family_key = "mixed_balanced_allocation"
+            peer_group_key = "peer-mixed-balanced-allocation"
+            benchmark_code = "MIXED-BALANCED-30-60"
+            benchmark_name = "合同基准权益权重>30%且<60%"
+        return {
+            "strategy_family_key": family_key,
+            "asset_class": "multi_asset",
+            "active_passive": "active",
+            "peer_group_key": peer_group_key,
+            "benchmark_code": benchmark_code,
+            "benchmark_name": benchmark_name,
+            "benchmark_type": "declared_allocation_bucket",
+            "mapping_method": "declared_benchmark_asset_weight_bucket",
+            "classification_confidence": 0.96,
+            "benchmark_confidence": 0.96,
+            "benchmark_weight": round(equity_weight, 4),
+            "automatic_rule_scope": "mixed_fund_explicit_contract_allocation",
+            "rationale": f"合同基准各资产权重合计{total_weight:g}%，其中权益类权重{equity_weight:g}%，据此进入配置同类组。",
         }, "eligible"
 
     def _finalize_group(self, group: Dict[str, Any]) -> Dict[str, Any]:
