@@ -5,6 +5,7 @@ const client = readFileSync('app/(dashboard)/recommendations/RecommendationClien
 const backendRoute = readFileSync('backend/routes/funds.py', 'utf8')
 const backendService = readFileSync('backend/services/fund_recommendation_service.py', 'utf8')
 const recommendationPage = readFileSync('app/(dashboard)/recommendations/page.tsx', 'utf8')
+const backendMapper = readFileSync('lib/backend-api.ts', 'utf8')
 
 function requireText(source, text, message) {
   if (!source.includes(text)) throw new Error(`${message}: ${text}`)
@@ -23,6 +24,8 @@ requireText(client, '数据截至', 'candidate cards must disclose the evidence 
 requireText(client, '现场分析这只基金', 'candidate cards must link directly to on-demand fund analysis')
 requireText(client, '同类组共', 'empty recommendation state must explain evidence gaps')
 requireText(client, '数据准备情况', 'recommendation page must show category coverage')
+requireText(client, '不冒充已确认风格', 'memo suggestions must be visibly separated from confirmed styles')
+requireText(backendMapper, 'memoStyleSuggestions', 'frontend mapping must preserve memo style suggestion provenance')
 requireText(client, '指标缺口只通过真实净值数据补齐', 'coverage UI must reject mock metric backfills')
 requireText(recommendationPage, '/api/funds/recommendation-coverage', 'recommendation page must load category coverage')
 requireText(client, 'void loadCandidates(category, nextStyle)', 'style changes must refresh the full peer candidate group')

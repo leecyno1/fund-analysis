@@ -161,7 +161,7 @@ export default function RecommendationClient({ initialFunds, initialCategories, 
         </label>
         <label className="block">
           <span className="text-sm font-bold">2. 风格标签</span>
-          <span className="mt-1 block text-xs text-[#7a8580]">可选，兼容中英文风格标签</span>
+          <span className="mt-1 block text-xs text-[#7a8580]">可选；纪要推断会明确标注，不冒充已确认风格</span>
           <select value={style} disabled={!category || loading} onChange={(event) => {
             const nextStyle = event.target.value
             setStyle(nextStyle)

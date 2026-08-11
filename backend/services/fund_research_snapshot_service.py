@@ -86,6 +86,7 @@ class FundResearchSnapshotService:
         """把候选基金投影为与完整快照同口径的摘要。"""
         scoring = candidate.get("professional_scoring") or {}
         profile = candidate.get("research_profile") or {}
+        style_suggestions = profile.get("memo_style_suggestions") or []
         peer_percentiles = candidate.get("peer_percentiles") or {}
         evidence = candidate.get("recommendation_evidence") or {}
         return {
@@ -98,7 +99,9 @@ class FundResearchSnapshotService:
             "style_profile": {
                 "style_label": profile.get("style_label"),
                 "strategy_tags": profile.get("strategy_tags") or [],
-                "source": "fund_research_profile",
+                "suggested_labels": style_suggestions,
+                "status": "confirmed" if profile.get("style_label") else "suggested" if style_suggestions else "empty",
+                "source": "fund_research_profile+memo_style_suggestions",
             },
             "rolling_metrics": candidate.get("rolling_metrics") or {},
             "evaluation": {

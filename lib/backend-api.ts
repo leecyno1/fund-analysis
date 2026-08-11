@@ -104,6 +104,15 @@ export function toCamelFund(fund: BackendRecord): CamelFund {
           classificationConfidence: researchProfile.classification_confidence ?? researchProfile.classificationConfidence ?? null,
           classificationSource: researchProfile.classification_source ?? researchProfile.classificationSource ?? null,
           evidence: researchProfile.evidence ?? null,
+          memoStyleSuggestions: asRecordArray(
+            researchProfile.memo_style_suggestions ?? researchProfile.memoStyleSuggestions,
+          ).map((suggestion) => ({
+            value: asText(suggestion.value),
+            confidence: asNumberOrNull(suggestion.confidence),
+            status: asText(suggestion.status, 'llm_suggested'),
+            reportCount: asNumberOrNull(suggestion.report_count ?? suggestion.reportCount),
+            reportTitles: asStringArray(suggestion.report_titles ?? suggestion.reportTitles),
+          })),
         }
       : null,
     rollingMetrics: fund.rolling_metrics ?? fund.rollingMetrics ?? {},
