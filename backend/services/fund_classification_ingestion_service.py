@@ -155,6 +155,12 @@ class FundClassificationIngestionService:
                 invest_type,
                 contract_type,
             )
+        elif fund_type in {"混合型", "hybrid"} or contract_type == "混合型":
+            classification, reason = self._mixed_allocation_candidate(
+                declared_benchmark,
+                invest_type,
+                contract_type,
+            )
         elif fund_type in {"股票型", "stock"}:
             classification, reason = self._active_equity_candidate(
                 name,
@@ -165,12 +171,6 @@ class FundClassificationIngestionService:
         elif fund_type in {"债券型", "bond"}:
             classification, reason = self._active_fixed_income_candidate(
                 name,
-                declared_benchmark,
-                invest_type,
-                contract_type,
-            )
-        elif fund_type in {"混合型", "hybrid"} or contract_type == "混合型":
-            classification, reason = self._mixed_allocation_candidate(
                 declared_benchmark,
                 invest_type,
                 contract_type,

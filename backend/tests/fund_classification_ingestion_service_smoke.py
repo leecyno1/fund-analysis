@@ -223,7 +223,7 @@ def main() -> int:
         {
             "wind_code": "980022.OF",
             "name": "审计偏债配置混合A",
-            "type": "混合型",
+            "type": "债券型",
             "raw_data": {"universe": {
                 "benchmark": "沪深300指数收益率×20%+中债综合财富指数收益率×80%",
                 "invest_type": "混合型",
