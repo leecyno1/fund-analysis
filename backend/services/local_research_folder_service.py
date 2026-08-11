@@ -325,6 +325,18 @@ class LocalResearchFolderService:
                 0.98 if candidate else 0.88,
                 candidate_id=(candidate or {}).get("manager_id"),
             ))
+        elif filename_manager := re.match(r"^([\u4e00-\u9fff·]{2,4})(?=[\s_-])", path.stem):
+            value = filename_manager.group(1).strip()
+            candidate = self.manager_resolver(value) if self.manager_resolver else None
+            proposals.append(self._proposal(
+                "manager",
+                value,
+                path,
+                root,
+                f"文件名：{path.name}",
+                0.9 if candidate else 0.82,
+                candidate_id=(candidate or {}).get("manager_id"),
+            ))
         elif path.parent != root and 2 <= len(path.parent.name) <= 40:
             proposals.append(self._proposal(
                 "manager",

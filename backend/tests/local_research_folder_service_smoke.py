@@ -173,6 +173,14 @@ def main() -> int:
         manager_folder = root / "张三"
         manager_folder.mkdir(parents=True)
 
+        filename_proposals = service._extract_proposals(
+            "关注回撤与估值。",
+            root,
+            root / "范妍 富国基金 250218.docx",
+        )
+        if not any(item.get("kind") == "manager" and item.get("value") == "范妍" for item in filename_proposals):
+            raise AssertionError(f"Manager name in a standard memo filename must be extracted: {filename_proposals}")
+
         markdown_content = "# 访谈纪要\n基金经理：张三\n风格：成长、大盘、低换手\n基金分类：主动权益\n- 重视现金流与长期竞争力\n"
         markdown_path = manager_folder / "2026-08-01-访谈.md"
         duplicate_path = manager_folder / "重复内容.txt"
