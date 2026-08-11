@@ -82,6 +82,18 @@ function latestMetric(fund: SimpleFund, metric: string) {
   return numberValue(performance[metric], latest[metric])
 }
 
+function trackingErrorMetric(fund: SimpleFund) {
+  const risk = asRecord(fund.riskMetrics)
+  const oneYear = windowMetrics(fund, '1y')
+  return numberValue(risk.tracking_error, oneYear.tracking_error)
+}
+
+function trackingDifferenceMetric(fund: SimpleFund) {
+  const performance = asRecord(fund.performanceData)
+  const oneYear = windowMetrics(fund, '1y')
+  return numberValue(performance.tracking_difference, oneYear.tracking_difference, oneYear.excess_return)
+}
+
 function formatMoneyIncome(value: number | null | undefined) {
   return value == null || Number.isNaN(value) ? '—' : `${value.toFixed(4)} 元`
 }
@@ -106,6 +118,7 @@ export default function SimpleComparisonClient({ funds }: { funds: ComparisonFun
   const chartData = useMemo(() => normalizedChartData(funds, selectedWindow.days), [funds, selectedWindow.days])
   const peerGroup = comparable ? funds[0].classification.peerGroup : ''
   const isMoneyMarket = peerGroup.startsWith('货币-')
+  const isIndexFund = peerGroup.startsWith('指数-')
   const scoreRanking = [...funds]
     .filter((item) => item.evaluation.score != null)
     .sort((left, right) => Number(right.evaluation.score) - Number(left.evaluation.score))
@@ -119,6 +132,12 @@ export default function SimpleComparisonClient({ funds }: { funds: ComparisonFun
   const sevenDayYieldLeader = metricLeader(funds, (fund) => latestMetric(fund, 'seven_day_annualized_yield'))
   const incomePer10000Leader = metricLeader(funds, (fund) => latestMetric(fund, 'income_per_10000'))
   const assetLeader = metricLeader(funds, (fund) => numberValue(fund.totalAsset))
+  const trackingErrorLeader = metricLeader(funds, trackingErrorMetric, 'low')
+  const trackingDifferenceLeader = metricLeader(funds, (fund) => {
+    const value = trackingDifferenceMetric(fund)
+    return value == null ? null : Math.abs(value)
+  }, 'low')
+  const expenseLeader = metricLeader(funds, (fund) => latestMetric(fund, 'expense_ratio'), 'low')
 
   return (
     <div className="space-y-7">
@@ -175,6 +194,12 @@ export default function SimpleComparisonClient({ funds }: { funds: ComparisonFun
                 <div className="bg-[#f8faf8] p-4"><div className="text-xs text-[#748079]">万份收益较高</div><strong className="mt-2 block text-sm">{incomePer10000Leader?.item.fund.name || '数据待补'}</strong><span className="mt-1 block text-xs text-[#66726c]">{formatMoneyIncome(incomePer10000Leader?.value)}</span></div>
                 <div className="bg-[#f8faf8] p-4"><div className="text-xs text-[#748079]">基金规模较大</div><strong className="mt-2 block text-sm">{assetLeader?.item.fund.name || '数据待补'}</strong><span className="mt-1 block text-xs text-[#66726c]">{formatAsset(assetLeader?.value)}</span></div>
               </>
+            ) : isIndexFund ? (
+              <>
+                <div className="bg-[#f8faf8] p-4"><div className="text-xs text-[#748079]">跟踪误差较小</div><strong className="mt-2 block text-sm">{trackingErrorLeader?.item.fund.name || '数据待补'}</strong><span className="mt-1 block text-xs text-[#66726c]">{formatPercent(trackingErrorLeader?.value)}</span></div>
+                <div className="bg-[#f8faf8] p-4"><div className="text-xs text-[#748079]">跟踪差异绝对值较小</div><strong className="mt-2 block text-sm">{trackingDifferenceLeader?.item.fund.name || '数据待补'}</strong><span className="mt-1 block text-xs text-[#66726c]">{formatPercent(trackingDifferenceLeader?.value)}</span></div>
+                <div className="bg-[#f8faf8] p-4"><div className="text-xs text-[#748079]">综合费率较低</div><strong className="mt-2 block text-sm">{expenseLeader?.item.fund.name || '数据待补'}</strong><span className="mt-1 block text-xs text-[#66726c]">{formatPercent(expenseLeader?.value)}</span></div>
+              </>
             ) : (
               <>
                 <div className="bg-[#f8faf8] p-4"><div className="text-xs text-[#748079]">{selectedWindow.label}收益领先</div><strong className="mt-2 block text-sm">{returnLeader?.item.fund.name || '数据待补'}</strong><span className="mt-1 block text-xs text-[#66726c]">{formatPercent(returnLeader?.value)}</span></div>
@@ -183,7 +208,7 @@ export default function SimpleComparisonClient({ funds }: { funds: ComparisonFun
               </>
             )}
           </div>
-          <div className="mt-4 flex gap-3 text-xs leading-6 text-[#65716b]"><ShieldCheck className="mt-1 h-4 w-4 shrink-0 text-[#28745c]" /><span>{isMoneyMarket ? '货币基金按收益率、万份收益、规模和净值稳定性评价，不使用股票基金的 Sharpe 结论。' : '如果收益、回撤和 Sharpe 由不同基金领先，说明没有单一维度全面胜出，应继续查看经理、风格和归因证据。'}</span></div>
+          <div className="mt-4 flex gap-3 text-xs leading-6 text-[#65716b]"><ShieldCheck className="mt-1 h-4 w-4 shrink-0 text-[#28745c]" /><span>{isMoneyMarket ? '货币基金按收益率、万份收益、规模和净值稳定性评价，不使用股票基金的 Sharpe 结论。' : isIndexFund ? '指数基金优先比较跟踪质量、费率和规模，区间收益只用于核对实际跟踪结果。' : '如果收益、回撤和 Sharpe 由不同基金领先，说明没有单一维度全面胜出，应继续查看经理、风格和归因证据。'}</span></div>
         </section>
       ) : null}
 
@@ -265,6 +290,16 @@ export default function SimpleComparisonClient({ funds }: { funds: ComparisonFun
                     {funds.map((item) => {
                       const fund = item.fund as SimpleFund
                       return <tr key={item.fund.windCode}><td className="px-4 py-4 font-bold">{item.fund.name || item.fund.windCode}</td><td className="px-4 py-4 text-right">{formatPercent(latestMetric(fund, 'seven_day_annualized_yield'))}</td><td className="px-4 py-4 text-right">{formatMoneyIncome(latestMetric(fund, 'income_per_10000'))}</td><td className="px-4 py-4 text-right">{formatPercent(returnMetric(fund, '1y'))}</td><td className="px-4 py-4 text-right">{formatAsset(item.fund.totalAsset)}</td><td className="px-4 py-4 text-right">{item.evaluation.validPeerCount || '—'}</td></tr>
+                    })}
+                  </tbody>
+                </table>
+              ) : isIndexFund ? (
+                <table className="w-full min-w-[820px] border-collapse text-left text-sm">
+                  <thead className="bg-[#f1f4f1] text-xs text-[#66726c]"><tr><th className="px-4 py-3">基金</th><th className="px-4 py-3 text-right">跟踪误差</th><th className="px-4 py-3 text-right">跟踪差异</th><th className="px-4 py-3 text-right">综合费率</th><th className="px-4 py-3 text-right">近 1 年收益</th><th className="px-4 py-3 text-right">规模</th><th className="px-4 py-3 text-right">同类有效样本</th></tr></thead>
+                  <tbody className="divide-y divide-[#e5e9e5]">
+                    {funds.map((item) => {
+                      const fund = item.fund as SimpleFund
+                      return <tr key={item.fund.windCode}><td className="px-4 py-4 font-bold">{item.fund.name || item.fund.windCode}</td><td className="px-4 py-4 text-right">{formatPercent(trackingErrorMetric(fund))}</td><td className="px-4 py-4 text-right">{formatPercent(trackingDifferenceMetric(fund))}</td><td className="px-4 py-4 text-right">{formatPercent(latestMetric(fund, 'expense_ratio'))}</td><td className="px-4 py-4 text-right">{formatPercent(returnMetric(fund, '1y'))}</td><td className="px-4 py-4 text-right">{formatAsset(item.fund.totalAsset)}</td><td className="px-4 py-4 text-right">{item.evaluation.validPeerCount || '—'}</td></tr>
                     })}
                   </tbody>
                 </table>

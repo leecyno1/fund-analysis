@@ -21,6 +21,7 @@ type EvaluationPayload = {
   evaluation?: {
     overall_score?: number | null
     overall_grade?: string | null
+    metric_scores?: Record<string, number | string | null>
   }
 }
 
@@ -54,6 +55,22 @@ async function loadComparisonFund(code: string): Promise<ComparisonFund | null> 
   const evaluation = evaluationResponse.ok
     ? await evaluationResponse.json().catch(() => ({})) as EvaluationPayload
     : {}
+  const metricScores = evaluation.evaluation?.metric_scores || {}
+  const rollingMetrics = { ...((fund.rollingMetrics || {}) as Record<string, Record<string, unknown>>) }
+  for (const [path, value] of Object.entries(metricScores)) {
+    const separator = path.indexOf('.')
+    if (separator <= 0 || value == null) continue
+    const metricWindow = path.slice(0, separator)
+    const metricName = path.slice(separator + 1)
+    rollingMetrics[metricWindow] = {
+      ...(rollingMetrics[metricWindow] || {}),
+      [metricName]: value,
+    }
+  }
+  fund.rollingMetrics = rollingMetrics
+  if (fund.totalAsset == null && metricScores['latest.aum'] != null) {
+    fund.totalAsset = Number(metricScores['latest.aum'])
+  }
   const navPayload = navResponse.ok ? await navResponse.json().catch(() => ({})) : {}
   const nav = (Array.isArray(navPayload.data) ? navPayload.data : [])
     .map((item: Record<string, unknown>) => ({ date: String(item.date || ''), nav: Number(item.nav) }))

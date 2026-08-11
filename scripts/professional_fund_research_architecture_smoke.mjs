@@ -85,6 +85,8 @@ assertIncludes(comparisonPage, '横向比较结论', 'simple comparison summariz
 assertIncludes(comparisonPage, '现场综合分析', 'simple comparison links the leading candidate to on-demand analysis')
 assertIncludes(comparisonPage, '七日年化较高', 'money-market comparison uses category-specific income evidence')
 assertIncludes(comparisonPage, '不使用股票基金的 Sharpe 结论', 'money-market comparison rejects stock-fund comparison language')
+assertIncludes(comparisonPage, '跟踪误差较小', 'index comparison uses tracking-quality evidence')
+assertIncludes(comparisonPage, '指数基金优先比较跟踪质量、费率和规模', 'index comparison explains its category-specific method')
 assertNotIncludes(comparisonPage, 'purchasePlan', 'simple comparison excludes purchase workflow state')
 
 assertIncludes(legacyRedirect, 'redirect(mergedResearchRouteTarget(pathname))', 'legacy redirect helper centralizes page redirect')
