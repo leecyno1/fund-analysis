@@ -129,6 +129,8 @@ class LocalResearchFolderRepo:
             for proposal in report.get("review_proposals", []):
                 if proposal.get("review_status") != "pending":
                     continue
+                if proposal.get("kind") == "fund" and proposal.get("extraction_source") == "tushare.fund_manager":
+                    continue
                 pending.append({
                     "report_id": str(report["_id"]),
                     "report_title": report.get("title") or "无标题纪要",
@@ -356,6 +358,8 @@ class PostgresLocalResearchFolderRepo:
             report = self._row(row) or {}
             for proposal in report.get("review_proposals") or []:
                 if proposal.get("review_status") == "pending":
+                    if proposal.get("kind") == "fund" and proposal.get("extraction_source") == "tushare.fund_manager":
+                        continue
                     pending.append({
                         "report_id": report.get("id"),
                         "report_title": report.get("title") or "无标题纪要",

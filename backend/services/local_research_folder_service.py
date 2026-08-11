@@ -54,6 +54,7 @@ class LocalResearchFolderService:
         self,
         repo: Any,
         manager_resolver: Optional[Callable[[str], Optional[Dict[str, Any]]]] = None,
+        manager_fund_resolver: Optional[Callable[[str, str, str], List[Dict[str, Any]]]] = None,
         metadata_extractor: Optional[Callable[[str, str], Dict[str, Any]]] = None,
         profile_projector: Optional[Callable[[Dict[str, Any], List[str]], Dict[str, Any]]] = None,
         max_files: int = 5_000,
@@ -61,6 +62,7 @@ class LocalResearchFolderService:
     ):
         self.repo = repo
         self.manager_resolver = manager_resolver
+        self.manager_fund_resolver = manager_fund_resolver
         self.metadata_extractor = metadata_extractor
         self.profile_projector = profile_projector
         self.max_files = max_files
@@ -145,6 +147,21 @@ class LocalResearchFolderService:
             "fund_ids": list(report.get("fund_ids", [])),
         }
         self._apply_proposal(fields, target, confirmed=action == "confirmed")
+        linked_fund_proposals = []
+        if target.get("kind") == "manager":
+            manager_name = str(target.get("value") or "").strip()
+            for proposal in proposals:
+                source_ref = proposal.get("source_ref") or {}
+                if (
+                    proposal.get("kind") != "fund"
+                    or proposal.get("extraction_source") != "tushare.fund_manager"
+                    or str(source_ref.get("manager_name") or "").strip() != manager_name
+                ):
+                    continue
+                proposal["review_status"] = action
+                proposal["reviewed_at"] = target["reviewed_at"]
+                self._apply_proposal(fields, proposal, confirmed=action == "confirmed")
+                linked_fund_proposals.append(proposal)
         fields.update({
             "review_proposals": proposals,
             "review_status": "pending" if any(
@@ -163,6 +180,8 @@ class LocalResearchFolderService:
             "status": action,
             "report": updated,
             "proposal": target,
+            "linked_fund_proposals": linked_fund_proposals,
+            "linked_fund_count": len(linked_fund_proposals),
             "profile_projection": projection,
         }
 
@@ -200,7 +219,12 @@ class LocalResearchFolderService:
             stat = resolved_path.stat()
             existing = self.repo.get_document(folder_id, relative_path)
             if existing and existing.get("size") == stat.st_size and existing.get("mtime_ns") == stat.st_mtime_ns:
-                return {"relative_path": relative_path, "status": "unchanged", "report_id": existing.get("report_id")}
+                enriched = self._enrich_existing_report(existing.get("report_id"), root, resolved_path)
+                return {
+                    "relative_path": relative_path,
+                    "status": "updated" if enriched else "unchanged",
+                    "report_id": existing.get("report_id"),
+                }
             if stat.st_size > self.max_file_bytes:
                 raise ValueError(f"文件超过 {self.max_file_bytes // (1024 * 1024) or 1} MB 上限")
 
@@ -209,7 +233,12 @@ class LocalResearchFolderService:
             if existing and existing.get("content_hash") == content_hash:
                 document = self._document_record(folder_id, root, resolved_path, stat, content_hash, existing.get("report_id"), "indexed")
                 self.repo.upsert_document(document)
-                return {"relative_path": relative_path, "status": "unchanged", "report_id": existing.get("report_id")}
+                enriched = self._enrich_existing_report(existing.get("report_id"), root, resolved_path)
+                return {
+                    "relative_path": relative_path,
+                    "status": "updated" if enriched else "unchanged",
+                    "report_id": existing.get("report_id"),
+                }
 
             duplicate = self.repo.find_document_by_hash(
                 content_hash,
@@ -232,11 +261,19 @@ class LocalResearchFolderService:
                 resolved_path,
             )
             now = self._now()
+            report_date = self._report_date(resolved_path, stat.st_mtime)
+            proposals = self._add_manager_fund_proposals(
+                proposals,
+                report_date,
+                resolved_path.stem,
+                root,
+                resolved_path,
+            )
             report_payload = {
                 "manager_id": "",
                 "manager_name": "",
                 "title": resolved_path.stem,
-                "report_date": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).date().isoformat(),
+                "report_date": report_date,
                 "source": "本地调研纪要文件夹",
                 "content": content,
                 "summary": self._summary(content),
@@ -378,6 +415,90 @@ class LocalResearchFolderService:
             return result if isinstance(result, dict) else {"status": "failed", "proposals": [], "error": "模型提取结果格式无效"}
         except Exception as exc:
             return {"status": "failed", "provider": None, "model": None, "proposals": [], "error": str(exc)}
+
+    def _enrich_existing_report(self, report_id: Optional[str], root: Path, path: Path) -> bool:
+        if not report_id or not self.manager_fund_resolver:
+            return False
+        report = self.repo.get_report(report_id)
+        if not report:
+            return False
+        source_path = Path(str(report.get("local_source_path") or path))
+        if not source_path.exists() or not source_path.is_relative_to(root):
+            source_path = path
+        report_date = self._report_date(source_path, source_path.stat().st_mtime)
+        proposals = [
+            proposal
+            for proposal in (report.get("review_proposals") or [])
+            if not (
+                proposal.get("kind") == "fund"
+                and proposal.get("extraction_source") == "tushare.fund_manager"
+                and proposal.get("review_status") != "confirmed"
+            )
+        ]
+        enriched = self._add_manager_fund_proposals(
+            proposals,
+            report_date,
+            str(report.get("title") or source_path.stem),
+            root,
+            source_path,
+        )
+        if enriched == (report.get("review_proposals") or []) and report_date == str(report.get("report_date") or ""):
+            return False
+        self.repo.update_report(report_id, {
+            "report_date": report_date,
+            "review_proposals": enriched,
+            "review_status": "pending" if any(
+                proposal.get("review_status") == "pending" for proposal in enriched
+            ) else "reviewed",
+            "updated_at": self._now(),
+        })
+        return True
+
+    def _add_manager_fund_proposals(
+        self,
+        proposals: List[Dict[str, Any]],
+        report_date: str,
+        report_title: str,
+        root: Path,
+        path: Path,
+    ) -> List[Dict[str, Any]]:
+        if not self.manager_fund_resolver:
+            return proposals
+        merged = {(item.get("kind"), item.get("value")): item for item in proposals}
+        manager_names = list(dict.fromkeys(
+            str(item.get("value") or "").strip()
+            for item in proposals
+            if item.get("kind") == "manager" and str(item.get("value") or "").strip()
+        ))
+        for manager_name in manager_names:
+            try:
+                relations = self.manager_fund_resolver(manager_name, report_date, report_title) or []
+            except Exception:
+                relations = []
+            for relation in relations:
+                wind_code = str(relation.get("wind_code") or "").strip().upper()
+                if not wind_code:
+                    continue
+                proposal = self._proposal(
+                    "fund",
+                    wind_code,
+                    path,
+                    root,
+                    f"Tushare：{manager_name} 于 {report_date} 管理 {relation.get('fund_name') or wind_code}",
+                    0.9,
+                )
+                proposal["extraction_source"] = relation.get("source") or "tushare.fund_manager"
+                proposal["source_ref"].update({
+                    "manager_name": manager_name,
+                    "report_date": report_date,
+                    "fund_name": relation.get("fund_name"),
+                    "management_company": relation.get("management_company"),
+                })
+                key = ("fund", wind_code)
+                current = merged.get(key)
+                if not current or float(current.get("confidence") or 0) < proposal["confidence"]:
+                    merged[key] = proposal
+        return list(merged.values())
 
     def _merge_proposals(
         self,
@@ -547,6 +668,23 @@ class LocalResearchFolderService:
             if line.strip().startswith(("-", "•", "*")) and 8 <= len(clean) <= 180:
                 points.append(clean)
         return points[:5]
+
+    @staticmethod
+    def _report_date(path: Path, modified_at: float) -> str:
+        name = path.stem
+        full_year = re.search(r"(?<!\d)(20\d{2})[年._-]?(\d{1,2})[月._-]?(\d{1,2})日?(?!\d)", name)
+        short_chinese = re.search(r"(?<!\d)(\d{2})年(\d{1,2})月(\d{1,2})日", name)
+        short_year = re.search(r"(?<!\d)(\d{2})(\d{2})(\d{2})(?!\d)", name)
+        match = full_year or short_chinese or short_year
+        if match:
+            year = int(match.group(1))
+            if year < 100:
+                year += 2000
+            try:
+                return datetime(year, int(match.group(2)), int(match.group(3)), tzinfo=timezone.utc).date().isoformat()
+            except ValueError:
+                pass
+        return datetime.fromtimestamp(modified_at, tz=timezone.utc).date().isoformat()
 
     @staticmethod
     def _line_excerpt(content: str, character_index: int) -> str:

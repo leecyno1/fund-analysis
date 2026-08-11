@@ -25,14 +25,17 @@ class ReviewDecisionRequest(BaseModel):
 def _get_service() -> LocalResearchFolderService:
     from repositories.local_research_folder_repo import PostgresLocalResearchFolderRepo
     from services.research_memo_metadata_extractor import get_research_memo_metadata_extractor
+    from services.research_memo_manager_fund_resolver import ResearchMemoManagerFundResolver
 
     repo = PostgresLocalResearchFolderRepo()
     repo.ensure_indexes()
     extractor = get_research_memo_metadata_extractor()
+    manager_fund_resolver = ResearchMemoManagerFundResolver()
     projector = ResearchMemoProfileProjectionService(report_repo=repo)
     return LocalResearchFolderService(
         repo=repo,
         metadata_extractor=extractor.extract,
+        manager_fund_resolver=manager_fund_resolver.resolve,
         profile_projector=projector.project_report,
     )
 

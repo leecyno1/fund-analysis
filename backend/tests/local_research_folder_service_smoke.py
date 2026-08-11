@@ -86,6 +86,8 @@ class MemoryResearchFolderRepo:
                 continue
             for proposal in report.get("review_proposals", []):
                 if proposal.get("review_status") == "pending":
+                    if proposal.get("kind") == "fund" and proposal.get("extraction_source") == "tushare.fund_manager":
+                        continue
                     pending.append({
                         "report_id": report["id"],
                         "report_title": report["title"],
@@ -160,9 +162,20 @@ def main() -> int:
             ],
         }
 
+    def manager_fund_resolver(manager_name, report_date, report_title):
+        if manager_name != "张三":
+            return []
+        return [{
+            "wind_code": "000001.OF",
+            "fund_name": "测试基金",
+            "management_company": "测试基金管理有限公司",
+            "source": "tushare.fund_manager",
+        }]
+
     service = LocalResearchFolderService(
         repo=repo,
         metadata_extractor=model_extractor,
+        manager_fund_resolver=manager_fund_resolver,
         profile_projector=profile_projector,
         max_files=20,
         max_file_bytes=2_000_000,
@@ -180,6 +193,10 @@ def main() -> int:
         )
         if not any(item.get("kind") == "manager" and item.get("value") == "范妍" for item in filename_proposals):
             raise AssertionError(f"Manager name in a standard memo filename must be extracted: {filename_proposals}")
+        if service._report_date(root / "路演纪要20250207.pdf", 0) != "2025-02-07":
+            raise AssertionError("Compact memo date in filename must override file mtime")
+        if service._report_date(root / "范妍 25年2月18日.docx", 0) != "2025-02-18":
+            raise AssertionError("Chinese memo date in filename must override file mtime")
 
         markdown_content = "# 访谈纪要\n基金经理：张三\n风格：成长、大盘、低换手\n基金分类：主动权益\n- 重视现金流与长期竞争力\n"
         markdown_path = manager_folder / "2026-08-01-访谈.md"
@@ -235,14 +252,21 @@ def main() -> int:
             confidence = proposal.get("confidence")
             if not isinstance(confidence, (int, float)) or not 0 <= confidence <= 1:
                 raise AssertionError(f"Proposal confidence is invalid: {proposal}")
+        if fund_proposal.get("extraction_source") != "tushare.fund_manager":
+            raise AssertionError(f"Manager tenure relation must be sourced from Tushare: {fund_proposal}")
+        visible_pending = service.list_pending_reviews(folder["id"])
+        if any(item.get("id") == fund_proposal["id"] for item in visible_pending):
+            raise AssertionError(f"Tushare fund links should be handled with manager confirmation: {visible_pending}")
 
         manager_review = service.review_proposal(manager_report["id"], manager_proposal["id"], "confirmed")
         fund_review = service.review_proposal(manager_report["id"], fund_proposal["id"], "confirmed")
         style_review = service.review_proposal(manager_report["id"], style_proposal["id"], "rejected")
         if len(projection_calls) != 3:
             raise AssertionError(f"Every review must rebuild affected profiles: {projection_calls}")
-        if projection_calls[0][1] or projection_calls[1][1] != ["000001.OF"] or projection_calls[2][1] != ["000001.OF"]:
+        if any(call[1] != ["000001.OF"] for call in projection_calls):
             raise AssertionError(f"Projection must receive old and new fund identities: {projection_calls}")
+        if manager_review.get("linked_fund_count") != 1:
+            raise AssertionError(f"Confirming a manager must confirm Tushare tenure links in one step: {manager_review}")
         if manager_review.get("profile_projection") is None or fund_review.get("profile_projection") is None or style_review.get("profile_projection") is None:
             raise AssertionError("Review response must expose profile projection status")
         reviewed = repo.get_report(manager_report["id"])

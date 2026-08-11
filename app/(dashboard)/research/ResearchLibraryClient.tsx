@@ -261,12 +261,15 @@ export default function ResearchLibraryClient() {
       setPendingReviews((items) => items.filter((item) => item.id !== review.id))
       const projectedCount = Number(payload.profile_projection?.projected_count || 0)
       const deletedCount = Number(payload.profile_projection?.deleted_count || 0)
+      const linkedFundCount = Number(payload.linked_fund_count || 0)
       setFolderMessage(
         projectedCount
           ? `已保存，并更新 ${projectedCount} 只基金画像`
           : deletedCount
             ? `已保存，并清理 ${deletedCount} 个失效画像`
-            : '已保存',
+            : linkedFundCount
+              ? `已确认经理，并关联 ${linkedFundCount} 只任期基金`
+              : '已保存',
       )
       await loadMemos()
     } catch (reviewError) {
@@ -342,7 +345,7 @@ export default function ResearchLibraryClient() {
 
       <section aria-labelledby="review-heading" className="border-t border-[#dce1dc] pt-5">
         <div className="flex items-center justify-between gap-4 pb-3">
-          <h2 id="review-heading" className="text-lg font-bold">待确认</h2>
+          <div><h2 id="review-heading" className="text-lg font-bold">待确认</h2><p className="mt-1 text-xs text-[#748078]">确认经理后，会自动关联 Tushare 已核验的任期基金。</p></div>
           <span className="text-xs text-[#748078]">{pendingReviews.length} 项</span>
         </div>
         {pendingReviews.length ? (
