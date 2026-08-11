@@ -111,6 +111,24 @@ export default function ResearchLibraryClient() {
 
   const selectedFolder = folders.find((folder) => folder.id === selectedFolderId) || folders[0] || null
   const displayedCounts = lastScanCounts || selectedFolder?.last_scan_counts || emptyCounts
+  const reviewGroups = useMemo(() => {
+    const groups = new Map<string, { reportId: string; title: string; relativePath: string; items: PendingReview[] }>()
+    for (const review of pendingReviews) {
+      const group = groups.get(review.report_id) || {
+        reportId: review.report_id,
+        title: review.report_title,
+        relativePath: review.source_ref.relative_path,
+        items: [],
+      }
+      group.items.push(review)
+      groups.set(review.report_id, group)
+    }
+    const kindOrder: Record<PendingReview['kind'], number> = { manager: 0, fund: 1, classification: 2, style_label: 3, tag: 4 }
+    return Array.from(groups.values()).map((group) => ({
+      ...group,
+      items: group.items.sort((left, right) => kindOrder[left.kind] - kindOrder[right.kind] || right.confidence - left.confidence),
+    }))
+  }, [pendingReviews])
 
   const loadMemos = useCallback(async () => {
     setLoading(true)
@@ -346,26 +364,29 @@ export default function ResearchLibraryClient() {
       <section aria-labelledby="review-heading" className="border-t border-[#dce1dc] pt-5">
         <div className="flex items-center justify-between gap-4 pb-3">
           <div><h2 id="review-heading" className="text-lg font-bold">待确认</h2><p className="mt-1 text-xs text-[#748078]">确认经理后，会自动关联 Tushare 已核验的任期基金。</p></div>
-          <span className="text-xs text-[#748078]">{pendingReviews.length} 项</span>
+          <span className="text-xs text-[#748078]">{reviewGroups.length} 份纪要 · {pendingReviews.length} 项</span>
         </div>
-        {pendingReviews.length ? (
-          <div className="divide-y divide-[#e3e8e4] border-y border-[#dbe1dc] bg-white">
-            {pendingReviews.map((review) => (
-              <article key={`${review.report_id}-${review.id}`} className="grid gap-4 px-5 py-4 md:grid-cols-[9rem_minmax(0,1fr)_auto] md:items-center">
-                <div>
-                  <div className="text-[11px] text-[#78837d]">{reviewKind(review.kind)}</div>
-                  <strong className="mt-1 block text-sm">{review.value}</strong>
-                  <span className="mt-1 block text-[11px] text-[#78837d]">置信度 {Math.round(review.confidence * 100)}%</span>
+        {reviewGroups.length ? (
+          <div className="space-y-3">
+            {reviewGroups.map((group) => (
+              <details key={group.reportId} className="group border border-[#dbe1dc] bg-white">
+                <summary className="flex cursor-pointer list-none items-center justify-between gap-4 px-5 py-4">
+                  <div className="min-w-0"><strong className="block truncate text-sm text-[#26362f]">{group.title}</strong><span className="mt-1 block truncate text-xs text-[#78837d]">{group.relativePath}</span></div>
+                  <div className="flex shrink-0 items-center gap-3"><span className="text-xs text-[#748078]">{group.items.length} 项</span><ChevronRight className="h-4 w-4 text-[#748078] transition-transform group-open:rotate-90" /></div>
+                </summary>
+                <div className="divide-y divide-[#e8ece9] border-t border-[#e3e8e4]">
+                  {group.items.map((review) => (
+                    <article key={`${review.report_id}-${review.id}`} className="grid gap-4 px-5 py-4 md:grid-cols-[9rem_minmax(0,1fr)_auto] md:items-center">
+                      <div><div className="text-[11px] text-[#78837d]">{reviewKind(review.kind)}</div><strong className="mt-1 block text-sm">{review.value}</strong><span className="mt-1 block text-[11px] text-[#78837d]">置信度 {Math.round(review.confidence * 100)}%</span></div>
+                      <blockquote className="min-w-0 border-l-2 border-[#d7b46a] pl-3 text-xs leading-6 text-[#68736d]">来源原文：{review.source_ref.excerpt}</blockquote>
+                      <div className="flex gap-2">
+                        <button type="button" aria-label={`确认${review.value}`} onClick={() => void decideReview(review, 'confirmed')} disabled={reviewingId === review.id} className="inline-flex h-9 items-center gap-1.5 rounded-md bg-[#e4efe9] px-3 text-xs font-bold text-[#245d49] hover:bg-[#d8e8df] disabled:opacity-50"><Check className="h-4 w-4" />确认</button>
+                        <button type="button" aria-label={`拒绝${review.value}`} onClick={() => void decideReview(review, 'rejected')} disabled={reviewingId === review.id} className="inline-flex h-9 items-center gap-1.5 rounded-md border border-[#d6c9c5] px-3 text-xs font-bold text-[#8b4c43] hover:bg-[#faf1ef] disabled:opacity-50"><X className="h-4 w-4" />拒绝</button>
+                      </div>
+                    </article>
+                  ))}
                 </div>
-                <div className="min-w-0">
-                  <div className="truncate text-xs font-bold text-[#435149]">{review.report_title} · {review.source_ref.relative_path}</div>
-                  <blockquote className="mt-2 border-l-2 border-[#d7b46a] pl-3 text-xs leading-6 text-[#68736d]">来源原文：{review.source_ref.excerpt}</blockquote>
-                </div>
-                <div className="flex gap-2">
-                  <button type="button" aria-label={`确认${review.value}`} onClick={() => void decideReview(review, 'confirmed')} disabled={reviewingId === review.id} className="inline-flex h-9 items-center gap-1.5 rounded-md bg-[#e4efe9] px-3 text-xs font-bold text-[#245d49] hover:bg-[#d8e8df] disabled:opacity-50"><Check className="h-4 w-4" />确认</button>
-                  <button type="button" aria-label={`拒绝${review.value}`} onClick={() => void decideReview(review, 'rejected')} disabled={reviewingId === review.id} className="inline-flex h-9 items-center gap-1.5 rounded-md border border-[#d6c9c5] px-3 text-xs font-bold text-[#8b4c43] hover:bg-[#faf1ef] disabled:opacity-50"><X className="h-4 w-4" />拒绝</button>
-                </div>
-              </article>
+              </details>
             ))}
           </div>
         ) : (

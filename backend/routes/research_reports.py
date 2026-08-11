@@ -42,66 +42,29 @@ async def list_reports(
     sort_order: str = Query("desc"),
 ):
     """查询调研报告列表"""
-    from service_registry import get_db
-    db = get_db()
-
-    if db is None:
-        return {"total": 0, "page": page, "page_size": page_size, "data": []}
+    from repositories.local_research_folder_repo import PostgresLocalResearchFolderRepo
 
     try:
-        query = {}
-        if manager_id:
-            query["manager_id"] = manager_id
-        if fund_id:
-            query["fund_ids"] = fund_id
-        if keyword:
-            query["$or"] = [
-                {"title": {"$regex": keyword, "$options": "i"}},
-                {"summary": {"$regex": keyword, "$options": "i"}},
-                {"content": {"$regex": keyword, "$options": "i"}},
-            ]
-        if source:
-            query["source"] = {"$regex": source, "$options": "i"}
-        if tags:
-            tag_list = [t.strip() for t in tags.split(",")]
-            query["tags"] = {"$in": tag_list}
-        if start_date or end_date:
-            date_filter = {}
-            if start_date:
-                date_filter["$gte"] = start_date
-            if end_date:
-                date_filter["$lte"] = end_date
-            query["report_date"] = date_filter
-
-        sort_dir = -1 if sort_order == "desc" else 1
-        cursor = db.research_reports.find(query).sort(sort_by, sort_dir).skip((page-1)*page_size).limit(page_size)
-        total = db.research_reports.count_documents(query)
-
-        reports = []
-        for doc in cursor:
-            reports.append({
-                "id": str(doc.get("_id", "")),
-                "manager_id": doc.get("manager_id"),
-                "manager_name": doc.get("manager_name"),
-                "title": doc.get("title"),
-                "report_date": doc.get("report_date"),
-                "source": doc.get("source"),
-                "summary": doc.get("summary", "")[:300],
-                "tags": doc.get("tags", []),
-                "classifications": doc.get("classifications", []),
-                "style_labels": doc.get("style_labels", []),
-                "fund_ids": doc.get("fund_ids", []),
-                "key_points": doc.get("key_points", [])[:3],
-                "review_status": doc.get("review_status"),
-                "local_relative_path": doc.get("local_relative_path"),
-                "extraction_status": doc.get("extraction_status"),
-                "llm_extraction_status": doc.get("llm_extraction_status"),
-                "extraction_provider": doc.get("extraction_provider"),
-                "extraction_model": doc.get("extraction_model"),
-                "llm_extraction_error": doc.get("llm_extraction_error"),
-            })
-
-        return {"total": total, "page": page, "page_size": page_size, "data": reports}
+        result = PostgresLocalResearchFolderRepo().list_reports(
+            manager_id=manager_id,
+            fund_id=fund_id,
+            keyword=keyword,
+            tags=[item.strip() for item in tags.split(",") if item.strip()] if tags else None,
+            source=source,
+            start_date=start_date,
+            end_date=end_date,
+            page=page,
+            page_size=page_size,
+            sort_by=sort_by,
+            sort_order=sort_order,
+        )
+        reports = [{
+            **doc,
+            "summary": str(doc.get("summary") or "")[:300],
+            "key_points": (doc.get("key_points") or [])[:3],
+            "content": None,
+        } for doc in result["reports"]]
+        return {"total": result["total"], "page": page, "page_size": page_size, "data": reports}
     except Exception as e:
         logger.error(f"List reports error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -185,44 +148,13 @@ async def create_report(payload: ResearchReportCreate = Body(...)):
 @router.get("/{report_id}")
 async def get_report(report_id: str):
     """获取报告详情"""
-    from bson import ObjectId
-    from service_registry import get_db
-    db = get_db()
-
-    if db is None:
-        raise HTTPException(status_code=503, detail="数据库不可用")
+    from repositories.local_research_folder_repo import PostgresLocalResearchFolderRepo
 
     try:
-        doc = db.research_reports.find_one({"_id": ObjectId(report_id)})
+        doc = PostgresLocalResearchFolderRepo().get_report(report_id)
         if not doc:
             raise HTTPException(status_code=404, detail="报告不存在")
-
-        return {
-            "id": str(doc["_id"]),
-            "manager_id": doc.get("manager_id"),
-            "manager_name": doc.get("manager_name"),
-            "title": doc.get("title"),
-            "report_date": doc.get("report_date"),
-            "source": doc.get("source"),
-            "content": doc.get("content"),
-            "summary": doc.get("summary"),
-            "tags": doc.get("tags", []),
-            "classifications": doc.get("classifications", []),
-            "style_labels": doc.get("style_labels", []),
-            "fund_ids": doc.get("fund_ids", []),
-            "key_points": doc.get("key_points", []),
-            "review_status": doc.get("review_status"),
-            "review_proposals": doc.get("review_proposals", []),
-            "local_relative_path": doc.get("local_relative_path"),
-            "local_source_path": doc.get("local_source_path"),
-            "source_hash": doc.get("source_hash"),
-            "extraction_status": doc.get("extraction_status"),
-            "llm_extraction_status": doc.get("llm_extraction_status"),
-            "extraction_provider": doc.get("extraction_provider"),
-            "extraction_model": doc.get("extraction_model"),
-            "llm_extraction_error": doc.get("llm_extraction_error"),
-            "created_at": doc.get("created_at"),
-        }
+        return doc
     except HTTPException:
         raise
     except Exception as e:

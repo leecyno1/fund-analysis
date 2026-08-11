@@ -332,6 +332,63 @@ class PostgresLocalResearchFolderRepo:
             row = conn.execute(text("SELECT * FROM research_reports WHERE id = CAST(:id AS UUID)"), {"id": report_id}).fetchone()
         return self._row(row)
 
+    def list_reports(
+        self,
+        manager_id: Optional[str] = None,
+        fund_id: Optional[str] = None,
+        keyword: Optional[str] = None,
+        tags: Optional[List[str]] = None,
+        source: Optional[str] = None,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        page: int = 1,
+        page_size: int = 20,
+        sort_by: str = "report_date",
+        sort_order: str = "desc",
+    ) -> Dict[str, Any]:
+        from sqlalchemy import text
+
+        where = ["1=1"]
+        params: Dict[str, Any] = {}
+        if manager_id:
+            where.append("(manager_id = :manager_id OR manager_name = :manager_id)")
+            params["manager_id"] = manager_id
+        if fund_id:
+            where.append(":fund_id = ANY(COALESCE(fund_ids, ARRAY[]::TEXT[]))")
+            params["fund_id"] = fund_id
+        if keyword:
+            where.append("(title ILIKE :keyword OR summary ILIKE :keyword OR content ILIKE :keyword)")
+            params["keyword"] = f"%{keyword}%"
+        if tags:
+            where.append("COALESCE(research_reports.tags, ARRAY[]::TEXT[]) && :tags")
+            params["tags"] = tags
+        if source:
+            where.append("source ILIKE :source")
+            params["source"] = f"%{source}%"
+        if start_date:
+            where.append("report_date >= CAST(:start_date AS DATE)")
+            params["start_date"] = start_date
+        if end_date:
+            where.append("report_date <= CAST(:end_date AS DATE)")
+            params["end_date"] = end_date
+
+        safe_sort = sort_by if sort_by in {"report_date", "created_at", "updated_at", "title"} else "report_date"
+        direction = "ASC" if str(sort_order).lower() == "asc" else "DESC"
+        where_sql = " AND ".join(where)
+        params.update({
+            "limit": max(1, min(int(page_size), 50)),
+            "offset": max(0, int(page) - 1) * max(1, min(int(page_size), 50)),
+        })
+        with self.engine.connect() as conn:
+            total = int(conn.execute(text(f"SELECT COUNT(*) FROM research_reports WHERE {where_sql}"), params).scalar() or 0)
+            rows = conn.execute(text(f"""
+                SELECT * FROM research_reports
+                WHERE {where_sql}
+                ORDER BY {safe_sort} {direction} NULLS LAST, updated_at DESC
+                LIMIT :limit OFFSET :offset
+            """), params).fetchall()
+        return {"total": total, "reports": [self._row(row) or {} for row in rows]}
+
     def list_reports_for_fund(self, wind_code: str) -> List[Dict[str, Any]]:
         from sqlalchemy import text
 
