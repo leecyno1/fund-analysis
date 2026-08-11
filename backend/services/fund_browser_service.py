@@ -67,12 +67,19 @@ class FundBrowserService:
                 if manager_id in manager_map
             ]
             try:
+                classification_context = classification_repo.get_classification_context(code)
+                quality = scoring_service.data_quality_service.evaluate_from_inputs(
+                    row,
+                    profile,
+                    panels.get(code, []),
+                    classification_context,
+                )
                 professional_scoring = scoring_service.score_from_inputs(
                     row,
                     profile,
                     panels.get(code, []),
-                    scoring_service.data_quality_service.evaluate_fund(code),
-                    classification_repo.get_classification_context(code),
+                    quality,
+                    classification_context,
                 )
             except Exception:
                 professional_scoring = None

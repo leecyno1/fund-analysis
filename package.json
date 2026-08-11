@@ -15,6 +15,7 @@
     "research:real-data-report": "node scripts/fund_research_real_data_report.mjs",
     "funds:update-universe": "bash scripts/update_fund_universe.sh",
     "funds:update-ranking-metrics": "bash scripts/update_fund_ranking_metrics.sh",
+    "funds:sync-manager-tenure": "python backend/scripts/sync_fund_manager_tenure.py",
     "funds:backfill-peer-evaluation": "bash scripts/update_fund_ranking_metrics.sh --peer-evaluation-coverage",
     "funds:preview-classification": "bash scripts/update_fund_classification.sh",
     "funds:sync-classification": "bash scripts/update_fund_classification.sh --apply"

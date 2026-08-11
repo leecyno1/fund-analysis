@@ -335,15 +335,32 @@ def main() -> int:
             "基金经理：赵六\n代表基金：000002.OF\n基金分类：主动权益",
             encoding="utf-8",
         )
-        fallback_service = LocalResearchFolderService(
-            repo=fallback_repo,
-            metadata_extractor=lambda _content, _filename: {
+        extractor_ready = {"value": False}
+
+        def recovering_extractor(_content, _filename):
+            if extractor_ready["value"]:
+                return {
+                    "status": "complete",
+                    "provider": "fake",
+                    "model": "fake-model",
+                    "proposals": [{
+                        "kind": "style_label",
+                        "value": "价值",
+                        "confidence": 0.9,
+                        "excerpt": "基金分类：主动权益",
+                    }],
+                }
+            return {
                 "status": "failed",
                 "provider": "siliconflow",
                 "model": "deepseek-ai/DeepSeek-V4-Flash",
                 "proposals": [],
                 "error": "模型服务认证失败",
-            },
+            }
+
+        fallback_service = LocalResearchFolderService(
+            repo=fallback_repo,
+            metadata_extractor=recovering_extractor,
         )
         folder = fallback_service.add_folder(str(root))
         fallback_service.scan_folder(folder["id"])
@@ -356,6 +373,18 @@ def main() -> int:
             raise AssertionError(f"Rules must preserve fund identity when LLM is unavailable: {report}")
         if report.get("llm_extraction_status") != "failed" or not report.get("llm_extraction_error"):
             raise AssertionError(f"LLM fallback status must be auditable: {report}")
+        extractor_ready["value"] = True
+        retry = fallback_service.scan_folder(folder["id"])
+        retried_report = next(iter(fallback_repo.reports.values()))
+        if retry.get("counts", {}).get("updated") != 1 or retried_report.get("llm_extraction_status") != "complete":
+            raise AssertionError(f"Unchanged memos must retry LLM extraction after configuration recovers: {retry}")
+        if not any(
+            item.get("kind") == "style_label"
+            and item.get("value") == "价值"
+            and item.get("extraction_source") == "llm"
+            for item in retried_report.get("review_proposals", [])
+        ):
+            raise AssertionError(f"Recovered LLM style evidence was not merged: {retried_report}")
 
     print("OK local research folders scan incrementally with auditable, reviewable extraction")
     return 0

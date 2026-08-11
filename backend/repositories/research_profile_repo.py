@@ -108,6 +108,58 @@ class ResearchProfileRepo:
             row = conn.execute(text(sql), {"wind_code": wind_code}).fetchone()
         return _row_to_dict(row) if row else None
 
+    def upsert_manager_tenure(
+        self,
+        wind_code: str,
+        manager_tenure_start: str,
+        primary_benchmark: str = "",
+        peer_group: str = "",
+        evidence: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """补充经理任期证据，同时保留人工或纪要生成的风格画像。"""
+        from sqlalchemy import text
+        from database import init_database
+
+        init_database()
+        sql = """
+            INSERT INTO fund_research_profiles (
+                wind_code, primary_benchmark, peer_group, style_label, strategy_tags,
+                manager_tenure_start, data_quality_notes, evidence, updated_by, updated_at
+            ) VALUES (
+                :wind_code, :primary_benchmark, :peer_group, '', '{}'::text[],
+                :manager_tenure_start, :data_quality_notes, CAST(:evidence AS JSONB),
+                'manager-tenure-sync', NOW()
+            )
+            ON CONFLICT (wind_code) DO UPDATE SET
+                primary_benchmark = CASE
+                    WHEN COALESCE(fund_research_profiles.primary_benchmark, '') = ''
+                    THEN EXCLUDED.primary_benchmark ELSE fund_research_profiles.primary_benchmark END,
+                peer_group = CASE
+                    WHEN COALESCE(fund_research_profiles.peer_group, '') = ''
+                    THEN EXCLUDED.peer_group ELSE fund_research_profiles.peer_group END,
+                manager_tenure_start = EXCLUDED.manager_tenure_start,
+                data_quality_notes = COALESCE(
+                    fund_research_profiles.data_quality_notes,
+                    EXCLUDED.data_quality_notes
+                ),
+                evidence = COALESCE(fund_research_profiles.evidence, '{}'::jsonb) || EXCLUDED.evidence,
+                updated_by = CASE
+                    WHEN COALESCE(fund_research_profiles.updated_by, '') IN ('', 'manager-tenure-sync')
+                    THEN 'manager-tenure-sync' ELSE fund_research_profiles.updated_by END,
+                updated_at = NOW()
+            RETURNING *
+        """
+        with self.engine.begin() as conn:
+            row = conn.execute(text(sql), {
+                "wind_code": wind_code,
+                "primary_benchmark": primary_benchmark,
+                "peer_group": peer_group,
+                "manager_tenure_start": manager_tenure_start,
+                "data_quality_notes": "经理任期来自 Tushare fund_manager 现任团队记录。",
+                "evidence": _json(evidence),
+            }).fetchone()
+        return _row_to_dict(row)
+
     def delete_projected_profile(self, wind_code: str, updated_by: str) -> bool:
         """Delete only a profile owned by the named projection Module."""
         from sqlalchemy import text
@@ -125,6 +177,29 @@ class ResearchProfileRepo:
             conn.commit()
         return bool(result.rowcount)
 
+    def clear_projected_style(self, wind_code: str, updated_by: str) -> bool:
+        """撤销纪要风格时保留已同步的经理任期证据。"""
+        from sqlalchemy import text
+
+        sql = """
+            UPDATE fund_research_profiles
+            SET style_label = '',
+                strategy_tags = '{}'::text[],
+                evidence = (COALESCE(evidence, '{}'::jsonb) - 'research_memos' - 'primary_style')
+                    || '{"source":"manager-tenure-sync"}'::jsonb,
+                updated_by = 'manager-tenure-sync',
+                updated_at = NOW()
+            WHERE wind_code = :wind_code
+              AND updated_by = :updated_by
+              AND manager_tenure_start IS NOT NULL
+        """
+        with self.engine.begin() as conn:
+            result = conn.execute(text(sql), {
+                "wind_code": wind_code,
+                "updated_by": updated_by,
+            })
+        return bool(result.rowcount)
+
     def list_profiles(self, wind_codes: List[str]) -> Dict[str, Dict[str, Any]]:
         from sqlalchemy import text
 
@@ -134,6 +209,50 @@ class ResearchProfileRepo:
         with self.engine.connect() as conn:
             rows = conn.execute(text(sql), {"wind_codes": wind_codes}).fetchall()
         return {row.wind_code: _row_to_dict(row) for row in rows}
+
+    def list_memo_style_suggestions(self, wind_codes: List[str]) -> Dict[str, List[Dict[str, Any]]]:
+        """读取 LLM 从纪要提取、但尚待人工确认的风格证据。"""
+        from sqlalchemy import text
+
+        normalized_codes = list(dict.fromkeys(str(code).strip().upper() for code in wind_codes if str(code).strip()))
+        if not normalized_codes:
+            return {}
+        sql = """
+            SELECT
+                fund_proposal->>'value' AS wind_code,
+                style_proposal->>'value' AS value,
+                MAX(COALESCE((style_proposal->>'confidence')::numeric, 0)) AS confidence,
+                BOOL_OR(style_proposal->>'review_status' = 'confirmed') AS confirmed,
+                COUNT(DISTINCT report.id)::int AS report_count,
+                ARRAY_AGG(DISTINCT report.title) AS report_titles
+            FROM research_reports report
+            CROSS JOIN LATERAL jsonb_array_elements(COALESCE(report.review_proposals, '[]')) fund_proposal
+            CROSS JOIN LATERAL jsonb_array_elements(COALESCE(report.review_proposals, '[]')) style_proposal
+            WHERE fund_proposal->>'kind' = 'fund'
+              AND fund_proposal->>'value' = ANY(:wind_codes)
+              AND COALESCE(fund_proposal->>'review_status', 'pending') <> 'rejected'
+              AND style_proposal->>'kind' = 'style_label'
+              AND COALESCE(style_proposal->>'review_status', 'pending') <> 'rejected'
+              AND (
+                style_proposal->>'review_status' = 'confirmed'
+                OR (
+                  style_proposal->>'extraction_source' = 'llm'
+                  AND COALESCE((style_proposal->>'confidence')::numeric, 0) >= 0.70
+                )
+              )
+            GROUP BY fund_proposal->>'value', style_proposal->>'value'
+            ORDER BY fund_proposal->>'value', confirmed DESC, confidence DESC, report_count DESC, value
+        """
+        with self.engine.connect() as conn:
+            rows = conn.execute(text(sql), {"wind_codes": normalized_codes}).fetchall()
+        result: Dict[str, List[Dict[str, Any]]] = {}
+        for row in rows:
+            item = _row_to_dict(row)
+            code = str(item.pop("wind_code"))
+            item["confidence"] = float(item.get("confidence") or 0)
+            item["status"] = "confirmed" if item.pop("confirmed", False) else "llm_suggested"
+            result.setdefault(code, []).append(item)
+        return result
 
     def list_funds_by_peer_group(self, peer_group: str, limit: int = 50) -> List[Dict[str, Any]]:
         """从全库返回已归入指定同类组的基金，并兼容尚未建立画像的基础类别。"""

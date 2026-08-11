@@ -89,7 +89,7 @@ class FundRecommendationService:
         codes = [str(row.get("wind_code") or "").strip() for row in exact_rows]
         codes = [code for code in codes if code]
         panels = self.metric_repo.get_latest_panels("fund", codes)
-        profiles = self.profile_repo.list_profiles(codes)
+        profiles = self._profiles_with_style_suggestions(codes)
 
         eligible: List[Dict[str, Any]] = []
         excluded_reason_counts: Dict[str, int] = {}
@@ -162,7 +162,7 @@ class FundRecommendationService:
 
         normalized_codes = list(dict.fromkeys(code for code in all_codes if code))
         panels = self.metric_repo.get_latest_panels("fund", normalized_codes)
-        profiles = self.profile_repo.list_profiles(normalized_codes)
+        profiles = self._profiles_with_style_suggestions(normalized_codes)
         groups: List[Dict[str, Any]] = []
         for group in inventory:
             group_key = str(group.get("key") or group.get("name") or "").strip()
@@ -259,6 +259,17 @@ class FundRecommendationService:
             self._profile_repo = get_research_profile_repo()
         return self._profile_repo
 
+    def _profiles_with_style_suggestions(self, codes: List[str]) -> Dict[str, Dict[str, Any]]:
+        profiles = self.profile_repo.list_profiles(codes)
+        suggestions = self.profile_repo.list_memo_style_suggestions(codes)
+        return {
+            code: {
+                **(profiles.get(code) or {}),
+                "memo_style_suggestions": suggestions.get(code) or [],
+            }
+            for code in codes
+        }
+
     def _evaluate_candidate(
         self,
         row: Dict[str, Any],
@@ -287,12 +298,21 @@ class FundRecommendationService:
         if missing_required:
             return None, "required_category_evidence_missing"
 
-        flat_metrics = {
-            **metrics.get("latest", {}),
-            **metrics.get("1y", {}),
-            **metric_evidence,
-        }
-        score = self.scoring_service.score_peer_metrics(profile_key, flat_metrics)
+        classification_context = self._classification_context(row)
+        quality = self.scoring_service.data_quality_service.evaluate_from_inputs(
+            row,
+            profile,
+            panel,
+            classification_context,
+        )
+        professional_scoring = self.scoring_service.score_from_inputs(
+            row,
+            profile,
+            panel,
+            quality,
+            classification_context,
+        )
+        score = professional_scoring.get("overall_score")
         if score is None:
             return None, "category_score_unavailable"
 
@@ -309,20 +329,36 @@ class FundRecommendationService:
             "wind_code": code,
             "research_profile": research_profile,
             "rolling_metrics": self._rolling_metric_panel(panel),
-            "professional_scoring": {
-                "status": "ok",
-                "overall_score": round(float(score), 4),
-                "overall_grade": self._grade(float(score)),
-                "calculation_method": f"{self.METHODOLOGY_VERSION}:{profile_key}",
-                "fund_type_profile": profile_key,
-                "as_of_date": as_of_date,
-            },
+            "professional_scoring": professional_scoring,
             "peer_percentiles": {"metrics": {}},
             "_candidate_metrics": metric_evidence,
             "_candidate_profile_key": profile_key,
             "_candidate_data_as_of": as_of_date,
         }
         return candidate, ""
+
+    @staticmethod
+    def _classification_context(row: Dict[str, Any]) -> Dict[str, Any]:
+        benchmark_code = row.get("benchmark_code")
+        benchmark_name = row.get("benchmark_name")
+        return {
+            "status": "resolved",
+            "fund_code": row.get("wind_code"),
+            "canonical_code": row.get("canonical_code") or row.get("wind_code"),
+            "strategy_family_key": row.get("strategy_family_key"),
+            "peer_group_id": row.get("standardized_peer_group_id"),
+            "peer_group_key": row.get("standardized_peer_group_key"),
+            "peer_group_name": row.get("standardized_peer_group_name"),
+            "benchmark_mapping": {
+                "benchmark_code": benchmark_code,
+                "benchmark_name": benchmark_name,
+            },
+            "classification_evidence": [{
+                "source": "fund_classification_repo.list_recommendation_funds",
+                "field": "peer_group_members.peer_group_id",
+            }],
+            "missing_items": [],
+        }
 
     def _attach_score_percentiles(self, candidates: List[Dict[str, Any]]) -> None:
         ordered = sorted(
@@ -373,7 +409,10 @@ class FundRecommendationService:
 
         if not reasons:
             reasons.append("已满足当前类别的核心评价证据门槛。")
-        if not candidate.get("research_profile", {}).get("style_label"):
+        profile = candidate.get("research_profile", {})
+        if not profile.get("style_label") and profile.get("memo_style_suggestions"):
+            risks.append("风格标签来自 LLM 对调研纪要的证据提取，尚待人工确认。")
+        elif not profile.get("style_label"):
             risks.append("风格标签证据仍待补充，当前候选主要依据量化与分类证据。")
         return {
             "reasons": reasons[:4],
@@ -441,9 +480,14 @@ class FundRecommendationService:
         if not style:
             return True
         profile = candidate.get("research_profile") or {}
+        memo_styles = [
+            str(item.get("value") or "")
+            for item in (profile.get("memo_style_suggestions") or [])
+        ]
         style_text = " ".join([
             str(profile.get("style_label") or ""),
             " ".join(str(item) for item in (profile.get("strategy_tags") or [])),
+            " ".join(memo_styles),
             str(candidate.get("type") or ""),
         ])
         normalized_text = self._normalize_style(style_text)
@@ -464,6 +508,10 @@ class FundRecommendationService:
                 item.get("value")
                 for item in ((profile.get("evidence") or {}).get("research_memos") or [])
                 if item.get("kind") == "style_label" and item.get("review_status") == "confirmed"
+            )
+            candidates.extend(
+                item.get("value")
+                for item in (profile.get("memo_style_suggestions") or [])
             )
             candidates.extend(
                 value
@@ -536,16 +584,6 @@ class FundRecommendationService:
     def _candidate_sort_key(candidate: Dict[str, Any]) -> Tuple[float, str]:
         score = float(candidate.get("professional_scoring", {}).get("overall_score") or 0)
         return -score, str(candidate.get("wind_code") or "")
-
-    @staticmethod
-    def _grade(score: float) -> str:
-        if score >= 85:
-            return "A"
-        if score >= 70:
-            return "B"
-        if score >= 55:
-            return "C"
-        return "D"
 
     @staticmethod
     def _metric_reason(metrics: Dict[str, Any], key: str, label: str, unit: str) -> List[str]:

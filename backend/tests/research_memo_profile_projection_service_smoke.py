@@ -41,6 +41,15 @@ class MemoryProfileRepo:
         del self.profiles[wind_code]
         return True
 
+    def clear_projected_style(self, wind_code, updated_by):
+        profile = self.profiles.get(wind_code)
+        if not profile or profile.get("updated_by") != updated_by or not profile.get("manager_tenure_start"):
+            return False
+        profile["style_label"] = ""
+        profile["strategy_tags"] = []
+        profile["updated_by"] = "manager-tenure-sync"
+        return True
+
 
 class FakeClassificationAdapter:
     def get_classification_context(self, wind_code):
@@ -170,6 +179,35 @@ def main() -> int:
         raise AssertionError(f"Manual profiles must not be overwritten: {preserved}")
     if profile_repo.get_profile("000002.OF",).get("style_label") != "手工标签":
         raise AssertionError("Manual profile changed unexpectedly")
+
+    tenure_report = deepcopy(reports[0])
+    tenure_report["id"] = "tenure-report"
+    tenure_report["fund_ids"] = ["000003.OF"]
+    tenure_report["style_labels"] = ["成长"]
+    tenure_report["review_proposals"] = [
+        proposal("tenure-growth", "style_label", "成长", "confirmed", "成长风格")
+    ]
+    report_repo.reports[tenure_report["id"]] = tenure_report
+    profile_repo.profiles["000003.OF"] = {
+        "wind_code": "000003.OF",
+        "manager_tenure_start": "2024-06-01",
+        "updated_by": "manager-tenure-sync",
+    }
+    merged = service.project_report(tenure_report, ["000003.OF"])
+    merged_profile = profile_repo.get_profile("000003.OF")
+    if merged.get("projected_count") != 1 or merged_profile.get("style_label") != "成长":
+        raise AssertionError(f"Manager tenure profile must accept reviewed memo styles: {merged}")
+    if merged_profile.get("manager_tenure_start") != "2024-06-01":
+        raise AssertionError("Memo style projection must preserve manager tenure start")
+    tenure_report["style_labels"] = []
+    tenure_report["review_proposals"][0]["review_status"] = "rejected"
+    report_repo.reports[tenure_report["id"]] = tenure_report
+    cleared = service.project_report(tenure_report, ["000003.OF"])
+    retained_profile = profile_repo.get_profile("000003.OF")
+    if cleared.get("cleared_count") != 1 or not retained_profile:
+        raise AssertionError("Revoking memo styles must retain the manager tenure profile")
+    if retained_profile.get("style_label") or retained_profile.get("manager_tenure_start") != "2024-06-01":
+        raise AssertionError(retained_profile)
 
     print("OK reviewed memo evidence projects into fund profiles without overriding standardized classification")
     return 0

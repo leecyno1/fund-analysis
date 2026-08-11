@@ -20,6 +20,7 @@ from services.fund_nav_evidence_service import FundNavDataEnrichmentService
 from services.rolling_metric_service import RollingMetricService
 from repositories import (
     get_fund_repo, get_manager_repo, get_holding_repo, get_nav_repo, get_research_profile_repo,
+    get_fund_classification_repo,
 )
 from service_registry import get_strict_tushare_service
 
@@ -150,28 +151,23 @@ def _sync_fund_managers(data_svc: Any, wind_code: str) -> tuple[list[str], list[
 
 
 def _upsert_research_profile_from_sync(wind_code: str, fund_payload: dict, manager_tenure_start: Optional[str]) -> None:
+    if not manager_tenure_start:
+        return
     profile_repo = get_research_profile_repo()
-    existing = profile_repo.get_profile(wind_code) or {}
-    fund_type = fund_payload.get("type") or fund_payload.get("fund_type") or "未分类"
-    primary_benchmark = existing.get("primary_benchmark") or fund_payload.get("benchmark") or f"{fund_type}同类平均"
-    peer_group = existing.get("peer_group") or fund_type
-    style_label = existing.get("style_label") or fund_type
-    profile_repo.upsert_profile(
+    classification = get_fund_classification_repo().get_classification_context(wind_code) or {}
+    benchmark = classification.get("benchmark_mapping") or {}
+    profile_repo.upsert_manager_tenure(
         wind_code=wind_code,
-        primary_benchmark=primary_benchmark,
-        secondary_benchmark=existing.get("secondary_benchmark"),
-        peer_group=peer_group,
-        style_label=style_label,
-        strategy_tags=existing.get("strategy_tags") or [fund_type],
-        manager_tenure_start=manager_tenure_start or existing.get("manager_tenure_start"),
-        capacity_notes=existing.get("capacity_notes"),
-        data_quality_notes="真实同步自动维护：同类池、基准和现任经理任期起点用于基金研究，不替代正式买前复核。",
+        manager_tenure_start=manager_tenure_start,
+        primary_benchmark=str(benchmark.get("benchmark_code") or benchmark.get("benchmark_name") or ""),
+        peer_group=str(classification.get("peer_group_name") or classification.get("peer_group_key") or ""),
         evidence={
-            **(existing.get("evidence") or {}),
-            "manager_tenure_start_source": "tushare.fund_manager.current_team_latest_begin_date" if manager_tenure_start else "existing_or_unavailable",
-            "synced_at": datetime.now(UTC).isoformat(),
+            "manager_tenure": {
+                "source": "tushare.fund_manager",
+                "current_team_latest_begin_date": manager_tenure_start,
+                "synced_at": datetime.now(UTC).isoformat(),
+            }
         },
-        updated_by="data-sync",
     )
 
 

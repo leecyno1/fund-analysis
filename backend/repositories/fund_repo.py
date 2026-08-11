@@ -191,6 +191,39 @@ class FundRepo:
             logger.error(f"get_fund error: {e}")
             return None
 
+    def update_manager_assignments(
+        self,
+        wind_code: str,
+        manager_ids: List[str],
+        manager_sync: Dict[str, Any],
+    ) -> bool:
+        """只更新真实经理任职关系，不改写基金行情和分类事实。"""
+        try:
+            from sqlalchemy import text
+
+            with self.engine.begin() as conn:
+                result = conn.execute(text("""
+                    UPDATE funds
+                    SET manager_ids = :manager_ids,
+                        raw_data = COALESCE(raw_data, '{}'::jsonb)
+                            || jsonb_build_object('manager_sync', CAST(:manager_sync AS jsonb)),
+                        updated_at = NOW()
+                    WHERE wind_code = :wind_code
+                """), {
+                    "wind_code": wind_code,
+                    "manager_ids": list(dict.fromkeys(manager_ids)),
+                    "manager_sync": json.dumps(
+                        _clean_json_value(manager_sync),
+                        default=_json_serializer,
+                        ensure_ascii=False,
+                        allow_nan=False,
+                    ),
+                })
+            return bool(result.rowcount)
+        except Exception as e:
+            logger.error(f"update_manager_assignments error for {wind_code}: {e}")
+            return False
+
     def get_fund_by_identifier(self, identifier: str) -> Optional[Dict[str, Any]]:
         """按 UUID 或 wind_code 获取单个基金"""
         try:

@@ -68,7 +68,20 @@ export function sharpeMetric(fund: SimpleFund, window = '1y') {
 
 export function styleLabel(fund: SimpleFund) {
   const profile = asRecord(fund.researchProfile)
-  return textValue(profile.styleLabel, profile.style_label) || '风格待确认'
+  const suggestions = Array.isArray(profile.memoStyleSuggestions)
+    ? profile.memoStyleSuggestions
+    : Array.isArray(profile.memo_style_suggestions) ? profile.memo_style_suggestions : []
+  const firstSuggestion = suggestions.length ? asRecord(suggestions[0]) : {}
+  return textValue(profile.styleLabel, profile.style_label, firstSuggestion.value) || '风格待确认'
+}
+
+export function styleLabelStatus(fund: SimpleFund) {
+  const profile = asRecord(fund.researchProfile)
+  if (textValue(profile.styleLabel, profile.style_label)) return 'confirmed'
+  const suggestions = Array.isArray(profile.memoStyleSuggestions)
+    ? profile.memoStyleSuggestions
+    : Array.isArray(profile.memo_style_suggestions) ? profile.memo_style_suggestions : []
+  return suggestions.length ? 'llm_suggested' : 'unavailable'
 }
 
 const styleAliases: Record<string, string[]> = {
@@ -92,11 +105,16 @@ export function matchesStyleLabel(fund: SimpleFund, selectedStyle: string) {
   const target = normalizedStyleText(selectedStyle)
   const aliases = styleAliases[selectedStyle] || [selectedStyle]
   const profileTags = asRecord(fund.researchProfile).strategyTags
+  const profile = asRecord(fund.researchProfile)
+  const memoSuggestions = Array.isArray(profile.memoStyleSuggestions)
+    ? profile.memoStyleSuggestions
+    : Array.isArray(profile.memo_style_suggestions) ? profile.memo_style_suggestions : []
   const tags = [
     styleLabel(fund),
     peerGroup(fund),
     fund.type,
     ...(Array.isArray(profileTags) ? profileTags : []),
+    ...memoSuggestions.map((item) => textValue(asRecord(item).value)),
   ].map((value) => normalizedStyleText(String(value || ''))).join(' ')
 
   if (aliases.some((alias) => tags.includes(normalizedStyleText(alias)))) return true

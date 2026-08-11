@@ -1,17 +1,23 @@
 import os
 import sys
+import atexit
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from database import init_database
 from repositories.fund_repo import FundRepo
 from repositories.nav_repo import NavRepo
+from smoke_cleanup import cleanup_fund_codes
 
 
 def main() -> int:
     init_database()
     repo = FundRepo()
     wind_code = "FACT.MERGE.TEST"
+    nav_code = "BENCH.MERGE.TEST"
+    fixture_codes = [wind_code, nav_code]
+    cleanup_fund_codes(fixture_codes)
+    atexit.register(cleanup_fund_codes, fixture_codes)
 
     if not repo.upsert_fund(wind_code, {
         "name": "评价事实合并测试基金",
@@ -52,7 +58,6 @@ def main() -> int:
         raise AssertionError(f"Ranking sync provenance was not retained: {fund}")
 
     nav_repo = NavRepo()
-    nav_code = "BENCH.MERGE.TEST"
     nav_repo.upsert_nav_series(nav_code, [
         {"date": "2026-07-01", "nav": 1.0, "accum_nav": 1.0, "benchmark_nav": 4000.0},
         {"date": "2026-07-02", "nav": 1.01, "accum_nav": 1.01, "benchmark_nav": 4010.0},
@@ -65,6 +70,7 @@ def main() -> int:
     if [float(item["benchmark_nav"]) for item in persisted_nav] != [4000.0, 4010.0]:
         raise AssertionError(f"A later NAV sync erased real benchmark evidence: {persisted_nav}")
 
+    cleanup_fund_codes(fixture_codes)
     print("OK repositories merge evaluation facts without erasing source evidence")
     return 0
 

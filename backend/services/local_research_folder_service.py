@@ -417,7 +417,7 @@ class LocalResearchFolderService:
             return {"status": "failed", "provider": None, "model": None, "proposals": [], "error": str(exc)}
 
     def _enrich_existing_report(self, report_id: Optional[str], root: Path, path: Path) -> bool:
-        if not report_id or not self.manager_fund_resolver:
+        if not report_id:
             return False
         report = self.repo.get_report(report_id)
         if not report:
@@ -426,6 +426,12 @@ class LocalResearchFolderService:
         if not source_path.exists() or not source_path.is_relative_to(root):
             source_path = path
         report_date = self._report_date(source_path, source_path.stat().st_mtime)
+        extraction = None
+        if report.get("llm_extraction_status") != "complete":
+            content = str(report.get("content") or "")
+            if not content:
+                content = self._extract_text(source_path, source_path.read_bytes()).strip()
+            extraction = self._extract_metadata(content, source_path.name)
         proposals = [
             proposal
             for proposal in (report.get("review_proposals") or [])
@@ -442,16 +448,39 @@ class LocalResearchFolderService:
             root,
             source_path,
         )
-        if enriched == (report.get("review_proposals") or []) and report_date == str(report.get("report_date") or ""):
+        if extraction:
+            enriched = self._merge_proposals(
+                enriched,
+                extraction.get("proposals") or [],
+                root,
+                source_path,
+            )
+            enriched = self._merge_review_state(
+                {**report, "review_proposals": enriched},
+                report,
+            )["review_proposals"]
+        if (
+            enriched == (report.get("review_proposals") or [])
+            and report_date == str(report.get("report_date") or "")
+            and extraction is None
+        ):
             return False
-        self.repo.update_report(report_id, {
+        fields = {
             "report_date": report_date,
             "review_proposals": enriched,
             "review_status": "pending" if any(
                 proposal.get("review_status") == "pending" for proposal in enriched
             ) else "reviewed",
             "updated_at": self._now(),
-        })
+        }
+        if extraction:
+            fields.update({
+                "extraction_provider": extraction.get("provider") or report.get("extraction_provider") or "deterministic_rules",
+                "extraction_model": extraction.get("model"),
+                "llm_extraction_status": extraction.get("status") or "unavailable",
+                "llm_extraction_error": extraction.get("error"),
+            })
+        self.repo.update_report(report_id, fields)
         return True
 
     def _add_manager_fund_proposals(

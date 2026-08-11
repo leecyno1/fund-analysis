@@ -1,5 +1,6 @@
 import os
 import sys
+import atexit
 from datetime import date, timedelta
 from decimal import Decimal
 
@@ -9,6 +10,7 @@ from database import init_database
 from repositories import get_fund_repo, get_metric_snapshot_repo, get_nav_repo, get_research_profile_repo
 from services.data_quality_service import DataQualityService
 from services.manager_tenure_metric_service import ManagerTenureMetricService
+from smoke_cleanup import cleanup_fund_codes
 
 
 def _nav_series(start: date, days: int) -> list[dict]:
@@ -26,6 +28,8 @@ def main() -> int:
     init_database()
 
     fund_code = "TENURE.TEST"
+    cleanup_fund_codes([fund_code])
+    atexit.register(cleanup_fund_codes, [fund_code])
     fund_repo = get_fund_repo()
     nav_repo = get_nav_repo()
     profile_repo = get_research_profile_repo()
@@ -75,6 +79,7 @@ def main() -> int:
     if not quality.get("checks", {}).get("manager_tenure_start", {}).get("passed"):
         raise AssertionError(f"Expected manager tenure check to pass, got {quality}")
 
+    cleanup_fund_codes([fund_code])
     print("OK manager tenure metrics and data quality evaluation")
     return 0
 

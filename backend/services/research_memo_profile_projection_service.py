@@ -10,6 +10,7 @@ class ResearchMemoProfileProjectionService:
     """Build one fund profile from confirmed memo labels and standardized classification."""
 
     UPDATED_BY = "research_memo_profile_projection"
+    MERGEABLE_UPDATERS = {UPDATED_BY, "manager-tenure-sync"}
     PROFILE_KINDS = {"style_label", "classification", "tag"}
 
     def __init__(
@@ -46,6 +47,7 @@ class ResearchMemoProfileProjectionService:
             "funds": results,
             "projected_count": sum(item["status"] == "projected" for item in results),
             "deleted_count": sum(item["status"] == "deleted" for item in results),
+            "cleared_count": sum(item["status"] == "cleared" for item in results),
             "skipped_count": sum(item["status"] == "skipped" for item in results),
         }
 
@@ -59,7 +61,7 @@ class ResearchMemoProfileProjectionService:
         profile_wind_code = str(context.get("canonical_code") or wind_code).strip().upper()
         profile_repo = self._get_profile_repo()
         existing = profile_repo.get_profile(profile_wind_code)
-        if existing and existing.get("updated_by") != self.UPDATED_BY:
+        if existing and existing.get("updated_by") not in self.MERGEABLE_UPDATERS:
             return {
                 "wind_code": profile_wind_code,
                 "source_wind_code": wind_code,
@@ -77,6 +79,12 @@ class ResearchMemoProfileProjectionService:
         confirmed = self._confirmed_profile_items(reports)
         style_labels = [item["value"] for item in confirmed if item["kind"] == "style_label"]
         if not style_labels:
+            if (
+                existing
+                and existing.get("manager_tenure_start")
+                and profile_repo.clear_projected_style(profile_wind_code, self.UPDATED_BY)
+            ):
+                return {"wind_code": profile_wind_code, "status": "cleared", "reason": "no_confirmed_style_label"}
             if existing and profile_repo.delete_projected_profile(profile_wind_code, self.UPDATED_BY):
                 return {"wind_code": profile_wind_code, "status": "deleted", "reason": "no_confirmed_style_label"}
             return {"wind_code": profile_wind_code, "status": "skipped", "reason": "no_confirmed_style_label"}
@@ -111,6 +119,7 @@ class ResearchMemoProfileProjectionService:
         tags = self._unique_values(confirmed, "tag")
         strategy_tags = list(dict.fromkeys([*ranked_styles, *classifications, *tags]))
         evidence = {
+            **((existing or {}).get("evidence") or {}),
             "source": self.UPDATED_BY,
             "fund_entity": {
                 "canonical_code": profile_wind_code,
@@ -136,6 +145,8 @@ class ResearchMemoProfileProjectionService:
             peer_group=peer_group,
             style_label=primary_style,
             strategy_tags=strategy_tags,
+            manager_tenure_start=existing.get("manager_tenure_start") if existing else None,
+            capacity_notes=existing.get("capacity_notes") if existing else None,
             data_quality_notes="风格标签来自人工确认的调研纪要；同类组和基准来自基金分类目录",
             evidence=evidence,
             updated_by=self.UPDATED_BY,

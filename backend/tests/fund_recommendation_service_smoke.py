@@ -55,6 +55,11 @@ class FakeProfileRepo:
     def list_profiles(self, wind_codes):
         return {code: dict(self.profiles.get(code, {})) for code in wind_codes}
 
+    def list_memo_style_suggestions(self, wind_codes):
+        return {
+            wind_codes[0]: [{"value": "红利", "confidence": 0.91, "status": "llm_suggested"}]
+        } if wind_codes else {}
+
 
 def _panel(index):
     values = {
@@ -144,6 +149,8 @@ def main() -> int:
         raise AssertionError(f"Style options must only come from evidence-eligible funds: {result}")
     if "主动权益" in (result.get("available_styles") or []):
         raise AssertionError(f"Fund classifications must not leak into style options: {result}")
+    if "红利" not in (result.get("available_styles") or []):
+        raise AssertionError(f"LLM memo style suggestions must become transparent style filters: {result}")
     if any(item.get("research_profile", {}).get("peer_group") != "指数-沪深300" for item in candidates):
         raise AssertionError(f"Cross-category fund leaked into candidate group: {result}")
     if any("成长" not in " ".join(item.get("research_profile", {}).get("strategy_tags") or []) for item in candidates):

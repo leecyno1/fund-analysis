@@ -15,6 +15,7 @@ import {
   recommendationEvidence,
   returnMetric,
   styleLabel,
+  styleLabelStatus,
   type SimpleFund,
 } from '@/lib/simple-fund-view'
 
@@ -270,7 +271,7 @@ export default function RecommendationClient({ initialFunds, initialCategories, 
                     </div>
                     <div className="mt-3 flex flex-wrap gap-2 text-xs">
                       <span className="rounded-sm bg-[#e9f0ec] px-2 py-1 text-[#315e4d]">{peerGroup(fund)}</span>
-                      <span className="rounded-sm bg-[#f0eee8] px-2 py-1 text-[#685f49]">{styleLabel(fund)}</span>
+                      <span className="rounded-sm bg-[#f0eee8] px-2 py-1 text-[#685f49]">{styleLabel(fund)}{styleLabelStatus(fund) === 'llm_suggested' ? ' · 纪要推断' : ''}</span>
                     </div>
                     <div className="mt-4 grid grid-cols-3 gap-3 border-y border-[#edf0ed] py-3 text-xs">
                       <div><span className="block text-[#7a8580]">近 1 年</span><strong className="mt-1 block">{formatPercent(annualReturn)}</strong></div>

@@ -32,8 +32,25 @@ class DataQualityService:
             classification_context = self._get_classification_adapter().get_classification_context(wind_code) or {}
         except Exception:
             classification_context = {}
-        strategy_family_key = classification_context.get("strategy_family_key")
+        return self.evaluate_from_inputs(
+            fund,
+            profile,
+            metric_panel,
+            classification_context,
+            nav_series=nav_series,
+        )
 
+    def evaluate_from_inputs(
+        self,
+        fund: Dict[str, Any],
+        profile: Dict[str, Any],
+        metric_panel: List[Dict[str, Any]],
+        classification_context: Dict[str, Any],
+        nav_series: Optional[List[Dict[str, Any]]] = None,
+    ) -> Dict[str, Any]:
+        """对已批量读取的事实评分，避免基金列表和推荐逐只重复查库。"""
+        wind_code = fund.get("wind_code") or fund.get("ts_code") or fund.get("id") or "unknown"
+        strategy_family_key = classification_context.get("strategy_family_key")
         checks = {
             "fund_base": self._check_fund_base(fund),
             "research_profile": self._check_research_context(profile, classification_context),
@@ -41,7 +58,11 @@ class DataQualityService:
                 profile.get("manager_tenure_start"),
                 strategy_family_key,
             ),
-            "nav_coverage": self._check_nav_coverage(nav_series),
+            "nav_coverage": (
+                self._check_nav_coverage(nav_series)
+                if nav_series is not None
+                else self._check_nav_coverage_from_metrics(metric_panel)
+            ),
             "metric_snapshots": self._check_metric_snapshots(metric_panel),
         }
         weights = {
@@ -176,6 +197,23 @@ class DataQualityService:
             "message": "指标快照已沉淀" if passed else "缺少指标快照",
             "metric_count": len(metric_panel),
             "windows": windows,
+        }
+
+    def _check_nav_coverage_from_metrics(self, metric_panel: List[Dict[str, Any]]) -> Dict[str, Any]:
+        observations = 0
+        for item in metric_panel:
+            if item.get("metric_window") != "1y" or item.get("metric_name") != "observations":
+                continue
+            try:
+                observations = max(observations, int(float(item.get("metric_value") or 0)))
+            except (TypeError, ValueError):
+                continue
+        passed = observations >= 252
+        return {
+            "passed": passed,
+            "message": "1 年指标样本证明净值覆盖满足评价" if passed else "缺少足够的 1 年净值观察",
+            "observations": observations,
+            "source": "metric_snapshots.1y.observations",
         }
 
     def _summary(self, status: str, score: int, issues: List[str]) -> str:
