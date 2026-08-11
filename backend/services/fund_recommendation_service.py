@@ -63,6 +63,29 @@ class FundRecommendationService:
             limit=self.PEER_UNIVERSE_LIMIT,
         )
         exact_rows = [row for row in rows if self._belongs_to_group(row, normalized_group)]
+        minimum_peer_count = self._minimum_peer_count(exact_rows)
+        if minimum_peer_count and len(exact_rows) < minimum_peer_count:
+            return {
+                "peer_group": normalized_group,
+                "style": normalized_style or None,
+                "peer_universe_count": len(exact_rows),
+                "minimum_peer_count": minimum_peer_count,
+                "evidence_eligible_count": 0,
+                "style_matched_count": 0,
+                "excluded_count": len(exact_rows),
+                "excluded_reason_counts": {"peer_sample_insufficient": len(exact_rows)},
+                "available_styles": [],
+                "limit": max(1, min(int(limit), self.MAX_CANDIDATES)),
+                "returned": 0,
+                "candidates": [],
+                "methodology_version": self.METHODOLOGY_VERSION,
+                "source": "full_peer_group_category_evaluation",
+                "scope": {
+                    "fund_classification": "required",
+                    "category_evaluation": "required",
+                    "explanatory_attribution": "optional",
+                },
+            }
         codes = [str(row.get("wind_code") or "").strip() for row in exact_rows]
         codes = [code for code in codes if code]
         panels = self.metric_repo.get_latest_panels("fund", codes)
@@ -120,6 +143,96 @@ class FundRecommendationService:
                 "category_evaluation": "required",
                 "explanatory_attribution": "optional",
             },
+        }
+
+    def build_coverage_report(self, limit: int = 100) -> Dict[str, Any]:
+        """按标准同类组检查分类、评价指标、风格标签和推荐准备度。"""
+        inventory = self.classification_repo.list_peer_group_coverage_inventory(limit=limit)
+        group_rows: Dict[str, List[Dict[str, Any]]] = {}
+        all_codes: List[str] = []
+        for group in inventory:
+            group_key = str(group.get("key") or group.get("name") or "").strip()
+            rows = self.classification_repo.list_recommendation_funds(
+                group_key,
+                limit=self.PEER_UNIVERSE_LIMIT,
+            ) if group_key else []
+            exact_rows = [row for row in rows if self._belongs_to_group(row, group_key)]
+            group_rows[group_key] = exact_rows
+            all_codes.extend(str(row.get("wind_code") or "").strip() for row in exact_rows)
+
+        normalized_codes = list(dict.fromkeys(code for code in all_codes if code))
+        panels = self.metric_repo.get_latest_panels("fund", normalized_codes)
+        profiles = self.profile_repo.list_profiles(normalized_codes)
+        groups: List[Dict[str, Any]] = []
+        for group in inventory:
+            group_key = str(group.get("key") or group.get("name") or "").strip()
+            rows = group_rows.get(group_key) or []
+            minimum_peer_count = max(1, int(group.get("minimum_peer_count") or self._minimum_peer_count(rows) or 1))
+            method_ready_count = 0
+            metric_ready_count = 0
+            style_ready_count = 0
+            reason_counts: Dict[str, int] = {}
+            suggested_sync_codes: List[str] = []
+
+            for row in rows:
+                code = str(row.get("wind_code") or "").strip()
+                profile = profiles.get(code) or {}
+                profile_key = self._evaluation_profile_key(row)
+                metric_configs = self.scoring_service.methodology.peer_metric_configs(profile_key) if profile_key else []
+                if profile_key and metric_configs:
+                    method_ready_count += 1
+                candidate, reason = self._evaluate_candidate(row, profile, panels.get(code) or [])
+                if candidate is None:
+                    reason_counts[reason] = reason_counts.get(reason, 0) + 1
+                    if reason == "required_category_evidence_missing" and code:
+                        suggested_sync_codes.append(code)
+                    continue
+                metric_ready_count += 1
+                if self._available_styles({code: profile}):
+                    style_ready_count += 1
+
+            database_fund_count = len(rows)
+            sample_ready = database_fund_count >= minimum_peer_count
+            recommendation_ready_count = metric_ready_count if sample_ready else 0
+            if not sample_ready and database_fund_count:
+                reason_counts["peer_sample_insufficient"] = database_fund_count
+            status = "ready" if recommendation_ready_count > 0 else "partial" if database_fund_count > 0 else "blocked"
+            groups.append({
+                "id": group.get("id"),
+                "key": group_key,
+                "name": group.get("name") or group_key,
+                "status": status,
+                "minimum_peer_count": minimum_peer_count,
+                "classified_count": int(group.get("classified_count") or 0),
+                "database_fund_count": database_fund_count,
+                "evaluation_method_ready_count": method_ready_count,
+                "metric_ready_count": metric_ready_count,
+                "style_ready_count": style_ready_count,
+                "recommendation_ready_count": recommendation_ready_count,
+                "missing_reason_counts": reason_counts,
+                "suggested_sync_codes": suggested_sync_codes[:10],
+            })
+
+        summary = {
+            "category_count": len(groups),
+            "ready_category_count": sum(1 for group in groups if group["status"] == "ready"),
+            "classified_count": sum(group["classified_count"] for group in groups),
+            "database_fund_count": sum(group["database_fund_count"] for group in groups),
+            "evaluation_method_ready_count": sum(group["evaluation_method_ready_count"] for group in groups),
+            "metric_ready_count": sum(group["metric_ready_count"] for group in groups),
+            "style_ready_count": sum(group["style_ready_count"] for group in groups),
+            "recommendation_ready_count": sum(group["recommendation_ready_count"] for group in groups),
+        }
+        return {
+            "summary": summary,
+            "groups": groups,
+            "metric_backfill": {
+                "command": "npm run funds:backfill-peer-evaluation",
+                "source": "tushare.fund_nav",
+                "mock_data_allowed": False,
+            },
+            "methodology_version": self.METHODOLOGY_VERSION,
+            "source": "standardized_peer_group_coverage",
         }
 
     @property
@@ -308,6 +421,15 @@ class FundRecommendationService:
             str(row.get("standardized_peer_group_key") or "").strip(),
             str(row.get("standardized_peer_group_id") or "").strip(),
         }
+
+    @staticmethod
+    def _minimum_peer_count(rows: List[Dict[str, Any]]) -> int:
+        values = [
+            int(row.get("minimum_peer_count") or 0)
+            for row in rows
+            if str(row.get("minimum_peer_count") or "").isdigit()
+        ]
+        return max(values, default=0)
 
     @staticmethod
     def _evaluation_profile_key(row: Dict[str, Any]) -> str:

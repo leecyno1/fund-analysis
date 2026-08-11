@@ -644,6 +644,18 @@ async def get_recommendation_candidates(
         raise HTTPException(status_code=500, detail="基金候选组暂时不可用")
 
 
+@router.get("/recommendation-coverage")
+async def get_recommendation_coverage(limit: int = Query(100, ge=1, le=200)):
+    """返回每个标准同类组的分类、评价指标、风格和推荐覆盖。"""
+    from services.fund_recommendation_service import FundRecommendationService
+
+    try:
+        return _clean_nan(FundRecommendationService().build_coverage_report(limit=limit))
+    except Exception as exc:
+        logger.error(f"Get recommendation coverage error: {exc}")
+        raise HTTPException(status_code=500, detail="基金评价覆盖暂时不可用")
+
+
 @router.get("/peer-group-universe")
 async def get_peer_group_universe(
     peer_group: str = Query(..., min_length=1),

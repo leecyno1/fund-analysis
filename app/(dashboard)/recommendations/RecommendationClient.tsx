@@ -22,10 +22,41 @@ type Props = {
   initialFunds: CamelFund[]
   initialCategories: string[]
   universeTotal: number
+  initialCoverage: RecommendationCoverageReport
   initialError: string
 }
 
+export type RecommendationCoverageGroup = {
+  key: string
+  name: string
+  status: 'ready' | 'partial' | 'blocked'
+  minimumPeerCount: number
+  classifiedCount: number
+  databaseFundCount: number
+  evaluationMethodReadyCount: number
+  metricReadyCount: number
+  styleReadyCount: number
+  recommendationReadyCount: number
+  missingReasonCounts: Record<string, number>
+}
+
+export type RecommendationCoverageReport = {
+  summary: {
+    categoryCount: number
+    readyCategoryCount: number
+    classifiedCount: number
+    databaseFundCount: number
+    evaluationMethodReadyCount: number
+    metricReadyCount: number
+    styleReadyCount: number
+    recommendationReadyCount: number
+  } | null
+  groups: RecommendationCoverageGroup[]
+  backfillCommand: string
+}
+
 const exclusionReasonLabels: Record<string, string> = {
+  peer_sample_insufficient: '同类基金样本不足',
   evaluation_method_missing: '该类别尚未配置评价方法',
   required_category_evidence_missing: '缺少该类别要求的关键指标',
   category_score_unavailable: '类别评分暂时无法计算',
@@ -35,7 +66,7 @@ function exclusionReasonLabel(reason: string) {
   return exclusionReasonLabels[reason] || '基金分类或评价证据不完整'
 }
 
-export default function RecommendationClient({ initialFunds, initialCategories, universeTotal, initialError }: Props) {
+export default function RecommendationClient({ initialFunds, initialCategories, universeTotal, initialCoverage, initialError }: Props) {
   const universe = initialFunds as SimpleFund[]
   const categories = useMemo(() => initialCategories.length
     ? initialCategories
@@ -140,6 +171,35 @@ export default function RecommendationClient({ initialFunds, initialCategories, 
           </select>
         </label>
       </section>
+
+      {initialCoverage.groups.length ? (
+        <details className="border border-[#dbe1dc] bg-white">
+          <summary className="cursor-pointer list-none px-5 py-4 text-sm font-bold text-[#26362f]">
+            数据准备情况：{initialCoverage.summary?.readyCategoryCount || 0} / {initialCoverage.summary?.categoryCount || 0} 个类别可以生成候选
+          </summary>
+          <div className="border-t border-[#e5e9e6] px-5 py-4">
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[760px] text-left text-xs">
+                <thead className="text-[#748079]"><tr><th className="pb-3">基金类别</th><th className="pb-3">分类成员</th><th className="pb-3">数据库基金</th><th className="pb-3">评价方法</th><th className="pb-3">指标齐全</th><th className="pb-3">风格标签</th><th className="pb-3">可推荐</th></tr></thead>
+                <tbody className="divide-y divide-[#edf0ed]">
+                  {initialCoverage.groups.map((group) => (
+                    <tr key={group.key}>
+                      <td className="py-3 pr-4"><span className="font-bold text-[#33463d]">{group.name}</span><span className={`ml-2 rounded-sm px-1.5 py-0.5 text-[10px] ${group.status === 'ready' ? 'bg-[#e4f1ea] text-[#21664d]' : group.status === 'partial' ? 'bg-[#fff2d8] text-[#805b18]' : 'bg-[#f5e9e6] text-[#8d4e44]'}`}>{group.status === 'ready' ? '可用' : group.status === 'partial' ? '待补' : '无样本'}</span></td>
+                      <td className="py-3">{group.classifiedCount}</td>
+                      <td className="py-3">{group.databaseFundCount}</td>
+                      <td className="py-3">{group.evaluationMethodReadyCount}</td>
+                      <td className="py-3">{group.metricReadyCount}</td>
+                      <td className="py-3">{group.styleReadyCount}</td>
+                      <td className="py-3 font-bold text-[#28664f]">{group.recommendationReadyCount}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <p className="mt-4 text-xs leading-6 text-[#748079]">指标缺口只通过真实净值数据补齐。后台入口：<code className="bg-[#f1f3f1] px-1.5 py-1 text-[#405149]">{initialCoverage.backfillCommand}</code></p>
+          </div>
+        </details>
+      ) : null}
 
       <section>
         <div className="flex flex-wrap items-end justify-between gap-4 pb-4">

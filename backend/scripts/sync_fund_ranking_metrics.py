@@ -16,6 +16,7 @@ import os
 import sys
 import time
 from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -40,6 +41,7 @@ from services.fund_classification_catalog import FundClassificationCatalog
 from services.fund_classification_ingestion_service import FundClassificationIngestionService
 from services.fund_nav_evidence_service import FundNavDataEnrichmentService
 from services.peer_comparison_service import PeerComparisonService
+from services.professional_scoring_service import ProfessionalScoringService
 from services.rolling_metric_service import RollingMetricService
 from services.tushare_service import TushareDataService
 
@@ -150,6 +152,36 @@ def build_fund_metric_payload(panel: List[Dict[str, Any]]) -> Dict[str, Dict[str
     clean_performance = {key: value for key, value in performance_data.items() if value is not None}
     clean_risk = {key: value for key, value in risk_metrics.items() if value is not None}
     return {"performance_data": clean_performance, "risk_metrics": clean_risk}
+
+
+def save_latest_fund_facts(
+    metric_repo: Any,
+    wind_code: str,
+    fund: Dict[str, Any],
+    as_of_date: date,
+) -> int:
+    """把真实规模和费率写入权威指标快照，供类别专属评价使用。"""
+    latest = ProfessionalScoringService().metric_facts_from_fund(fund).get("latest") or {}
+    saved = 0
+    for metric_name, metric_unit in (("expense_ratio", "ratio"), ("aum", "cny_100m")):
+        metric_value = number_or_none(latest.get(metric_name))
+        if metric_value is None:
+            continue
+        metric_repo.upsert_metric(
+            target_type="fund",
+            target_id=wind_code,
+            as_of_date=as_of_date,
+            metric_name=metric_name,
+            metric_value=Decimal(str(metric_value)),
+            metric_unit=metric_unit,
+            window="latest",
+            details={
+                "source": "funds.total_asset+funds.raw_data.tushare",
+                "calculation_engine": "ProfessionalScoringService.metric_facts_from_fund",
+            },
+        )
+        saved += 1
+    return saved
 
 
 def invalidate_nav_derived_evaluation_facts(wind_code: str, validation: Dict[str, Any]) -> None:
@@ -410,10 +442,20 @@ def sync_one_fund(
         wind_code,
         benchmark_code=enrichment.get("benchmark_code"),
     )
+    latest_payload = latest_nav_payload(nav_series)
+    static_metric_count = save_latest_fund_facts(
+        metric_repo=metric_repo,
+        wind_code=wind_code,
+        fund={
+            **existing,
+            "total_asset": latest_payload.get("total_asset") or existing.get("total_asset"),
+        },
+        as_of_date=date.fromisoformat(str(latest_payload.get("nav_date") or end_date.isoformat())[:10]),
+    )
     panel = metric_repo.get_latest_panel("fund", wind_code)
     metric_payload = build_fund_metric_payload(panel)
     metric_payload["performance_data"].update(enrichment.get("performance_facts") or {})
-    latest_payload = latest_nav_payload(nav_series)
+    saved_metric_count = rolling_result.get("saved", 0) + static_metric_count
     one_year_ready = all(
         metric_payload[section].get(metric_name) is not None
         for section, metric_name in (
@@ -447,7 +489,8 @@ def sync_one_fund(
                     "nav_points": len(nav_series),
                     "total_asset_as_of": latest_payload.get("total_asset_as_of"),
                     "total_asset_source": latest_payload.get("total_asset_source"),
-                    "saved_metric_snapshots": rolling_result.get("saved", 0),
+                    "saved_metric_snapshots": saved_metric_count,
+                    "saved_static_metric_snapshots": static_metric_count,
                     "benchmark_code": enrichment.get("benchmark_code"),
                     "benchmark_source": enrichment.get("benchmark_source"),
                     "benchmark_data_status": enrichment.get("benchmark_data_status"),
@@ -467,7 +510,8 @@ def sync_one_fund(
         "wind_code": wind_code,
         "status": "synced" if ok and one_year_ready else "skipped" if ok else "failed",
         "nav_points": len(nav_series),
-        "saved_metric_snapshots": rolling_result.get("saved", 0),
+        "saved_metric_snapshots": saved_metric_count,
+        "saved_static_metric_snapshots": static_metric_count,
         "latest_nav_date": latest_payload.get("nav_date"),
         "return_1y": metric_payload["performance_data"].get("return_1y"),
         "max_drawdown_1y": metric_payload["risk_metrics"].get("max_drawdown_1y"),

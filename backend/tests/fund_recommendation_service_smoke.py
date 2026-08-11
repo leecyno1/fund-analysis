@@ -18,6 +18,26 @@ class FakeClassificationRepo:
     def count_recommendation_funds(self, peer_group, keyword=None):
         return len(self.rows)
 
+    def list_peer_group_coverage_inventory(self, limit=100):
+        return [
+            {
+                "id": "peer-index-hs300",
+                "key": "peer-index-hs300",
+                "name": "指数-沪深300",
+                "minimum_peer_count": 5,
+                "classified_count": 35,
+                "database_fund_count": 35,
+            },
+            {
+                "id": "peer-index-csi500",
+                "key": "peer-index-csi500",
+                "name": "指数-中证500",
+                "minimum_peer_count": 5,
+                "classified_count": 1,
+                "database_fund_count": 1,
+            },
+        ][:limit]
+
 
 class FakeMetricRepo:
     def __init__(self, panels):
@@ -155,6 +175,21 @@ def main() -> int:
         raise AssertionError(f"Candidate source must disclose full peer-group evaluation: {result}")
     if any(key in result for key in ["purchase_amount", "suitability", "position", "trade_action"]):
         raise AssertionError(f"Candidate group leaked out-of-scope decision fields: {result}")
+
+    thin_group = service.build_candidate_group("指数-中证500")
+    if thin_group.get("candidates") or thin_group.get("excluded_reason_counts") != {"peer_sample_insufficient": 1}:
+        raise AssertionError(f"Recommendation must stop when the classified peer sample is too small: {thin_group}")
+
+    coverage = service.build_coverage_report()
+    coverage_groups = {group["key"]: group for group in coverage.get("groups") or []}
+    hs300 = coverage_groups.get("peer-index-hs300") or {}
+    csi500 = coverage_groups.get("peer-index-csi500") or {}
+    if hs300.get("metric_ready_count") != 34 or hs300.get("recommendation_ready_count") != 34:
+        raise AssertionError(f"Coverage report must use the same evidence gate as recommendations: {coverage}")
+    if csi500.get("recommendation_ready_count") != 0 or csi500.get("missing_reason_counts", {}).get("peer_sample_insufficient") != 1:
+        raise AssertionError(f"Coverage report must disclose thin peer groups: {coverage}")
+    if coverage.get("metric_backfill", {}).get("mock_data_allowed") is not False:
+        raise AssertionError(f"Coverage backfill must remain real-data-only: {coverage}")
 
     print("OK recommendation service scans the full peer group and returns at most ten evidence-backed style candidates")
     return 0

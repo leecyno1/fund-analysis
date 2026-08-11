@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 # Lazy initialization
 _engine = None
 _SessionLocal = None
+_initialized_database_url = None
 
 
 def normalize_database_url(database_url: str) -> str:
@@ -116,7 +117,13 @@ def db_session():
 
 def init_database():
     """初始化数据库表结构"""
+    global _initialized_database_url
+
     from sqlalchemy import text
+    database_url = get_database_url()
+    if _initialized_database_url == database_url:
+        return True
+
     engine = get_engine()
 
     tables = [
@@ -688,6 +695,7 @@ def init_database():
                 conn.execute(text(sql))
             conn.commit()
         logger.info(f"Database tables initialized: {len(tables)} tables, {len(indexes)} indexes")
+        _initialized_database_url = database_url
         return True
     except Exception as e:
         logger.error(f"Database init failed: {e}")

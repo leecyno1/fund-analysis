@@ -307,6 +307,41 @@ class FundClassificationRepo:
             rows = conn.execute(text(sql), {"limit": max(1, min(int(limit), 200))}).fetchall()
         return [_row_to_dict(row) for row in rows]
 
+    def list_peer_group_coverage_inventory(self, limit: int = 100) -> List[Dict[str, Any]]:
+        """返回全部标准同类组及真实入库覆盖，不过滤未达最小样本的类别。"""
+        if not self._schema_ready():
+            return []
+
+        from sqlalchemy import text
+
+        sql = """
+            SELECT
+                pg.id,
+                pg.key,
+                pg.name,
+                pg.minimum_peer_count,
+                COUNT(DISTINCT pgm.entity_id) FILTER (
+                    WHERE pgm.role <> 'excluded'
+                )::int AS classified_count,
+                COUNT(DISTINCT fe.id) FILTER (
+                    WHERE pgm.role <> 'excluded'
+                      AND fe.lifecycle_stage = 'active'
+                      AND fsc.status = 'active'
+                      AND f.wind_code IS NOT NULL
+                )::int AS database_fund_count
+            FROM peer_groups pg
+            LEFT JOIN peer_group_members pgm ON pgm.peer_group_id = pg.id
+            LEFT JOIN fund_entities fe ON fe.id = pgm.entity_id
+            LEFT JOIN fund_share_classes fsc ON fsc.entity_id = fe.id
+            LEFT JOIN funds f ON f.wind_code = fsc.wind_code
+            GROUP BY pg.id, pg.key, pg.name, pg.minimum_peer_count
+            ORDER BY classified_count DESC, pg.name ASC
+            LIMIT :limit
+        """
+        with self.engine.connect() as conn:
+            rows = conn.execute(text(sql), {"limit": max(1, min(int(limit), 200))}).fetchall()
+        return [_row_to_dict(row) for row in rows]
+
     def list_fund_peer_group_map(self, wind_codes: List[str]) -> Dict[str, Dict[str, Any]]:
         """批量返回基金份额的标准同类组，避免列表页逐只查询分类上下文。"""
         normalized_codes = list(dict.fromkeys(

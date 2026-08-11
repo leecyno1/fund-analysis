@@ -4,12 +4,14 @@ const apiRoute = readFileSync('app/api/recommendations/route.ts', 'utf8')
 const client = readFileSync('app/(dashboard)/recommendations/RecommendationClient.tsx', 'utf8')
 const backendRoute = readFileSync('backend/routes/funds.py', 'utf8')
 const backendService = readFileSync('backend/services/fund_recommendation_service.py', 'utf8')
+const recommendationPage = readFileSync('app/(dashboard)/recommendations/page.tsx', 'utf8')
 
 function requireText(source, text, message) {
   if (!source.includes(text)) throw new Error(`${message}: ${text}`)
 }
 
 requireText(backendRoute, '@router.get("/recommendation-candidates")', 'backend candidate-group endpoint is missing')
+requireText(backendRoute, '@router.get("/recommendation-coverage")', 'backend recommendation coverage endpoint is missing')
 requireText(backendRoute, 'FundRecommendationService().build_candidate_group', 'backend endpoint must use the candidate-group service')
 requireText(apiRoute, '/api/funds/recommendation-candidates', 'Next API must call the full peer-group candidate endpoint')
 requireText(apiRoute, "backendParams.set('style', style)", 'Next API must pass style filtering to the backend')
@@ -19,6 +21,9 @@ requireText(client, 'recommendationEvidence(fund)', 'candidate cards must render
 requireText(client, '主要风险', 'candidate cards must show risks')
 requireText(client, '数据截至', 'candidate cards must disclose the evidence date')
 requireText(client, '同类组共', 'empty recommendation state must explain evidence gaps')
+requireText(client, '数据准备情况', 'recommendation page must show category coverage')
+requireText(client, '指标缺口只通过真实净值数据补齐', 'coverage UI must reject mock metric backfills')
+requireText(recommendationPage, '/api/funds/recommendation-coverage', 'recommendation page must load category coverage')
 requireText(client, 'void loadCandidates(category, nextStyle)', 'style changes must refresh the full peer candidate group')
 
 for (const forbidden of [
