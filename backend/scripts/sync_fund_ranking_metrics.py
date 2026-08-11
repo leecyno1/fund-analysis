@@ -184,6 +184,44 @@ def save_latest_fund_facts(
     return saved
 
 
+def save_enrichment_metric_facts(
+    metric_repo: Any,
+    wind_code: str,
+    enrichment: Dict[str, Any],
+    as_of_date: date,
+) -> int:
+    """把货币基金和基准对齐的真实派生事实写入统一指标表。"""
+    facts = enrichment.get("performance_facts") or {}
+    metric_units = {
+        "seven_day_annualized_yield": "ratio",
+        "income_per_10000": "cny_per_10000",
+        "benchmark_annualized_rate": "ratio",
+        "benchmark_yield_spread": "ratio",
+    }
+    saved = 0
+    for metric_name, metric_unit in metric_units.items():
+        metric_value = number_or_none(facts.get(metric_name))
+        if metric_value is None:
+            continue
+        metric_repo.upsert_metric(
+            target_type="fund",
+            target_id=wind_code,
+            as_of_date=as_of_date,
+            metric_name=metric_name,
+            metric_value=Decimal(str(metric_value)),
+            metric_unit=metric_unit,
+            window="latest",
+            details={
+                "source": facts.get(f"{metric_name}_source")
+                or facts.get("seven_day_yield_source")
+                or "fund_nav_evidence_service",
+                "calculation_engine": "FundNavDataEnrichmentService",
+            },
+        )
+        saved += 1
+    return saved
+
+
 def invalidate_nav_derived_evaluation_facts(wind_code: str, validation: Dict[str, Any]) -> None:
     """移除已被净值质量门禁否定的派生指标，避免旧快照继续参与评分。"""
     performance_keys = [
@@ -334,8 +372,9 @@ def select_research_linked_codes(limit: int, missing_only: bool) -> List[str]:
 def select_peer_evaluation_coverage_codes(
     limit: int,
     peer_group_keys: List[str],
+    target_per_group: int = 10,
 ) -> List[str]:
-    """按类别专属指标缺口选择同类基金，补足可计算分位的最小样本。"""
+    """按类别专属指标缺口选择同类基金，尽量补足十只候选所需样本。"""
     normalized_keys = list(dict.fromkeys(
         str(key).strip() for key in peer_group_keys if str(key or "").strip()
     ))
@@ -382,16 +421,22 @@ def select_peer_evaluation_coverage_codes(
 
     service = PeerComparisonService()
     selected: List[str] = []
+    target_count = max(2, int(target_per_group))
     for group in groups:
         target_code = group.get("target_wind_code")
         if not target_code:
             log(f"[peer-coverage] {group.get('peer_group_key')} 无可用代表份额")
             continue
         result = service.build_peer_percentiles(str(target_code), window="1y")
-        if result.get("sample_status") == "sufficient":
+        valid_count = int(result.get("valid_metric_peer_count") or 0)
+        desired_count = max(
+            int(result.get("minimum_valid_peer_count") or 0),
+            target_count,
+        )
+        if valid_count >= desired_count:
             log(
                 f"[peer-coverage] {group.get('peer_group_key')} 已满足："
-                f"有效样本 {result.get('valid_metric_peer_count')}"
+                f"有效样本 {valid_count} / 目标 {desired_count}"
             )
             continue
 
@@ -406,22 +451,64 @@ def select_peer_evaluation_coverage_codes(
         if target_missing:
             candidates.append(str(target_code))
         candidates.extend((result.get("peer_metric_gap") or {}).get("suggested_sync_codes") or [])
+        needed_count = max(0, desired_count - valid_count)
+        candidates.extend(select_peer_group_missing_metric_codes(
+            str(group.get("peer_group_key") or ""),
+            limit=max(needed_count, 1),
+        ))
         added = 0
         for code in candidates:
             normalized_code = str(code).strip().upper()
             if normalized_code and normalized_code not in selected:
                 selected.append(normalized_code)
                 added += 1
-                if len(selected) >= max(1, limit):
+                if added >= needed_count or len(selected) >= max(1, limit):
                     break
         log(
             f"[peer-coverage] {group.get('peer_group_key')}："
             f"已分类 {result.get('classified_peer_count')}，"
-            f"有效样本 {result.get('valid_metric_peer_count')}，待补 {added}"
+            f"有效样本 {valid_count} / 目标 {desired_count}，待补 {added}"
         )
         if len(selected) >= max(1, limit):
             break
     return selected
+
+
+def select_peer_group_missing_metric_codes(peer_group_key: str, limit: int) -> List[str]:
+    """选择同类组中尚无 1Y 核心指标的主要份额。"""
+    if not peer_group_key or limit <= 0:
+        return []
+    sql = text("""
+        SELECT fsc.wind_code
+        FROM peer_groups pg
+        JOIN peer_group_members pgm
+          ON pgm.peer_group_id = pg.id
+         AND pgm.role <> 'excluded'
+        JOIN fund_entities fe ON fe.id = pgm.entity_id
+        JOIN fund_share_classes fsc
+          ON fsc.entity_id = fe.id
+         AND fsc.status = 'active'
+        LEFT JOIN funds fund ON fund.wind_code = fsc.wind_code
+        WHERE pg.key = :peer_group_key
+          AND fsc.wind_code LIKE '%.OF'
+          AND NOT EXISTS (
+            SELECT 1 FROM metric_snapshots ms
+            WHERE ms.target_type = 'fund'
+              AND ms.target_id = fsc.wind_code
+              AND ms.metric_window = '1y'
+              AND ms.metric_name = 'annualized_return'
+          )
+          AND COALESCE(fund.raw_data->'ranking_metrics'->>'status', '') NOT IN (
+            'nav_unavailable', 'invalid_nav', 'insufficient_metric_history'
+          )
+        ORDER BY fsc.is_primary DESC, fund.total_asset DESC NULLS LAST, fsc.wind_code
+        LIMIT :limit
+    """)
+    with get_engine().connect() as conn:
+        return [row.wind_code for row in conn.execute(sql, {
+            "peer_group_key": peer_group_key,
+            "limit": limit,
+        }).fetchall()]
 
 
 def sync_one_fund(
@@ -489,10 +576,16 @@ def sync_one_fund(
         },
         as_of_date=date.fromisoformat(str(latest_payload.get("nav_date") or end_date.isoformat())[:10]),
     )
+    enrichment_metric_count = save_enrichment_metric_facts(
+        metric_repo=metric_repo,
+        wind_code=wind_code,
+        enrichment=enrichment,
+        as_of_date=date.fromisoformat(str(latest_payload.get("nav_date") or end_date.isoformat())[:10]),
+    )
     panel = metric_repo.get_latest_panel("fund", wind_code)
     metric_payload = build_fund_metric_payload(panel)
     metric_payload["performance_data"].update(enrichment.get("performance_facts") or {})
-    saved_metric_count = rolling_result.get("saved", 0) + static_metric_count
+    saved_metric_count = rolling_result.get("saved", 0) + static_metric_count + enrichment_metric_count
     one_year_ready = all(
         metric_payload[section].get(metric_name) is not None
         for section, metric_name in (
@@ -528,6 +621,7 @@ def sync_one_fund(
                     "total_asset_source": latest_payload.get("total_asset_source"),
                     "saved_metric_snapshots": saved_metric_count,
                     "saved_static_metric_snapshots": static_metric_count,
+                    "saved_enrichment_metric_snapshots": enrichment_metric_count,
                     "benchmark_code": enrichment.get("benchmark_code"),
                     "benchmark_source": enrichment.get("benchmark_source"),
                     "benchmark_data_status": enrichment.get("benchmark_data_status"),
@@ -580,6 +674,12 @@ def main() -> int:
         default=",".join(DEFAULT_PEER_COVERAGE_GROUPS),
         help="同类组补证范围，逗号分隔 peer_group key",
     )
+    parser.add_argument(
+        "--peer-target-per-group",
+        type=int,
+        default=10,
+        help="每个同类组期望拥有的有效评价样本，默认 10",
+    )
     parser.add_argument("--max-errors", type=int, default=10, help="连续或累计错误上限")
     args = parser.parse_args()
 
@@ -598,6 +698,7 @@ def main() -> int:
         codes = select_peer_evaluation_coverage_codes(
             limit=max(1, args.limit),
             peer_group_keys=[key for key in args.peer_group_keys.split(",") if key.strip()],
+            target_per_group=max(2, args.peer_target_per_group),
         )
     elif not codes:
         codes = select_target_codes(

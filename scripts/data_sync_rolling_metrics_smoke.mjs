@@ -68,6 +68,8 @@ assertIncludes(rankingMetricScript, 'build_fund_metric_payload', 'ranking metric
 assertIncludes(rankingMetricScript, 'FundNavDataEnrichmentService', 'ranking metric sync preserves money-market and benchmark evidence')
 assertIncludes(rankingMetricScript, 'FundClassificationIngestionService', 'ranking metric sync refreshes standardized classification before benchmark lookup')
 assertIncludes(rankingMetricScript, '--peer-evaluation-coverage', 'ranking metric sync can backfill category-relative evaluation coverage')
+assertIncludes(rankingMetricScript, '--peer-target-per-group', 'peer coverage backfill must target the ten-fund recommendation capacity')
+assertIncludes(rankingMetricScript, 'save_enrichment_metric_facts', 'money-market evidence must enter the unified metric panel')
 assertIncludes(rankingMetricScript, 'tracking_difference', 'ranking metric sync mirrors real relative metrics into fund evaluation facts')
 assertIncludes(rankingMetricScript, 'wind_code LIKE', 'ranking metric sync defaults to public fund codes with fund_nav coverage')
 assertIncludes(batchSyncScript, 'TushareDataService(strict_no_mock=True)', 'production batch sync rejects mock evaluation inputs')
