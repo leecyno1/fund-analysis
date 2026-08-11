@@ -39,7 +39,11 @@ class PerformanceAttributionService:
         attribution_quarter = normalized_quarter or self._latest_completed_quarter()
         holding_quarter = self._previous_quarter(attribution_quarter)
         classification_context = self._get_classification_adapter().get_classification_context(fund_code) or {}
-        benchmark_code, benchmark_source = self._resolve_benchmark(benchmark, classification_context)
+        benchmark_code, benchmark_source, benchmark_detail = self._resolve_attribution_benchmark(
+            benchmark,
+            classification_context,
+            fund,
+        )
         data_service = get_data_service()
         holdings = data_service.get_fund_holdings(fund_code, holding_quarter)
 
@@ -55,12 +59,14 @@ class PerformanceAttributionService:
             except Exception as exc:
                 logger.warning("Formal style factors unavailable for %s: %s", fund_code, exc)
 
-        barra = self._barra_evidence(holdings, formal_style_factors, holding_quarter)
+        barra = self._barra_evidence(fund, holdings, formal_style_factors, holding_quarter)
         brinson = self._brinson_evidence(
             data_service=data_service,
             fund=fund,
             holdings=holdings,
             benchmark_code=benchmark_code,
+            benchmark_source=benchmark_source,
+            benchmark_detail=benchmark_detail,
             attribution_quarter=attribution_quarter,
             holding_quarter=holding_quarter,
         )
@@ -111,6 +117,7 @@ class PerformanceAttributionService:
             "holding_snapshot_quarter": holding_quarter,
             "benchmark": benchmark_code,
             "benchmark_source": benchmark_source,
+            "benchmark_detail": benchmark_detail,
             "barra": barra,
             "brinson": brinson,
             "nav_factor_lens": nav_factor,
@@ -125,10 +132,27 @@ class PerformanceAttributionService:
 
     def _barra_evidence(
         self,
+        fund: Dict[str, Any],
         holdings: List[Dict[str, Any]],
         style_factors: Dict[str, float],
         holding_quarter: str,
     ) -> Dict[str, Any]:
+        fund_type = str(fund.get("type") or "").lower()
+        if any(token in fund_type for token in ["money", "货币", "bond", "债"]):
+            return {
+                "method": "barra_style_risk_model",
+                "status": "not_applicable",
+                "formal_model_ready": False,
+                "source": "methodology_scope",
+                "quarter": holding_quarter,
+                "factor_exposures": [],
+                "industry_exposures": {},
+                "risk_contributions": [],
+                "r_squared": None,
+                "holdings_count": 0,
+                "holdings_disclosed_weight": 0.0,
+                "missing_items": ["货币或债券基金不适用当前股票 Barra 风格与风险模型。"],
+            }
         industry_exposures: Dict[str, float] = {}
         disclosed_weight = 0.0
         for holding in holdings:
@@ -182,6 +206,8 @@ class PerformanceAttributionService:
         fund: Dict[str, Any],
         holdings: List[Dict[str, Any]],
         benchmark_code: Optional[str],
+        benchmark_source: str,
+        benchmark_detail: Dict[str, Any],
         attribution_quarter: str,
         holding_quarter: str,
     ) -> Dict[str, Any]:
@@ -222,6 +248,8 @@ class PerformanceAttributionService:
                 fund=fund,
                 holdings=holdings,
                 benchmark_code=benchmark_code,
+                benchmark_source=benchmark_source,
+                benchmark_detail=benchmark_detail,
                 attribution_quarter=attribution_quarter,
                 holding_quarter=holding_quarter,
             )
@@ -240,6 +268,8 @@ class PerformanceAttributionService:
         fund: Dict[str, Any],
         holdings: List[Dict[str, Any]],
         benchmark_code: str,
+        benchmark_source: str,
+        benchmark_detail: Dict[str, Any],
         attribution_quarter: str,
         holding_quarter: str,
     ) -> Dict[str, Any]:
@@ -357,11 +387,21 @@ class PerformanceAttributionService:
             benchmark_coverage=benchmark_coverage,
             return_coverage=holding_return_coverage,
         )
+        missing_items = list(attribution.get("missing_items") or [])
+        if benchmark_source == "fund_declared_benchmark_equity_component":
+            weight = benchmark_detail.get("declared_weight")
+            weight_text = f"{float(weight):.0%}" if weight is not None else "部分"
+            missing_items.append(
+                f"基金合同复合基准中权益指数权重为 {weight_text}；"
+                "本次仅以该指数作为权益行业参照，基金整体主动收益仍包含非权益资产和未披露持仓影响。"
+            )
         return {
             "method": "brinson_fachler",
-            "status": attribution.get("status", "insufficient_evidence"),
+            "status": "partial_evidence" if missing_items and attribution.get("status") == "ok" else attribution.get("status", "insufficient_evidence"),
             "source": "tushare.fund_portfolio+index_weight+daily+adj_factor+fund_nav",
             "benchmark": benchmark_code,
+            "benchmark_source": benchmark_source,
+            "benchmark_detail": benchmark_detail,
             "period": {
                 "quarter": attribution_quarter,
                 "start": first_trade,
@@ -382,7 +422,7 @@ class PerformanceAttributionService:
             ],
             "industry_detail": attribution.get("industry_details") or [],
             "coverage": attribution.get("coverage") or {},
-            "missing_items": attribution.get("missing_items") or [],
+            "missing_items": missing_items,
         }
 
     def _adjusted_stock_returns(self, start_prices: Any, end_prices: Any, start_factors: Any, end_factors: Any) -> Dict[str, float]:
@@ -469,6 +509,42 @@ class PerformanceAttributionService:
             suffix = ".SZ" if value.startswith("399") else ".SH"
             value = f"{value}{suffix}"
         return (value or None), source
+
+    def _resolve_attribution_benchmark(
+        self,
+        benchmark: Optional[str],
+        classification_context: Dict[str, Any],
+        fund: Dict[str, Any],
+    ) -> Tuple[Optional[str], str, Dict[str, Any]]:
+        code, source = self._resolve_benchmark(benchmark, classification_context)
+        if benchmark:
+            return code, source, {"role": "user_override"}
+        if code and re.fullmatch(r"[0-9A-Z]{6,12}\.(SH|SZ|CSI)", code):
+            return code, source, {"role": "classification_benchmark"}
+
+        raw_data = fund.get("raw_data") if isinstance(fund.get("raw_data"), dict) else {}
+        universe = raw_data.get("universe") if isinstance(raw_data.get("universe"), dict) else {}
+        info = raw_data.get("info") if isinstance(raw_data.get("info"), dict) else {}
+        declared_benchmark = (
+            universe.get("benchmark")
+            or info.get("benchmark")
+            or fund.get("benchmark")
+            or ""
+        )
+        from services.fund_classification_catalog import FundClassificationCatalog
+
+        resolved = FundClassificationCatalog.resolve_declared_equity_benchmark(str(declared_benchmark))
+        if resolved:
+            return (
+                str(resolved["benchmark_code"]),
+                "fund_declared_benchmark_equity_component",
+                {**resolved, "role": "equity_component_reference"},
+            )
+        return None, "missing_verifiable_attribution_benchmark", {
+            "role": "unavailable",
+            "classification_benchmark": code,
+            "declared_benchmark": declared_benchmark or None,
+        }
 
     def _get_classification_adapter(self):
         if self._classification_adapter is None:

@@ -88,6 +88,7 @@ def _evaluation_analysis_fallback(
     classification = evaluation.get("classification") or {}
     peer_context = evaluation.get("peer_context") or {}
     result = evaluation.get("evaluation") or {}
+    attribution_benchmark_detail = attribution_evidence.get("benchmark_detail") or {}
     score = result.get("overall_score")
     missing = list(dict.fromkeys(str(item) for item in evaluation.get("missing_items", []) if item))
     lines = [
@@ -110,6 +111,20 @@ def _evaluation_analysis_fallback(
         f"- 基金类别：{classification.get('fund_type') or fund_data.get('type') or '待补'}",
         f"- 同类组：{peer_context.get('peer_group') or classification.get('peer_group') or '待补'}",
         f"- 主要基准：{peer_context.get('primary_benchmark') or classification.get('primary_benchmark') or '待补'}",
+        (
+            f"- Brinson 权益参照：{attribution_benchmark_detail.get('benchmark_name')}"
+            + (
+                f"（合同权重 {float(attribution_benchmark_detail.get('declared_weight')):.0%}）"
+                if attribution_benchmark_detail.get("declared_weight") is not None
+                else ""
+            )
+            if attribution_benchmark_detail.get("benchmark_name")
+            else (
+                "- Brinson 权益参照：当前基金不适用股票行业归因"
+                if attribution_evidence.get("status") == "not_applicable"
+                else "- Brinson 权益参照：待补"
+            )
+        ),
         f"- 同类有效样本：{peer_context.get('valid_metric_peer_count') or 0} 只",
         "",
         "## 同类表现",

@@ -81,7 +81,7 @@ class LlmRuntimeGuard:
             state = self._states.setdefault(runtime_key, _RuntimeState())
             circuit_open = configured and state.open_until > now
             retry_after = max(0, math.ceil(state.open_until - now)) if circuit_open else 0
-            status = "unconfigured" if not configured else "degraded" if circuit_open else "ready"
+            status = "unconfigured" if not configured else "degraded" if state.failure_count > 0 else "ready"
             return {
                 "status": status,
                 "configured": bool(configured),

@@ -34,6 +34,25 @@ def main() -> int:
     if missing_code is not None or missing_source != "missing_classification_benchmark":
         raise AssertionError(f"Missing classification benchmark must remain unavailable: {(missing_code, missing_source)}")
 
+    declared_code, declared_source, declared_detail = attribution._resolve_attribution_benchmark(
+        None,
+        {"benchmark_mapping": {"benchmark_code": "MIXED-EQUITY-60"}},
+        {"raw_data": {"universe": {"benchmark": "中证800指数收益率×85%+上证国债指数收益率×15%"}}},
+    )
+    if declared_code != "000906.SH" or declared_source != "fund_declared_benchmark_equity_component":
+        raise AssertionError(f"Mixed fund attribution must resolve its declared equity component: {(declared_code, declared_source)}")
+    if declared_detail.get("declared_weight") != 0.85:
+        raise AssertionError(f"Declared equity benchmark weight missing: {declared_detail}")
+
+    bond_barra = attribution._barra_evidence(
+        {"type": "债券型"},
+        [],
+        {},
+        "2026Q1",
+    )
+    if bond_barra.get("status") != "not_applicable":
+        raise AssertionError(f"Bond funds must not be presented as failed equity Barra models: {bond_barra}")
+
     market = FakeMarketDataAdapter([
         {"date": "2026-07-01", "nav": 100.0},
         {"date": "2026-07-02", "nav": 101.0},

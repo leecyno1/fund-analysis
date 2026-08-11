@@ -2,7 +2,8 @@
 
 集中定义策略族谱、同类组和可核验的指数别名；不包含任何演示基金。
 """
-from typing import Any, Dict, List
+import re
+from typing import Any, Dict, List, Optional
 
 
 class FundClassificationCatalog:
@@ -321,6 +322,34 @@ class FundClassificationCatalog:
             "peer_group_key": "peer-fixed-income-csi-composite-bond",
         },
     ]
+
+    @classmethod
+    def resolve_declared_equity_benchmark(cls, declared_benchmark: str) -> Optional[Dict[str, Any]]:
+        """从合同复合基准中提取唯一可核验的权益指数成分，供行业归因使用。"""
+        text = str(declared_benchmark or "").strip()
+        if not text:
+            return None
+
+        matches = []
+        for rule in cls.TRACKED_INDEX_RULES:
+            if rule.get("asset_class") != "index":
+                continue
+            matched_alias = next((alias for alias in rule.get("aliases", []) if alias in text), None)
+            if not matched_alias:
+                continue
+            weight_match = re.search(
+                rf"{re.escape(matched_alias)}(?:收益率)?\s*[×xX*]\s*(\d+(?:\.\d+)?)\s*%",
+                text,
+            )
+            matches.append({
+                "benchmark_code": rule["benchmark_code"],
+                "benchmark_name": rule["benchmark_name"],
+                "declared_weight": float(weight_match.group(1)) / 100 if weight_match else None,
+                "declared_benchmark": text,
+            })
+
+        unique = {item["benchmark_code"]: item for item in matches}
+        return next(iter(unique.values())) if len(unique) == 1 else None
 
     @classmethod
     def family_meta(cls) -> Dict[str, Dict[str, Any]]:

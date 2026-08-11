@@ -31,7 +31,9 @@ assert ready["configured"] is True
 assert ready["circuit_open"] is False
 
 guard.record_failure(runtime_key, "401 Unauthorized")
-assert guard.health(runtime_key, True, "siliconflow", "model")["status"] == "ready"
+first_failure = guard.health(runtime_key, True, "siliconflow", "model")
+assert first_failure["status"] == "degraded"
+assert first_failure["circuit_open"] is False
 guard.record_failure(runtime_key, "401 Unauthorized")
 
 degraded = guard.health(runtime_key, True, "siliconflow", "model")
