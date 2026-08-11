@@ -24,12 +24,16 @@ assertIncludes(factorRoute, '/api/investment-analysis/fund/', 'factor lens BFF')
 const attributionRoute = assertFile('app/api/investment-analysis/fund/[windCode]/attribution/route.ts')
 assertIncludes(attributionRoute, '/api/investment-analysis/fund/', 'attribution BFF')
 
-const advancedPage = assertFile('app/(dashboard)/analysis/advanced/page.tsx')
-assertIncludes(advancedPage, '高级基金研究', 'advanced analysis page')
-assertIncludes(advancedPage, '因子镜头', 'advanced analysis page')
-assertIncludes(advancedPage, '主动归因', 'advanced analysis page')
+const unifiedAttributionRoute = assertFile('app/api/attribution/fund/[windCode]/route.ts')
+assertIncludes(unifiedAttributionRoute, '/api/attribution/fund/', 'unified attribution BFF')
 
-const analysisHub = assertFile('app/(dashboard)/analysis/page.tsx')
+const advancedPage = assertFile('app/(dashboard)/analysis/advanced/AttributionWorkspace.tsx')
+assertIncludes(advancedPage, '业绩归因', 'advanced analysis page')
+assertIncludes(advancedPage, 'Barra 风格与风险暴露', 'advanced analysis page')
+assertIncludes(advancedPage, 'Brinson 行业归因', 'advanced analysis page')
+assertIncludes(advancedPage, '/api/attribution/fund/', 'advanced page must use unified attribution')
+
+const analysisHub = assertFile('app/(dashboard)/analysis/FundAnalysisWorkspace.tsx')
 assertIncludes(analysisHub, '/analysis/advanced', 'analysis hub advanced entry')
 
-console.log('OK advanced fund research frontend BFF and page entry')
+console.log('OK unified fund attribution frontend BFF and page entry')
