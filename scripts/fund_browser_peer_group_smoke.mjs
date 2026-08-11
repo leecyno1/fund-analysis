@@ -10,6 +10,9 @@ async function fetchJson(path) {
 }
 
 const discoverPage = readFileSync('app/(dashboard)/discover/FundDiscoverClient.tsx', 'utf8')
+const simpleFundView = readFileSync('lib/simple-fund-view.ts', 'utf8')
+const simpleFundDetailPage = readFileSync('app/(dashboard)/funds/[id]/page.tsx', 'utf8')
+const simpleComparePage = readFileSync('app/(dashboard)/compare/page.tsx', 'utf8')
 for (const required of [
   "professionalPeerGroupId(fund)",
   "这只基金尚未完成专业分类",
@@ -17,6 +20,16 @@ for (const required of [
   "params.set('peerGroup', nextPeerGroup)",
 ]) {
   if (!discoverPage.includes(required)) throw new Error(`fund browser missing peer-group guard: ${required}`)
+}
+
+for (const [label, source] of [
+  ['fund browser', simpleFundView],
+  ['fund detail', simpleFundDetailPage],
+  ['fund comparison', simpleComparePage],
+]) {
+  if (!source.includes("'insufficient'")) {
+    throw new Error(`${label} must hide scores when data quality is insufficient`)
+  }
 }
 
 const categories = await fetchJson('/api/fund-browser?peerGroup=%E6%8C%87%E6%95%B0-%E6%B2%AA%E6%B7%B1300&limit=30')

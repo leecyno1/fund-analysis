@@ -172,7 +172,8 @@ export function formatAsset(value: number | null) {
 export function professionalFundScore(fund: SimpleFund) {
   const scoring = asRecord(fund.professionalScoring)
   const status = textValue(scoring.status)
-  if (status === 'insufficient_evidence') return null
+  const qualityStatus = textValue(asRecord(scoring.data_quality).status, asRecord(fund.dataQuality).status)
+  if (status === 'insufficient_evidence' || qualityStatus === 'insufficient') return null
   return numberValue(scoring.overall_score, scoring.overallScore)
 }
 

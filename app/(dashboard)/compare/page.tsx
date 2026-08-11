@@ -22,6 +22,9 @@ type EvaluationPayload = {
     overall_score?: number | null
     overall_grade?: string | null
     metric_scores?: Record<string, number | string | null>
+    data_quality?: {
+      status?: string
+    }
   }
 }
 
@@ -55,7 +58,14 @@ async function loadComparisonFund(code: string): Promise<ComparisonFund | null> 
   const evaluation = evaluationResponse.ok
     ? await evaluationResponse.json().catch(() => ({})) as EvaluationPayload
     : {}
-  const metricScores = evaluation.evaluation?.metric_scores || {}
+  const evaluationReady = evaluation.status !== 'insufficient_evidence'
+    && evaluation.evaluation?.data_quality?.status !== 'insufficient'
+  const metricScores = evaluationReady ? evaluation.evaluation?.metric_scores || {} : {}
+  if (!evaluationReady) {
+    fund.performanceData = {}
+    fund.riskMetrics = {}
+    fund.rollingMetrics = {}
+  }
   const rollingMetrics = { ...((fund.rollingMetrics || {}) as Record<string, Record<string, unknown>>) }
   for (const [path, value] of Object.entries(metricScores)) {
     const separator = path.indexOf('.')
@@ -90,7 +100,9 @@ async function loadComparisonFund(code: string): Promise<ComparisonFund | null> 
       sampleStatus: String(evaluation.peer_context?.sample_status || 'unavailable'),
       validPeerCount: Number(evaluation.peer_context?.valid_metric_peer_count || 0),
       minimumPeerCount: Number(evaluation.peer_context?.minimum_peer_count || 0),
-      score: evaluation.evaluation?.overall_score == null ? null : Number(evaluation.evaluation.overall_score),
+      score: !evaluationReady || evaluation.evaluation?.overall_score == null
+        ? null
+        : Number(evaluation.evaluation.overall_score),
       grade: String(evaluation.evaluation?.overall_grade || ''),
     },
   }

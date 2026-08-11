@@ -47,7 +47,9 @@ function normalizeEvaluation(payload: unknown): FundEvaluation {
   const status = textValue(root.status) || 'unavailable'
   const sampleStatus = textValue(peerContext.sample_status) || 'unavailable'
   const rawScore = numberOrNull(evaluation.overall_score)
-  const score = status === 'insufficient_evidence' ? null : rawScore
+  const score = status === 'insufficient_evidence' || textValue(dataQuality.status) === 'insufficient'
+    ? null
+    : rawScore
 
   const peerMetrics: FundPeerMetric[] = Object.entries(peerPercentiles).map(([key, value]) => {
     const metric = asRecord(value)
