@@ -2,6 +2,7 @@
 from typing import Any, Dict, Optional
 
 from services.fund_research_snapshot_service import FundResearchSnapshotService
+from services.professional_scoring_service import ProfessionalScoringService
 
 
 class FundBrowserService:
@@ -46,6 +47,7 @@ class FundBrowserService:
             if manager_id
         ]
         manager_map = get_manager_repo().get_managers_by_ids(manager_ids)
+        scoring_service = ProfessionalScoringService()
 
         funds = []
         for row in rows:
@@ -64,11 +66,22 @@ class FundBrowserService:
                 for manager_id in (row.get("manager_ids") or [])
                 if manager_id in manager_map
             ]
+            try:
+                professional_scoring = scoring_service.score_from_inputs(
+                    row,
+                    profile,
+                    panels.get(code, []),
+                    scoring_service.data_quality_service.evaluate_fund(code),
+                    classification_repo.get_classification_context(code),
+                )
+            except Exception:
+                professional_scoring = None
             funds.append({
                 **FundResearchSnapshotService.project_fund(row),
                 "managers": managers,
                 "research_profile": profile,
                 "rolling_metrics": FundResearchSnapshotService.project_rolling_metrics(panels.get(code, [])),
+                "professional_scoring": professional_scoring,
             })
 
         return {
@@ -81,6 +94,7 @@ class FundBrowserService:
             "product_scope": {
                 "fund_browser": "core",
                 "fund_classification": "core",
+                "fund_evaluation": "core",
                 "investment_decision": "excluded",
             },
         }

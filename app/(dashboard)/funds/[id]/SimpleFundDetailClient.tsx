@@ -163,7 +163,6 @@ function chartWindow(nav: FundNavPoint[], days: number) {
 
 function scoreMessage(evaluation: FundEvaluation) {
   if (evaluation.classificationStatus !== 'classified') return '专业分类证据不足，暂不输出综合分。'
-  if (evaluation.sampleStatus !== 'sufficient') return `同类有效样本 ${evaluation.validPeerCount} 只，低于最低要求 ${evaluation.minimumPeerCount} 只，暂不排名。`
   return '评价数据尚未满足当前类别方法，暂不输出综合分。'
 }
 
@@ -172,9 +171,8 @@ export default function SimpleFundDetailClient({ fund, nav, evaluation, research
   const selectedWindow = windows.find((item) => item.value === window) || windows[1]
   const chartData = useMemo(() => chartWindow(nav, selectedWindow.days), [nav, selectedWindow.days])
   const typedFund = fund as SimpleFund
-  const professionalScoreReady = evaluation.status === 'ok'
-    && evaluation.sampleStatus === 'sufficient'
-    && evaluation.score != null
+  const professionalScoreReady = evaluation.score != null
+  const scoreIsPartial = evaluation.status === 'partial'
   const usablePeerMetrics = evaluation.peerMetrics.filter((metric) => metric.sampleStatus === 'sufficient' && metric.percentile != null)
   const manager = managerName(typedFund)
   const classification = evaluation.peerGroup || '专业分类待确认'
@@ -275,7 +273,7 @@ export default function SimpleFundDetailClient({ fund, nav, evaluation, research
         <div className="flex flex-wrap items-end justify-between gap-3 pb-4">
           <div>
             <h2 className="flex items-center gap-2 text-lg font-bold"><BarChart3 className="h-5 w-5 text-[#28745c]" />分类内专业评价</h2>
-            <p className="mt-1 text-xs leading-6 text-[#7a8580]">只与“{classification}”同类基金比较，当样本不足时停止评分。</p>
+            <p className="mt-1 text-xs leading-6 text-[#7a8580]">基金自身评分使用当前类别的专用方法；同类样本不足时只停止分位排名。</p>
           </div>
           <div className="text-xs text-[#748079]">同类有效样本 {evaluation.validPeerCount || '—'} 只</div>
         </div>
@@ -284,9 +282,9 @@ export default function SimpleFundDetailClient({ fund, nav, evaluation, research
           <div className="border-b border-[#e0e5e1] p-6 lg:border-b-0 lg:border-r">
             {professionalScoreReady ? (
               <>
-                <div className="text-xs font-bold text-[#28745c]">专业综合分</div>
+                <div className="flex items-center gap-2 text-xs font-bold text-[#28745c]"><span>类别方法评分</span>{scoreIsPartial ? <span className="rounded-sm bg-[#fff1d4] px-1.5 py-0.5 text-[10px] text-[#845f1d]">部分证据</span> : null}</div>
                 <div className="mt-3 flex items-end gap-3"><strong className="text-5xl leading-none text-[#173f35]">{evaluation.score?.toFixed(1)}</strong><span className="pb-1 text-sm text-[#748079]">/ 100{evaluation.grade ? ` · ${evaluation.grade}` : ''}</span></div>
-                <p className="mt-5 text-xs leading-6 text-[#66726c]">分数由当前基金类别的专用方法计算，AI 不参与改分。</p>
+                <p className="mt-5 text-xs leading-6 text-[#66726c]">{scoreIsPartial ? '核心 1 年指标已参与评价，经理任期等辅助证据待补。' : '分数由当前基金类别的专用方法计算，AI 不参与改分。'}</p>
               </>
             ) : (
               <div className="flex gap-3 text-[#73541e]">
@@ -322,6 +320,13 @@ export default function SimpleFundDetailClient({ fund, nav, evaluation, research
           </div>
         </div>
       </section>
+
+      {evaluation.sampleStatus !== 'sufficient' && professionalScoreReady ? (
+        <section className="flex gap-3 border border-[#e4cc99] bg-[#fff8e8] px-5 py-4 text-sm text-[#73541e]">
+          <CircleAlert className="mt-0.5 h-5 w-5 shrink-0" />
+          <div><strong>同类排名暂不可用</strong><p className="mt-1 text-xs leading-6">当前有效样本 {evaluation.validPeerCount} 只，最低需要 {evaluation.minimumPeerCount} 只。基金自身评分仍可查看，但不展示同类分位和排名。</p></div>
+        </section>
+      ) : null}
 
       {usablePeerMetrics.length ? (
         <section>
@@ -370,7 +375,7 @@ export default function SimpleFundDetailClient({ fund, nav, evaluation, research
 
       <section className="grid gap-3 border-t border-[#dce1dc] pt-6 md:grid-cols-3">
         <div className="flex gap-3 text-xs leading-6 text-[#65716b]"><Database className="mt-1 h-4 w-4 shrink-0 text-[#28745c]" /><span>基金档案、净值与指标均来自后端数据库。</span></div>
-        <div className="flex gap-3 text-xs leading-6 text-[#65716b]"><ShieldCheck className="mt-1 h-4 w-4 shrink-0 text-[#28745c]" /><span>专业评分受分类和同类样本门禁约束。</span></div>
+        <div className="flex gap-3 text-xs leading-6 text-[#65716b]"><ShieldCheck className="mt-1 h-4 w-4 shrink-0 text-[#28745c]" /><span>专业评分受分类与核心指标门禁约束；同类样本门禁只控制分位排名。</span></div>
         <div className="flex gap-3 text-xs leading-6 text-[#65716b]"><BarChart3 className="mt-1 h-4 w-4 shrink-0 text-[#28745c]" /><span>Barra 和 Brinson 只用于解释，不改变评分。</span></div>
       </section>
     </div>

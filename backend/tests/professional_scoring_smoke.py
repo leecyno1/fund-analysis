@@ -1,5 +1,6 @@
 import os
 import sys
+import atexit
 from datetime import date, timedelta
 from decimal import Decimal
 
@@ -11,6 +12,7 @@ from services.manager_tenure_metric_service import ManagerTenureMetricService
 from services.fund_evaluation_methodology import FundEvaluationMethodology
 from services.professional_scoring_service import ProfessionalScoringService
 from services.rolling_metric_service import RollingMetricService
+from smoke_cleanup import cleanup_fund_codes
 
 
 def _nav_series(start: date, days: int) -> list[dict]:
@@ -73,6 +75,8 @@ def main() -> int:
     init_database()
 
     fund_code = "PROSCORE.TEST"
+    cleanup_fund_codes([fund_code])
+    atexit.register(cleanup_fund_codes, [fund_code])
     fund_repo = get_fund_repo()
     nav_repo = get_nav_repo()
     profile_repo = get_research_profile_repo()
@@ -120,6 +124,7 @@ def main() -> int:
     if not result.get("positive_factors"):
         raise AssertionError(f"Expected positive scoring factors, got {result}")
 
+    cleanup_fund_codes([fund_code])
     print("OK professional scoring uses rolling, tenure and quality inputs")
     return 0
 

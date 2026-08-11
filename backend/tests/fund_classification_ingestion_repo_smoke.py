@@ -1,5 +1,6 @@
 import os
 import sys
+import atexit
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
@@ -7,6 +8,7 @@ from database import init_database
 from repositories.fund_classification_repo import FundClassificationRepo
 from repositories.fund_repo import FundRepo
 from services.fund_classification_ingestion_service import FundClassificationIngestionService
+from smoke_cleanup import cleanup_fund_codes
 
 
 def main() -> int:
@@ -14,6 +16,9 @@ def main() -> int:
     fund_repo = FundRepo()
     classification_repo = FundClassificationRepo()
     service = FundClassificationIngestionService(repository=classification_repo)
+    fixture_codes = ["990001.OF", "990002.OF", "990003.OF"]
+    cleanup_fund_codes(fixture_codes)
+    atexit.register(cleanup_fund_codes, fixture_codes)
 
     fixtures = [
         {
@@ -70,6 +75,7 @@ def main() -> int:
     if index.get("strategy_family_key") != "index_broad" or index.get("active_passive") != "passive":
         raise AssertionError(f"Index classification is not standardized: {index}")
 
+    cleanup_fund_codes(fixture_codes)
     print("OK classification ingestion persists idempotent entities, shares, peers and benchmarks")
     return 0
 

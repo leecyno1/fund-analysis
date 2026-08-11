@@ -196,7 +196,7 @@ export default function RecommendationClient({ initialFunds, initialCategories, 
                 </tbody>
               </table>
             </div>
-            <p className="mt-4 text-xs leading-6 text-[#748079]">指标缺口只通过真实净值数据补齐。后台入口：<code className="bg-[#f1f3f1] px-1.5 py-1 text-[#405149]">{initialCoverage.backfillCommand}</code></p>
+            <p className="mt-4 text-xs leading-6 text-[#748079]">指标缺口只通过真实净值数据补齐；样本不足的类别不会出现在上方可选列表中。</p>
           </div>
         </details>
       ) : null}

@@ -158,6 +158,10 @@ export function professionalFundScore(fund: SimpleFund) {
   return numberValue(scoring.overall_score, scoring.overallScore)
 }
 
+export function professionalScoreStatus(fund: SimpleFund) {
+  return textValue(asRecord(fund.professionalScoring).status) || 'unavailable'
+}
+
 export function professionalScorePercentile(fund: SimpleFund) {
   const peerPercentiles = asRecord(fund.peerPercentiles)
   const metrics = asRecord(peerPercentiles.metrics)

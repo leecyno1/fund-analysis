@@ -18,7 +18,7 @@ async function loadFunds() {
         id: String(item.id || item.key || item.name || ''),
         name: String(item.name || ''),
         count: Number(item.fund_count || 0),
-      })).filter((item: { id: string; name: string }) => item.id && item.name),
+      })).filter((item: { id: string; name: string; count: number }) => item.id && item.name && item.count > 0),
       total: Number(payload.total || 0),
       source: String(payload.source || 'fund_database'),
       error: '',

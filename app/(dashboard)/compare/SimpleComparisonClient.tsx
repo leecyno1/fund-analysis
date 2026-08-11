@@ -141,7 +141,10 @@ export default function SimpleComparisonClient({ funds }: { funds: ComparisonFun
                 <td className="px-4 py-4">{item.classification.peerGroup || '分类待确认'}</td>
                 <td className="px-4 py-4">{styleLabel(item.fund)}</td>
                 <td className="px-4 py-4">{managerName(item.fund)}</td>
-                <td className="px-4 py-4 text-right font-bold text-[#28654f]">{item.evaluation.score == null ? '—' : item.evaluation.score.toFixed(1)}</td>
+                <td className="px-4 py-4 text-right font-bold text-[#28654f]">
+                  {item.evaluation.score == null ? '—' : item.evaluation.score.toFixed(1)}
+                  {item.evaluation.score != null && item.evaluation.status === 'partial' ? <span className="mt-1 block text-[10px] font-normal text-[#987235]">部分证据</span> : null}
+                </td>
               </tr>
             ))}
           </tbody>

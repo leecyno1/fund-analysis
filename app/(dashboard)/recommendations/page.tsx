@@ -1,19 +1,32 @@
 import { backendApiBaseUrl, toCamelFund } from '@/lib/backend-api'
-import RecommendationClient, { type RecommendationCoverageReport } from './RecommendationClient'
+import RecommendationClient, { type RecommendationCoverageGroup, type RecommendationCoverageReport } from './RecommendationClient'
 
 export const dynamic = 'force-dynamic'
 
 async function loadRecommendationUniverse() {
   try {
-    const [fundResponse, categoryResponse, coverageResponse] = await Promise.all([
+    const [fundResponse, coverageResponse] = await Promise.all([
       fetch(`${backendApiBaseUrl}/api/fund-browser?page=1&page_size=30`, { cache: 'no-store' }),
-      fetch(`${backendApiBaseUrl}/api/funds/recommendation-categories?limit=100`, { cache: 'no-store' }),
       fetch(`${backendApiBaseUrl}/api/funds/recommendation-coverage?limit=100`, { cache: 'no-store' }),
     ])
-    if (!fundResponse.ok || !categoryResponse.ok) throw new Error('fund database unavailable')
+    if (!fundResponse.ok || !coverageResponse.ok) throw new Error('fund database unavailable')
     const payload = await fundResponse.json()
-    const categoryPayload = await categoryResponse.json()
-    const coveragePayload = coverageResponse.ok ? await coverageResponse.json() : {}
+    const coveragePayload = await coverageResponse.json()
+    const coverageGroups: RecommendationCoverageGroup[] = Array.isArray(coveragePayload.groups) ? coveragePayload.groups.map((group: Record<string, unknown>) => ({
+      key: String(group.key || ''),
+      name: String(group.name || group.key || ''),
+      status: String(group.status || 'blocked') as 'ready' | 'partial' | 'blocked',
+      minimumPeerCount: Number(group.minimum_peer_count || 0),
+      classifiedCount: Number(group.classified_count || 0),
+      databaseFundCount: Number(group.database_fund_count || 0),
+      evaluationMethodReadyCount: Number(group.evaluation_method_ready_count || 0),
+      metricReadyCount: Number(group.metric_ready_count || 0),
+      styleReadyCount: Number(group.style_ready_count || 0),
+      recommendationReadyCount: Number(group.recommendation_ready_count || 0),
+      missingReasonCounts: group.missing_reason_counts && typeof group.missing_reason_counts === 'object'
+        ? group.missing_reason_counts as Record<string, number>
+        : {},
+    })) : []
     const coverage: RecommendationCoverageReport = {
       summary: {
         categoryCount: Number(coveragePayload.summary?.category_count || 0),
@@ -25,26 +38,12 @@ async function loadRecommendationUniverse() {
         styleReadyCount: Number(coveragePayload.summary?.style_ready_count || 0),
         recommendationReadyCount: Number(coveragePayload.summary?.recommendation_ready_count || 0),
       },
-      groups: Array.isArray(coveragePayload.groups) ? coveragePayload.groups.map((group: Record<string, unknown>) => ({
-        key: String(group.key || ''),
-        name: String(group.name || group.key || ''),
-        status: String(group.status || 'blocked') as 'ready' | 'partial' | 'blocked',
-        minimumPeerCount: Number(group.minimum_peer_count || 0),
-        classifiedCount: Number(group.classified_count || 0),
-        databaseFundCount: Number(group.database_fund_count || 0),
-        evaluationMethodReadyCount: Number(group.evaluation_method_ready_count || 0),
-        metricReadyCount: Number(group.metric_ready_count || 0),
-        styleReadyCount: Number(group.style_ready_count || 0),
-        recommendationReadyCount: Number(group.recommendation_ready_count || 0),
-        missingReasonCounts: group.missing_reason_counts && typeof group.missing_reason_counts === 'object'
-          ? group.missing_reason_counts as Record<string, number>
-          : {},
-      })) : [],
+      groups: coverageGroups,
       backfillCommand: String(coveragePayload.metric_backfill?.command || 'npm run funds:backfill-peer-evaluation'),
     }
     return {
       funds: (payload.funds || []).map(toCamelFund),
-      categories: (categoryPayload.categories || []).map((item: { name?: string }) => String(item.name || '')).filter(Boolean),
+      categories: coverageGroups.filter((group) => group.recommendationReadyCount > 0).map((group) => group.name),
       total: Number(payload.total || 0),
       coverage,
       error: '',
