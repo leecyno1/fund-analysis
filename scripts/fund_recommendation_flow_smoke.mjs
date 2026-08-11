@@ -30,6 +30,8 @@ requireText(categoryPresets, '大盘核心', 'recommendation page must expose co
 requireText(client, 'fundCategoryPresets', 'recommendation page must use the shared category presets')
 requireText(client, '该类别暂无可核验的风格标签', 'empty style coverage must be explained honestly')
 requireText(client, '不冒充已确认风格', 'memo suggestions must be visibly separated from confirmed styles')
+requireText(client, '按风格继续缩小范围', 'recommendation page must expose quick style labels')
+requireText(client, '匹配风格：{style}', 'candidate cards must show the selected matching style')
 requireText(backendMapper, 'memoStyleSuggestions', 'frontend mapping must preserve memo style suggestion provenance')
 requireText(client, '指标缺口只通过真实净值数据补齐', 'coverage UI must reject mock metric backfills')
 requireText(recommendationPage, '/api/funds/recommendation-coverage', 'recommendation page must load category coverage')
@@ -63,6 +65,24 @@ if (baseUrl) {
     const evidence = fund.recommendationEvidence || {}
     if (!evidence.reasons?.length || !evidence.risks?.length || !evidence.dataAsOf) {
       throw new Error(`candidate evidence is incomplete: ${JSON.stringify(fund)}`)
+    }
+  }
+
+  const selectedStyle = '红利'
+  const styleResponse = await fetch(new URL(`/api/recommendations?category=${encodeURIComponent('混合型-偏股配置')}&style=${encodeURIComponent(selectedStyle)}`, baseUrl), { cache: 'no-store' })
+  const stylePayload = await styleResponse.json().catch(() => ({}))
+  if (!styleResponse.ok) throw new Error(`style recommendation API returned HTTP ${styleResponse.status}: ${JSON.stringify(stylePayload)}`)
+  if (!Array.isArray(stylePayload.data) || stylePayload.data.length === 0 || stylePayload.data.length > 10) {
+    throw new Error(`style recommendation must return one to ten real candidates: ${JSON.stringify(stylePayload)}`)
+  }
+  for (const fund of stylePayload.data) {
+    const profile = fund.researchProfile || {}
+    const tags = [profile.styleLabel, ...(profile.memoStyleSuggestions || []).map((item) => item?.value)].filter(Boolean)
+    if (!tags.includes(selectedStyle)) {
+      throw new Error(`style-filtered candidate lacks matching evidence: ${JSON.stringify(fund)}`)
+    }
+    if (profile.peerGroup !== '混合型-偏股配置') {
+      throw new Error(`style filtering leaked across peer groups: ${JSON.stringify(fund)}`)
     }
   }
 }

@@ -211,6 +211,31 @@ export default function RecommendationClient({ initialFunds, initialCategories, 
         </label>
       </section>
 
+      {category && availableStyles.length ? (
+        <section className="border border-[#dbe1dc] bg-white p-5">
+          <div className="flex flex-wrap items-end justify-between gap-3">
+            <div>
+              <h2 className="text-sm font-bold">按风格继续缩小范围</h2>
+              <p className="mt-1 text-xs leading-6 text-[#7a8580]">标签来自已确认的基金画像或调研纪要；仍只在当前同类组内推荐。</p>
+            </div>
+            {style ? <button type="button" onClick={() => { setStyle(''); void loadCandidates(category) }} className="text-xs font-bold text-[#28745c]">清除风格筛选</button> : null}
+          </div>
+          <div className="mt-4 flex flex-wrap gap-2">
+            {availableStyles.map((item) => (
+              <button
+                key={item}
+                type="button"
+                onClick={() => { setStyle(item); void loadCandidates(category, item) }}
+                aria-pressed={style === item}
+                className={`rounded-full border px-3 py-1.5 text-xs font-bold transition ${style === item ? 'border-[#28745c] bg-[#28745c] text-white' : 'border-[#cbd4ce] bg-white text-[#4d5d55] hover:border-[#7fa18f]'}`}
+              >
+                {item}
+              </button>
+            ))}
+          </div>
+        </section>
+      ) : null}
+
       {initialCoverage.groups.length ? (
         <details className="border border-[#dbe1dc] bg-white">
           <summary className="cursor-pointer list-none px-5 py-4 text-sm font-bold text-[#26362f]">
@@ -292,6 +317,7 @@ export default function RecommendationClient({ initialFunds, initialCategories, 
               const score = professionalFundScore(fund)
               const percentile = professionalScorePercentile(fund)
               const evidence = recommendationEvidence(fund)
+              const primaryStyle = styleLabel(fund)
               return (
                 <article key={fund.windCode} className="grid grid-cols-[2.6rem_minmax(0,1fr)] gap-4 border border-[#dbe1dc] bg-white p-5 transition hover:border-[#90ad9f]">
                   <div className="grid h-10 w-10 place-items-center rounded-md bg-[#edf2ee] text-sm font-black text-[#32614f]">{String(index + 1).padStart(2, '0')}</div>
@@ -309,7 +335,8 @@ export default function RecommendationClient({ initialFunds, initialCategories, 
                     </div>
                     <div className="mt-3 flex flex-wrap gap-2 text-xs">
                       <span className="rounded-sm bg-[#e9f0ec] px-2 py-1 text-[#315e4d]">{peerGroup(fund)}</span>
-                      <span className="rounded-sm bg-[#f0eee8] px-2 py-1 text-[#685f49]">{styleLabel(fund)}{styleLabelStatus(fund) === 'llm_suggested' ? ' · 纪要推断' : ''}</span>
+                      {style ? <span className="rounded-sm bg-[#e9e4d6] px-2 py-1 font-bold text-[#6d5725]">匹配风格：{style}</span> : null}
+                      {!style || primaryStyle !== style ? <span className="rounded-sm bg-[#f0eee8] px-2 py-1 text-[#685f49]">{style ? `主风格：${primaryStyle}` : primaryStyle}{styleLabelStatus(fund) === 'llm_suggested' ? ' · 纪要标签' : ''}</span> : null}
                     </div>
                     <div className="mt-4 grid grid-cols-3 gap-3 border-y border-[#edf0ed] py-3 text-xs">
                       <div><span className="block text-[#7a8580]">近 1 年</span><strong className="mt-1 block">{formatPercent(annualReturn)}</strong></div>
