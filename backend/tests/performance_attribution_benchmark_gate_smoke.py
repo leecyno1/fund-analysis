@@ -26,6 +26,24 @@ def main() -> int:
     if (mapped_code, mapped_source) != ("000905.SH", "fund_classification_catalog"):
         raise AssertionError(f"Default attribution benchmark must come from classification: {(mapped_code, mapped_source)}")
 
+    detailed_code, detailed_source, detailed_mapping = attribution._resolve_attribution_benchmark(
+        None,
+        {
+            "primary_benchmark": "中证500",
+            "benchmark_mapping": {
+                "benchmark_code": "000905.SH",
+                "benchmark_name": "中证500",
+                "benchmark_type": "tracked_index",
+                "confidence": 0.99,
+            },
+        },
+        {},
+    )
+    if (detailed_code, detailed_source) != ("000905.SH", "fund_classification_catalog"):
+        raise AssertionError(f"Classification benchmark detail lost its source: {(detailed_code, detailed_source)}")
+    if detailed_mapping.get("benchmark_name") != "中证500" or detailed_mapping.get("benchmark_code") != "000905.SH":
+        raise AssertionError(f"Classification benchmark name/code missing from attribution evidence: {detailed_mapping}")
+
     override_code, override_source = attribution._resolve_benchmark("000852", {})
     if (override_code, override_source) != ("000852.SH", "user_override"):
         raise AssertionError(f"Explicit benchmark override should be normalized and disclosed: {(override_code, override_source)}")

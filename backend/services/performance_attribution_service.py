@@ -518,9 +518,20 @@ class PerformanceAttributionService:
     ) -> Tuple[Optional[str], str, Dict[str, Any]]:
         code, source = self._resolve_benchmark(benchmark, classification_context)
         if benchmark:
-            return code, source, {"role": "user_override"}
+            return code, source, {
+                "role": "user_override",
+                "benchmark_code": code,
+                "benchmark_name": code,
+            }
         if code and re.fullmatch(r"[0-9A-Z]{6,12}\.(SH|SZ|CSI)", code):
-            return code, source, {"role": "classification_benchmark"}
+            mapping = classification_context.get("benchmark_mapping") or {}
+            return code, source, {
+                "role": "classification_benchmark",
+                "benchmark_code": code,
+                "benchmark_name": mapping.get("benchmark_name") or classification_context.get("primary_benchmark") or code,
+                "benchmark_type": mapping.get("benchmark_type"),
+                "confidence": mapping.get("confidence"),
+            }
 
         raw_data = fund.get("raw_data") if isinstance(fund.get("raw_data"), dict) else {}
         universe = raw_data.get("universe") if isinstance(raw_data.get("universe"), dict) else {}
