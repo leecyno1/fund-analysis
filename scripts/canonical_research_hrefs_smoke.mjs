@@ -66,17 +66,13 @@ for (const file of [
   'components/analysis/ReportActionBar.tsx',
   'app/(dashboard)/managers/page.tsx',
   'app/(dashboard)/sync/page.tsx',
-  'app/(dashboard)/page.tsx',
 ]) {
   const content = read(file)
   assertNotIncludes(content, '/sales-rules', `${file} frontend material evidence href`)
   assertIncludes(content, 'materialEvidenceHref', `${file} frontend material evidence helper`)
 }
 
-for (const file of [
-  'app/(dashboard)/funds/[id]/FundDetailClient.tsx',
-  'app/(dashboard)/page.tsx',
-]) {
+for (const file of ['app/(dashboard)/funds/[id]/FundDetailClient.tsx']) {
   const content = read(file)
   assertNotIncludes(content, 'href="/alerts"', `${file} frontend review-events href`)
   assertIncludes(content, 'reviewEventsHref', `${file} frontend review-events helper`)

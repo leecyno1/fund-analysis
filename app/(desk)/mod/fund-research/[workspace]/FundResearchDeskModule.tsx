@@ -132,7 +132,7 @@ export default function FundResearchDeskModule({
               {bridgeStatus === 'connected' ? '已连接牛马 Desk' : bridgeStatus === 'connecting' ? '正在连接 Desk' : '独立运行'}
             </span>
             <span className="fund-research-status">不生成虚构数据</span>
-            <span className="fund-research-status">不提供交易建议</span>
+            <span className="fund-research-status">只做基金研究评价</span>
           </div>
         </div>
 
