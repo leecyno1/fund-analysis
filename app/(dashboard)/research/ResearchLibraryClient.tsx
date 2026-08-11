@@ -129,6 +129,10 @@ export default function ResearchLibraryClient() {
     () => pendingReviews.filter((review) => review.kind === 'manager' && review.confidence >= 0.88).length,
     [pendingReviews],
   )
+  const highConfidenceLabelCount = useMemo(
+    () => pendingReviews.filter((review) => ['classification', 'style_label', 'tag'].includes(review.kind) && review.confidence >= 0.9).length,
+    [pendingReviews],
+  )
   const reviewGroups = useMemo(() => {
     const groups = new Map<string, { reportId: string; title: string; relativePath: string; items: PendingReview[] }>()
     for (const review of visibleReviews) {
@@ -352,6 +356,27 @@ export default function ResearchLibraryClient() {
     }
   }
 
+  async function confirmHighConfidenceLabels() {
+    if (!highConfidenceLabelCount) return
+    setBulkReviewing(true)
+    setFolderMessage('')
+    try {
+      const response = await fetch('/api/research-folders/reviews/confirm-labels', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ folder_id: selectedFolder?.id || null, min_confidence: 0.9 }),
+      })
+      const payload = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(payload.error || '批量确认失败')
+      setFolderMessage(`已确认 ${Number(payload.confirmed || 0)} 项高置信分类与风格标签`)
+      await Promise.all([loadMemos(), loadReviews(selectedFolder?.id || '')])
+    } catch (bulkError) {
+      setFolderMessage(bulkError instanceof Error ? bulkError.message : '批量确认失败')
+    } finally {
+      setBulkReviewing(false)
+    }
+  }
+
   async function openMemo(memo: ResearchMemo) {
     setSelectedMemo(memo)
     setDetailLoading(true)
@@ -442,6 +467,10 @@ export default function ResearchLibraryClient() {
             <button type="button" onClick={() => void confirmHighConfidenceManagers()} disabled={!highConfidenceManagerCount || bulkReviewing} className="inline-flex h-9 items-center gap-2 rounded-md border border-[#8fa99b] bg-white px-3 text-xs font-bold text-[#285d49] disabled:opacity-45">
               {bulkReviewing ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
               确认高置信经理 {highConfidenceManagerCount}
+            </button>
+            <button type="button" onClick={() => void confirmHighConfidenceLabels()} disabled={!highConfidenceLabelCount || bulkReviewing} className="inline-flex h-9 items-center gap-2 rounded-md border border-[#8fa99b] bg-white px-3 text-xs font-bold text-[#285d49] disabled:opacity-45">
+              {bulkReviewing ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
+              确认高置信标签 {highConfidenceLabelCount}
             </button>
           </div>
         </div>

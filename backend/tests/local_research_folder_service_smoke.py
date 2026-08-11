@@ -335,14 +335,24 @@ def main() -> int:
         "tags": [],
         "fund_ids": [],
         "review_status": "pending",
-        "review_proposals": [{
-            "id": "manager-high",
-            "kind": "manager",
-            "value": "张三",
-            "confidence": 0.92,
-            "review_status": "pending",
-            "source_ref": {"relative_path": "张三.docx", "excerpt": "文件名：张三.docx"},
-        }],
+        "review_proposals": [
+            {
+                "id": "manager-high",
+                "kind": "manager",
+                "value": "张三",
+                "confidence": 0.92,
+                "review_status": "pending",
+                "source_ref": {"relative_path": "张三.docx", "excerpt": "文件名：张三.docx"},
+            },
+            {
+                "id": "style-high",
+                "kind": "style_label",
+                "value": "价值",
+                "confidence": 0.94,
+                "review_status": "pending",
+                "source_ref": {"relative_path": "张三.docx", "excerpt": "投资风格：价值"},
+            },
+        ],
     }
     bulk_repo.reports["report-low"] = {
         "id": "report-low",
@@ -370,6 +380,9 @@ def main() -> int:
         raise AssertionError(f"High-confidence manager reviews must be confirmable in one action: {bulk_result}")
     if bulk_repo.reports["report-low"]["review_proposals"][0].get("review_status") != "pending":
         raise AssertionError("Low-confidence manager reviews must remain pending")
+    label_result = bulk_service.confirm_label_proposals("folder-bulk", 0.9)
+    if label_result.get("confirmed") != 1 or bulk_repo.reports["report-high"].get("style_labels") != ["价值"]:
+        raise AssertionError(f"High-confidence labels must be confirmable in one action: {label_result}")
 
     for unsafe in ("/", str(Path.home()), "/path/that/does/not/exist"):
         try:

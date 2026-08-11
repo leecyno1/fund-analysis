@@ -57,6 +57,9 @@ class FakeFolderService:
     def confirm_manager_proposals(self, folder_id=None, min_confidence=0.88):
         return {"status": "completed", "confirmed": 1, "failed": 0, "linked_fund_count": 2, "min_confidence": min_confidence}
 
+    def confirm_label_proposals(self, folder_id=None, min_confidence=0.9):
+        return {"status": "completed", "confirmed": 2, "failed": 0, "min_confidence": min_confidence}
+
 
 def main() -> int:
     service = FakeFolderService()
@@ -73,6 +76,7 @@ def main() -> int:
             "/api/research-folders/{folder_id}/scan",
             "/api/research-folders/reviews",
             "/api/research-folders/reviews/confirm-managers",
+            "/api/research-folders/reviews/confirm-labels",
             "/api/research-folders/reviews/{report_id}/{proposal_id}",
         }
         if not expected.issubset(paths):
@@ -104,6 +108,13 @@ def main() -> int:
         )
         if bulk.status_code != 200 or bulk.json().get("confirmed") != 1:
             raise AssertionError(f"Bulk manager review contract failed: {bulk.status_code} {bulk.text}")
+
+        labels = client.post(
+            "/api/research-folders/reviews/confirm-labels",
+            json={"folder_id": "folder-1", "min_confidence": 0.9},
+        )
+        if labels.status_code != 200 or labels.json().get("confirmed") != 2:
+            raise AssertionError(f"Bulk label review contract failed: {labels.status_code} {labels.text}")
 
         confirmed = client.patch(
             "/api/research-folders/reviews/report-1/proposal-1",

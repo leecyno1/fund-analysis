@@ -156,6 +156,36 @@ class LocalResearchFolderService:
             "min_confidence": min_confidence,
         }
 
+    def confirm_label_proposals(
+        self,
+        folder_id: Optional[str] = None,
+        min_confidence: float = 0.9,
+    ) -> Dict[str, Any]:
+        candidates = [
+            item for item in self.list_pending_reviews(folder_id)
+            if item.get("kind") in {"classification", "style_label", "tag"}
+            and float(item.get("confidence") or 0) >= min_confidence
+        ]
+        confirmed = 0
+        failed = 0
+        for item in candidates:
+            try:
+                self.review_proposal(
+                    str(item.get("report_id") or ""),
+                    str(item.get("id") or ""),
+                    "confirmed",
+                )
+                confirmed += 1
+            except (TypeError, ValueError):
+                failed += 1
+        return {
+            "status": "completed",
+            "requested": len(candidates),
+            "confirmed": confirmed,
+            "failed": failed,
+            "min_confidence": min_confidence,
+        }
+
     def review_proposal(self, report_id: str, proposal_id: str, action: str) -> Dict[str, Any]:
         if action not in {"confirmed", "rejected"}:
             raise ValueError("复核结果只能是 confirmed 或 rejected")

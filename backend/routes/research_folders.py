@@ -26,6 +26,11 @@ class BulkManagerReviewRequest(BaseModel):
     min_confidence: float = Field(default=0.88, ge=0, le=1)
 
 
+class BulkLabelReviewRequest(BaseModel):
+    folder_id: Optional[str] = None
+    min_confidence: float = Field(default=0.9, ge=0, le=1)
+
+
 @lru_cache(maxsize=1)
 def _get_service() -> LocalResearchFolderService:
     from repositories.local_research_folder_repo import PostgresLocalResearchFolderRepo
@@ -89,6 +94,14 @@ async def list_pending_reviews(folder_id: Optional[str] = Query(None)):
 @router.post("/reviews/confirm-managers")
 async def confirm_manager_reviews(payload: BulkManagerReviewRequest):
     return _get_service().confirm_manager_proposals(
+        folder_id=payload.folder_id,
+        min_confidence=payload.min_confidence,
+    )
+
+
+@router.post("/reviews/confirm-labels")
+async def confirm_label_reviews(payload: BulkLabelReviewRequest):
+    return _get_service().confirm_label_proposals(
         folder_id=payload.folder_id,
         min_confidence=payload.min_confidence,
     )
