@@ -63,6 +63,15 @@ const exclusionReasonLabels: Record<string, string> = {
   category_score_unavailable: '类别评分暂时无法计算',
 }
 
+const categoryPresets = [
+  { category: '指数-沪深300', label: '大盘核心', description: '跟踪中国大盘蓝筹股', mark: '01' },
+  { category: '指数-中证A500', label: '全市场核心', description: '更广泛覆盖各行业龙头', mark: '02' },
+  { category: '指数-中证500', label: '中小盘指数', description: '关注中等市值公司', mark: '03' },
+  { category: '主动权益-沪深300参考', label: '主动选股', description: '由基金经理主动选择股票', mark: '04' },
+  { category: '混合型-偏股配置', label: '偏股混合', description: '股票为主，配置更灵活', mark: '05' },
+  { category: '固收-中证全债参考', label: '稳健债券', description: '以债券收益和回撤控制为主', mark: '06' },
+] as const
+
 function exclusionReasonLabel(reason: string) {
   return exclusionReasonLabels[reason] || '基金分类或评价证据不完整'
 }
@@ -73,6 +82,10 @@ export default function RecommendationClient({ initialFunds, initialCategories, 
     ? initialCategories
     : Array.from(new Set(universe.map((fund) => peerGroup(fund)).filter((value) => value !== '类别待确认'))),
   [initialCategories, universe])
+  const quickCategories = useMemo(
+    () => categoryPresets.filter((preset) => categories.includes(preset.category)),
+    [categories],
+  )
   const [category, setCategory] = useState('')
   const [style, setStyle] = useState('')
   const [categoryFunds, setCategoryFunds] = useState<SimpleFund[]>([])
@@ -150,17 +163,47 @@ export default function RecommendationClient({ initialFunds, initialCategories, 
       {initialError ? <div className="border border-[#e5c98f] bg-[#fff8e8] px-5 py-4 text-sm text-[#78551c]">{initialError}</div> : null}
       {loadError ? <div className="border border-[#e5c98f] bg-[#fff8e8] px-5 py-4 text-sm text-[#78551c]">{loadError}</div> : null}
 
+      {quickCategories.length ? (
+        <section>
+          <div className="mb-3 flex flex-wrap items-end justify-between gap-3">
+            <div>
+              <h2 className="text-lg font-bold text-[#1e2d26]">你想先看哪一类？</h2>
+              <p className="mt-1 text-xs leading-6 text-[#76817b]">不需要先懂基金分类，点一个常见方向就能看候选。</p>
+            </div>
+            <span className="text-xs font-bold text-[#28745c]">一次只比同类基金</span>
+          </div>
+          <div className="grid gap-px overflow-hidden border border-[#d7ddd8] bg-[#d7ddd8] sm:grid-cols-2 xl:grid-cols-3">
+            {quickCategories.map((preset) => {
+              const active = category === preset.category
+              return (
+                <button
+                  key={preset.category}
+                  type="button"
+                  onClick={() => chooseCategory(preset.category)}
+                  aria-pressed={active}
+                  className={`group min-h-32 bg-white p-5 text-left transition ${active ? 'shadow-[inset_0_0_0_2px_#28745c]' : 'hover:bg-[#f5f8f5]'}`}
+                >
+                  <span className={`font-mono text-[11px] font-bold tracking-[0.18em] ${active ? 'text-[#28745c]' : 'text-[#a0aaa4]'}`}>{preset.mark}</span>
+                  <strong className="mt-5 block text-base text-[#1d2b25] group-hover:text-[#245f4b]">{preset.label}</strong>
+                  <span className="mt-1 block text-xs leading-5 text-[#76817b]">{preset.description}</span>
+                </button>
+              )
+            })}
+          </div>
+        </section>
+      ) : null}
+
       <section className="grid gap-5 border border-[#dbe1dc] bg-white p-5 md:grid-cols-2">
         <label className="block">
-          <span className="text-sm font-bold">1. 基金类别</span>
-          <span className="mt-1 block text-xs text-[#7a8580]">必选，不同类别不放入同一个排序池</span>
+          <span className="text-sm font-bold">更多专业分类</span>
+          <span className="mt-1 block text-xs text-[#7a8580]">需要更细的指数、债券或配置类别时再使用</span>
           <select value={category} onChange={(event) => void chooseCategory(event.target.value)} className="mt-3 h-11 w-full rounded-md border border-[#cfd6d0] bg-white px-3 text-sm outline-none focus:border-[#28745c]">
             <option value="">请选择一个基金类别</option>
             {categories.map((item) => <option key={item} value={item}>{item}</option>)}
           </select>
         </label>
         <label className="block">
-          <span className="text-sm font-bold">2. 风格标签</span>
+          <span className="text-sm font-bold">风格标签</span>
           <span className="mt-1 block text-xs text-[#7a8580]">可选；纪要推断会明确标注，不冒充已确认风格</span>
           <select value={style} disabled={!category || loading} onChange={(event) => {
             const nextStyle = event.target.value
@@ -170,6 +213,9 @@ export default function RecommendationClient({ initialFunds, initialCategories, 
             <option value="">不限风格</option>
             {availableStyles.map((item) => <option key={item} value={item}>{item}</option>)}
           </select>
+          {category && !loading && availableStyles.length === 0 ? (
+            <span className="mt-2 block text-xs leading-5 text-[#8a6c34]">该类别暂无可核验的风格标签，当前先按同类业绩和风险评价。</span>
+          ) : null}
         </label>
       </section>
 
