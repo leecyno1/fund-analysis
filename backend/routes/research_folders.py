@@ -23,14 +23,10 @@ class ReviewDecisionRequest(BaseModel):
 
 @lru_cache(maxsize=1)
 def _get_service() -> LocalResearchFolderService:
-    from repositories.local_research_folder_repo import LocalResearchFolderRepo
+    from repositories.local_research_folder_repo import PostgresLocalResearchFolderRepo
     from services.research_memo_metadata_extractor import get_research_memo_metadata_extractor
-    from service_registry import get_db
 
-    db = get_db()
-    if db is None:
-        raise HTTPException(status_code=503, detail="调研纪要数据库不可用")
-    repo = LocalResearchFolderRepo(db)
+    repo = PostgresLocalResearchFolderRepo()
     repo.ensure_indexes()
     extractor = get_research_memo_metadata_extractor()
     projector = ResearchMemoProfileProjectionService(report_repo=repo)

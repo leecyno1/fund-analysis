@@ -422,10 +422,22 @@ def init_database():
             last_interview_date DATE,
             last_updated TIMESTAMP DEFAULT NOW()
         )""",
-        # 调研报告表 (MongoDB 补充用)
+        # 本地调研纪要文件夹
+        """CREATE TABLE IF NOT EXISTS local_research_folders (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            path TEXT UNIQUE NOT NULL,
+            name TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'ready',
+            last_scan_at TIMESTAMPTZ,
+            last_scan_counts JSONB,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )""",
+        # 调研报告表
         """CREATE TABLE IF NOT EXISTS research_reports (
             id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
             manager_id VARCHAR(50),
+            manager_name VARCHAR(100),
             fund_ids TEXT[],
             title VARCHAR(500) NOT NULL,
             report_date DATE,
@@ -434,8 +446,35 @@ def init_database():
             summary TEXT,
             key_points JSONB,
             tags TEXT[],
+            classifications TEXT[],
+            style_labels TEXT[],
+            review_proposals JSONB NOT NULL DEFAULT '[]'::jsonb,
+            review_status TEXT,
+            local_folder_id UUID REFERENCES local_research_folders(id) ON DELETE SET NULL,
+            local_relative_path TEXT,
+            local_source_path TEXT,
+            source_hash TEXT,
+            extraction_status TEXT,
+            extraction_provider TEXT,
+            extraction_model TEXT,
+            llm_extraction_status TEXT,
+            llm_extraction_error TEXT,
             created_at TIMESTAMP DEFAULT NOW(),
             updated_at TIMESTAMP DEFAULT NOW()
+        )""",
+        """CREATE TABLE IF NOT EXISTS local_research_documents (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            folder_id UUID NOT NULL REFERENCES local_research_folders(id) ON DELETE CASCADE,
+            relative_path TEXT NOT NULL,
+            source_path TEXT NOT NULL,
+            size BIGINT,
+            mtime_ns BIGINT,
+            content_hash TEXT,
+            report_id UUID REFERENCES research_reports(id) ON DELETE SET NULL,
+            index_status TEXT NOT NULL,
+            error TEXT,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            UNIQUE(folder_id, relative_path)
         )""",
         # 调研报告切片表（RAG 证据链）
         """CREATE TABLE IF NOT EXISTS research_report_chunks (
@@ -646,6 +685,10 @@ def init_database():
         "CREATE INDEX IF NOT EXISTS idx_managers_name ON managers(name)",
         "CREATE INDEX IF NOT EXISTS idx_reports_manager ON research_reports(manager_id)",
         "CREATE INDEX IF NOT EXISTS idx_reports_date ON research_reports(report_date)",
+        "CREATE INDEX IF NOT EXISTS idx_reports_fund_ids ON research_reports USING GIN(fund_ids)",
+        "CREATE INDEX IF NOT EXISTS idx_reports_local_folder ON research_reports(local_folder_id)",
+        "CREATE INDEX IF NOT EXISTS idx_local_research_documents_hash ON local_research_documents(content_hash)",
+        "CREATE INDEX IF NOT EXISTS idx_local_research_documents_report ON local_research_documents(report_id)",
         "CREATE INDEX IF NOT EXISTS idx_report_chunks_report ON research_report_chunks(report_id)",
         "CREATE INDEX IF NOT EXISTS idx_report_chunks_embedding ON research_report_chunks(embedding_id)",
         "CREATE INDEX IF NOT EXISTS idx_data_snapshots_source ON data_source_snapshots(source)",
@@ -683,6 +726,20 @@ def init_database():
         "ALTER TABLE fund_nav ADD COLUMN IF NOT EXISTS benchmark_nav DECIMAL(10, 4)",
         "ALTER TABLE fund_nav ADD COLUMN IF NOT EXISTS discount_rate DECIMAL(12, 8)",
         "UPDATE fund_nav SET unit_nav = nav WHERE unit_nav IS NULL AND nav IS NOT NULL",
+        "ALTER TABLE research_reports ADD COLUMN IF NOT EXISTS manager_name VARCHAR(100)",
+        "ALTER TABLE research_reports ADD COLUMN IF NOT EXISTS classifications TEXT[]",
+        "ALTER TABLE research_reports ADD COLUMN IF NOT EXISTS style_labels TEXT[]",
+        "ALTER TABLE research_reports ADD COLUMN IF NOT EXISTS review_proposals JSONB NOT NULL DEFAULT '[]'::jsonb",
+        "ALTER TABLE research_reports ADD COLUMN IF NOT EXISTS review_status TEXT",
+        "ALTER TABLE research_reports ADD COLUMN IF NOT EXISTS local_folder_id UUID REFERENCES local_research_folders(id) ON DELETE SET NULL",
+        "ALTER TABLE research_reports ADD COLUMN IF NOT EXISTS local_relative_path TEXT",
+        "ALTER TABLE research_reports ADD COLUMN IF NOT EXISTS local_source_path TEXT",
+        "ALTER TABLE research_reports ADD COLUMN IF NOT EXISTS source_hash TEXT",
+        "ALTER TABLE research_reports ADD COLUMN IF NOT EXISTS extraction_status TEXT",
+        "ALTER TABLE research_reports ADD COLUMN IF NOT EXISTS extraction_provider TEXT",
+        "ALTER TABLE research_reports ADD COLUMN IF NOT EXISTS extraction_model TEXT",
+        "ALTER TABLE research_reports ADD COLUMN IF NOT EXISTS llm_extraction_status TEXT",
+        "ALTER TABLE research_reports ADD COLUMN IF NOT EXISTS llm_extraction_error TEXT",
     ]
 
     try:
