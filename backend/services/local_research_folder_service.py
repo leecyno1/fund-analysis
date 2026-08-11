@@ -433,13 +433,17 @@ class LocalResearchFolderService:
         elif filename_manager := re.match(r"^([\u4e00-\u9fff·]{2,4})(?=[\s_-])", path.stem):
             value = filename_manager.group(1).strip()
             candidate = self.manager_resolver(value) if self.manager_resolver else None
+            dated_name = bool(
+                2 <= len(value.replace("·", "")) <= 3
+                and re.search(r"(?:20\d{6}|\d{6})$", path.stem.strip())
+            )
             proposals.append(self._proposal(
                 "manager",
                 value,
                 path,
                 root,
                 f"文件名：{path.name}",
-                0.9 if candidate else 0.82,
+                0.9 if candidate or dated_name else 0.82,
                 candidate_id=(candidate or {}).get("manager_id"),
             ))
         elif self.manager_resolver and (
@@ -633,7 +637,16 @@ class LocalResearchFolderService:
                 })
                 key = ("fund", wind_code)
                 current = merged.get(key)
-                if not current or float(current.get("confidence") or 0) < proposal["confidence"]:
+                if current and float(current.get("confidence") or 0) >= proposal["confidence"]:
+                    current["extraction_source"] = proposal["extraction_source"]
+                    current.setdefault("source_ref", {}).update({
+                        "manager_name": manager_name,
+                        "report_date": report_date,
+                        "fund_name": relation.get("fund_name"),
+                        "management_company": relation.get("management_company"),
+                        "verification_excerpt": proposal["source_ref"]["excerpt"],
+                    })
+                else:
                     merged[key] = proposal
         return list(merged.values())
 
@@ -740,6 +753,25 @@ class LocalResearchFolderService:
                 proposal["review_status"] = old["review_status"]
                 proposal["reviewed_at"] = old.get("reviewed_at")
                 proposal["candidate_id"] = old.get("candidate_id") or proposal.get("candidate_id")
+
+        confirmed_managers = {
+            str(proposal.get("value") or "").strip(): proposal.get("reviewed_at")
+            for proposal in fresh["review_proposals"]
+            if proposal.get("kind") == "manager" and proposal.get("review_status") == "confirmed"
+        }
+        for proposal in fresh["review_proposals"]:
+            source_ref = proposal.get("source_ref") or {}
+            manager_name = str(source_ref.get("manager_name") or "").strip()
+            if (
+                proposal.get("kind") == "fund"
+                and proposal.get("review_status") == "pending"
+                and proposal.get("extraction_source") == "tushare.fund_manager"
+                and manager_name in confirmed_managers
+            ):
+                proposal["review_status"] = "confirmed"
+                proposal["reviewed_at"] = confirmed_managers[manager_name] or self._now()
+
+        for proposal in fresh["review_proposals"]:
             if proposal.get("review_status") == "confirmed":
                 self._apply_proposal(fields, proposal, confirmed=True)
         fresh.update(fields)

@@ -266,12 +266,31 @@ class FundRepo:
         """
         data_sql = text(f"""
             SELECT
-                id, wind_code, name, type, manager_ids, total_asset, nav, nav_date,
-                establishment_date, performance_data, risk_metrics, raw_data,
-                updated_at
+                funds.id, funds.wind_code, funds.name, funds.type, funds.manager_ids,
+                funds.total_asset, funds.nav, funds.nav_date, funds.establishment_date,
+                funds.performance_data, funds.risk_metrics, funds.raw_data, funds.updated_at,
+                COALESCE(metric_quality.quality_metric_count, 0) AS quality_metric_count
             FROM funds
+            LEFT JOIN (
+                SELECT
+                    target_id,
+                    COUNT(DISTINCT metric_name) FILTER (
+                        WHERE metric_window = '1y'
+                          AND metric_name IN ('annualized_return', 'max_drawdown', 'sharpe_ratio', 'annualized_volatility')
+                    ) AS quality_metric_count,
+                    MAX(as_of_date) AS latest_metric_date
+                FROM metric_snapshots
+                WHERE target_type = 'fund'
+                GROUP BY target_id
+            ) metric_quality ON metric_quality.target_id = funds.wind_code
             WHERE {where_sql}
-            ORDER BY updated_at DESC NULLS LAST, wind_code ASC
+            ORDER BY
+                COALESCE(metric_quality.quality_metric_count, 0) DESC,
+                metric_quality.latest_metric_date DESC NULLS LAST,
+                CASE WHEN COALESCE(cardinality(funds.manager_ids), 0) > 0 THEN 0 ELSE 1 END,
+                funds.nav_date DESC NULLS LAST,
+                funds.updated_at DESC NULLS LAST,
+                funds.wind_code ASC
             LIMIT :limit OFFSET :offset
         """)
         count_sql = text(f"SELECT COUNT(*) FROM funds WHERE {where_sql}")

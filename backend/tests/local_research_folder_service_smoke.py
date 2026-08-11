@@ -157,7 +157,7 @@ def main() -> int:
             "model": "fake-model",
             "proposals": [
                 {"kind": "manager", "value": "张三", "confidence": 0.96, "excerpt": "基金经理：张三"},
-                {"kind": "fund", "value": "000001.OF", "confidence": 0.85, "excerpt": "基金经理：张三"},
+                {"kind": "fund", "value": "000001.OF", "confidence": 0.95, "excerpt": "代表基金：000001.OF"},
                 {"kind": "style_label", "value": "成长", "confidence": 0.91, "excerpt": "风格：成长、大盘、低换手"},
             ],
         }
@@ -193,6 +193,24 @@ def main() -> int:
         )
         if not any(item.get("kind") == "manager" and item.get("value") == "范妍" for item in filename_proposals):
             raise AssertionError(f"Manager name in a standard memo filename must be extracted: {filename_proposals}")
+        private_manager_proposals = service._extract_proposals(
+            "关注回撤与估值。",
+            root,
+            root / "章秀奇 趣时 240703.docx",
+        )
+        private_manager = next(
+            (item for item in private_manager_proposals if item.get("kind") == "manager" and item.get("value") == "章秀奇"),
+            None,
+        )
+        if not private_manager or private_manager.get("confidence") != 0.9:
+            raise AssertionError(f"Dated manager memo filenames are direct identity evidence: {private_manager_proposals}")
+        generic_filename_proposals = service._extract_proposals(
+            "普通会议内容。",
+            root,
+            root / "会议纪要 市场讨论 240703.docx",
+        )
+        if any(item.get("kind") == "manager" and item.get("confidence", 0) >= 0.88 for item in generic_filename_proposals):
+            raise AssertionError(f"Generic dated titles must not become high-confidence managers: {generic_filename_proposals}")
         speaker_proposals = service._extract_proposals(
             "会议时间：2025年2月11日\n主讲人：张仲维先生，现任基金经理。",
             root,
@@ -304,12 +322,15 @@ def main() -> int:
             raise AssertionError("Report should become reviewed after its last proposal is decided")
 
         second = service.scan_folder(folder["id"])
-        if second.get("counts") != {"created": 0, "updated": 0, "unchanged": 5, "failed": 0, "supported": 5}:
-            raise AssertionError(f"Unchanged files should not be reparsed: {second}")
+        if second.get("counts") != {"created": 0, "updated": 1, "unchanged": 4, "failed": 0, "supported": 5}:
+            raise AssertionError(f"First rescan should attach Tushare verification to direct fund evidence: {second}")
         if second.get("profile_projection", {}).get("projected_count") != 1:
             raise AssertionError(f"A repeat scan should rebuild profiles from reviewed memos: {second}")
         if projection_calls[-1][1] != ["000001.OF"]:
             raise AssertionError(f"Scan projection should include confirmed fund identities: {projection_calls[-1]}")
+        third = service.scan_folder(folder["id"])
+        if third.get("counts") != {"created": 0, "updated": 0, "unchanged": 5, "failed": 0, "supported": 5}:
+            raise AssertionError(f"Verified unchanged files should not be reparsed again: {third}")
 
         time.sleep(0.002)
         notes_path.write_text("基金经理：李四\n风格：均衡、大盘\n更新后的风险控制记录。", encoding="utf-8")

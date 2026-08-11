@@ -32,6 +32,14 @@ for (const [label, source] of [
   }
 }
 
+const defaultFunds = await fetchJson('/api/fund-browser?limit=10')
+if (!Array.isArray(defaultFunds.data) || defaultFunds.data.length < 10) {
+  throw new Error(`default fund browser must show a useful first page: ${JSON.stringify(defaultFunds)}`)
+}
+if (defaultFunds.data.some((fund) => fund.professionalScoring?.overall_score == null)) {
+  throw new Error(`default fund browser must prioritize evidence-ready funds: ${JSON.stringify(defaultFunds.data)}`)
+}
+
 const categories = await fetchJson('/api/fund-browser?peerGroup=%E6%8C%87%E6%95%B0-%E6%B2%AA%E6%B7%B1300&limit=30')
 if (categories.source !== 'standardized_peer_group_universe') {
   throw new Error(`fund browser must disclose standardized peer-group source: ${JSON.stringify(categories)}`)

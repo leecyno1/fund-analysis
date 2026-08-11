@@ -439,6 +439,14 @@ class FundClassificationRepo:
                     fsc.wind_code ASC
             ) peer_funds
             ORDER BY
+                (
+                    SELECT COUNT(DISTINCT ms.metric_name)
+                    FROM metric_snapshots ms
+                    WHERE ms.target_type = 'fund'
+                      AND ms.target_id = peer_funds.wind_code
+                      AND ms.metric_window = '1y'
+                      AND ms.metric_name IN ('annualized_return', 'max_drawdown', 'sharpe_ratio', 'annualized_volatility')
+                ) DESC,
                 CASE WHEN performance_data IS NULL OR performance_data = '{}'::jsonb THEN 1 ELSE 0 END,
                 CASE WHEN risk_metrics IS NULL OR risk_metrics = '{}'::jsonb THEN 1 ELSE 0 END,
                 nav_date DESC NULLS LAST,
