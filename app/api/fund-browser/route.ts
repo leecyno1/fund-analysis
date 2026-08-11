@@ -7,11 +7,12 @@ export async function GET(request: Request) {
   const url = new URL(request.url)
   const keyword = url.searchParams.get('search')?.trim() || ''
   const peerGroup = url.searchParams.get('peerGroup')?.trim() || ''
-  const limit = Math.max(1, Math.min(Number(url.searchParams.get('limit') || 30), 100))
+  const page = Math.max(1, Number(url.searchParams.get('page') || 1))
+  const limit = Math.max(1, Math.min(Number(url.searchParams.get('limit') || url.searchParams.get('page_size') || 30), 100))
 
   try {
     const backendUrl = new URL('/api/fund-browser', backendApiBaseUrl)
-    backendUrl.searchParams.set('page', '1')
+    backendUrl.searchParams.set('page', String(page))
     backendUrl.searchParams.set('page_size', String(limit))
     if (peerGroup) backendUrl.searchParams.set('peer_group', peerGroup)
     if (keyword) backendUrl.searchParams.set('keyword', keyword)
@@ -25,7 +26,7 @@ export async function GET(request: Request) {
     return NextResponse.json({
       data: sourceFunds.slice(0, limit).map(toCamelFund),
       pagination: {
-        page: 1,
+        page,
         limit,
         total: Number(payload.total || sourceFunds.length),
       },

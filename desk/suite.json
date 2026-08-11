@@ -3,7 +3,7 @@
   "id": "professional-fund-research-suite",
   "name": "基金选择助手",
   "description": "帮助普通用户找基金、看调研、做现场分析、查看业绩归因并获得同类候选基金。",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "publisher": "leecyno1",
   "upstream": "https://github.com/leecyno1/fund-analysis",
   "tags": ["基金浏览", "基金评价", "基金分类", "业绩归因", "基金推荐"],
@@ -182,11 +182,11 @@
     },
     {
       "id": "fund-recommendations",
-      "name": "标签推荐",
+      "name": "基金推荐",
       "description": "按基金类别和风格标签返回不超过十只真实候选基金。",
       "tags": ["基金推荐", "同类评价", "风格标签"],
       "route": "/mod/fund-research/recommendations",
-      "navigation": { "itemOrder": 40, "label": "标签推荐" },
+      "navigation": { "itemOrder": 40, "label": "基金推荐" },
       "defaultInstall": true
     },
     {

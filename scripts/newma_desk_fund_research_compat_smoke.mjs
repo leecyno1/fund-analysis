@@ -34,6 +34,7 @@ assert(suite.runtime.defaultBaseUrl === 'http://127.0.0.1:3000', 'Suite must use
 assert(suite.manifest.schemaVersion === '1.1', 'Manifest must use version 1.1')
 assert(suite.manifest.compatibility.level === 3, 'Suite pages must keep Level 3 Context')
 assert(suite.pages.length === 5, 'Suite must expose five focused pages')
+assert(suite.pages.find((page) => page.id === 'fund-recommendations')?.name === '基金推荐', 'Suite must use the current recommendation name')
 
 const expectedPages = [
   ['fund-discover', '/mod/fund-research/discover'],
@@ -64,6 +65,7 @@ for (const [actionId, action] of Object.entries(suite.manifest.actions)) {
 assert(dataService.baseUrl === 'http://127.0.0.1:3000/api', 'Data service must use the active Next.js adapter')
 assert(dataService.healthPath === '/newma-desk/health', 'Health path must resolve below the /api base URL')
 assert(dataService.capabilities['fund.compare'].path === '/funds/research-compare', 'Desk compare must avoid purchase and suitability adapters')
+assert(read('app/api/fund-browser/route.ts').includes("url.searchParams.get('page_size')"), 'Desk fund search must honor its page_size schema')
 assert(!JSON.stringify(suite).match(/DATABASE_URL|api[_-]?key|secret|token/i), 'Suite must not expose credentials')
 assert(!JSON.stringify(dataService).match(/DATABASE_URL|api[_-]?key|secret|token/i), 'Data descriptor must not expose credentials')
 
