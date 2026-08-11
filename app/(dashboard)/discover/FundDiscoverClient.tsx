@@ -171,7 +171,7 @@ export default function FundDiscoverClient({ initialFunds, initialCategories, in
       <section className="grid gap-4 sm:grid-cols-3">
         <Link href="/recommendations" className="flex items-center gap-4 border border-[#dbe1dc] bg-white p-4 transition hover:border-[#8cb3a4]">
           <span className="grid h-10 w-10 place-items-center rounded-md bg-[#e5efe9] text-[#23644f]"><Sparkles className="h-5 w-5" /></span>
-          <span className="min-w-0"><strong className="block text-sm">按风格找基金</strong><small className="mt-1 block text-xs text-[#76817b]">成长、价值、均衡等标签</small></span>
+          <span className="min-w-0"><strong className="block text-sm">看同类候选</strong><small className="mt-1 block text-xs text-[#76817b]">先按类别评价，再按风格筛选</small></span>
           <ArrowRight className="ml-auto h-4 w-4 text-[#829089]" />
         </Link>
         <Link href="/analysis" className="flex items-center gap-4 border border-[#dbe1dc] bg-white p-4 transition hover:border-[#8cb3a4]">

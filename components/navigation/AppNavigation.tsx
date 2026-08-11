@@ -26,7 +26,7 @@ const navigationItems = [
   {
     href: '/recommendations',
     icon: Tags,
-    label: '标签推荐',
+    label: '基金推荐',
     matches: ['/recommendations', '/screening', '/rankings'],
   },
 ] as const

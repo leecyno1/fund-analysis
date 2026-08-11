@@ -109,11 +109,11 @@ export const fundResearchWorkspaces: FundResearchWorkspace[] = [
   {
     id: 'recommendations',
     modId: 'fund-recommendations',
-    title: '标签推荐',
-    shortTitle: '标签推荐',
+    title: '基金推荐',
+    shortTitle: '基金推荐',
     purpose: '按基金类别和主流风格标签，从同类基金中返回不超过十只真实候选。',
     primaryHref: '/recommendations',
-    primaryLabel: '打开标签推荐',
+    primaryLabel: '打开基金推荐',
     capabilities: [
       { name: '类别筛选', purpose: '只在同类基金中生成候选', evidence: '基金分类目录与同类组' },
       { name: '风格筛选', purpose: '按已确认的风格标签缩小候选', evidence: '持仓、收益行为和纪要标签' },
