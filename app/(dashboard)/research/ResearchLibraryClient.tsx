@@ -72,6 +72,8 @@ type PendingReview = {
   }
 }
 
+type ReviewFilter = 'manager' | 'labels' | 'all'
+
 const emptyCounts: ScanCounts = { created: 0, updated: 0, unchanged: 0, failed: 0, supported: 0 }
 
 function managerLabel(memo: ResearchMemo) {
@@ -101,6 +103,7 @@ export default function ResearchLibraryClient() {
   const [connecting, setConnecting] = useState(false)
   const [scanning, setScanning] = useState(false)
   const [reviewingId, setReviewingId] = useState('')
+  const [reviewFilter, setReviewFilter] = useState<ReviewFilter>('manager')
   const [error, setError] = useState('')
   const [folderMessage, setFolderMessage] = useState('')
   const [query, setQuery] = useState('')
@@ -111,9 +114,19 @@ export default function ResearchLibraryClient() {
 
   const selectedFolder = folders.find((folder) => folder.id === selectedFolderId) || folders[0] || null
   const displayedCounts = lastScanCounts || selectedFolder?.last_scan_counts || emptyCounts
+  const reviewCounts = useMemo(() => ({
+    manager: pendingReviews.filter((review) => review.kind === 'manager').length,
+    labels: pendingReviews.filter((review) => ['classification', 'style_label', 'tag'].includes(review.kind)).length,
+    all: pendingReviews.length,
+  }), [pendingReviews])
+  const visibleReviews = useMemo(() => pendingReviews.filter((review) => {
+    if (reviewFilter === 'manager') return review.kind === 'manager'
+    if (reviewFilter === 'labels') return ['classification', 'style_label', 'tag'].includes(review.kind)
+    return true
+  }), [pendingReviews, reviewFilter])
   const reviewGroups = useMemo(() => {
     const groups = new Map<string, { reportId: string; title: string; relativePath: string; items: PendingReview[] }>()
-    for (const review of pendingReviews) {
+    for (const review of visibleReviews) {
       const group = groups.get(review.report_id) || {
         reportId: review.report_id,
         title: review.report_title,
@@ -128,7 +141,11 @@ export default function ResearchLibraryClient() {
       ...group,
       items: group.items.sort((left, right) => kindOrder[left.kind] - kindOrder[right.kind] || right.confidence - left.confidence),
     }))
-  }, [pendingReviews])
+  }, [visibleReviews])
+  const llmUnavailableCount = useMemo(
+    () => memos.filter((memo) => ['failed', 'unavailable'].includes(String(memo.llm_extraction_status || ''))).length,
+    [memos],
+  )
 
   const loadMemos = useCallback(async () => {
     setLoading(true)
@@ -237,6 +254,18 @@ export default function ResearchLibraryClient() {
     }
   }
 
+  function selectFolder(folderId: string) {
+    const folder = folders.find((item) => item.id === folderId)
+    if (!folder) return
+    setSelectedFolderId(folder.id)
+    setFolderPath(folder.path)
+    setLastScanCounts(null)
+    setFolderMessage('')
+    void loadReviews(folder.id).catch((loadError) => {
+      setFolderMessage(loadError instanceof Error ? loadError.message : '待确认内容暂时不可用')
+    })
+  }
+
   async function scanFolder() {
     if (!selectedFolder) return
     setScanning(true)
@@ -323,6 +352,19 @@ export default function ResearchLibraryClient() {
               <h2 id="folder-heading" className="text-sm font-bold">本地文件夹路径</h2>
               <span className="text-xs text-[#748078]">上次扫描：{formatDate(selectedFolder?.last_scan_at, true)}</span>
             </div>
+            {folders.length ? (
+              <div className="mt-3 flex items-center gap-3">
+                <label htmlFor="research-folder-select" className="shrink-0 text-xs font-bold text-[#59675f]">已连接</label>
+                <select
+                  id="research-folder-select"
+                  value={selectedFolder?.id || ''}
+                  onChange={(event) => selectFolder(event.target.value)}
+                  className="h-10 min-w-0 flex-1 rounded-md border border-[#cfd6d0] bg-white px-3 text-sm outline-none focus:border-[#28745c]"
+                >
+                  {folders.map((folder) => <option key={folder.id} value={folder.id}>{folder.name}</option>)}
+                </select>
+              </div>
+            ) : null}
             <div className="mt-3 flex min-w-0 flex-col gap-2 sm:flex-row">
               <label className="sr-only" htmlFor="research-folder-path">本地文件夹路径</label>
               <input
@@ -360,11 +402,32 @@ export default function ResearchLibraryClient() {
 
       {folderMessage ? <div className="flex items-center gap-2 border border-[#e2d09d] bg-[#fff9ea] px-4 py-3 text-sm text-[#725921]"><CircleAlert className="h-4 w-4 shrink-0" />{folderMessage}</div> : null}
       {error ? <div className="border border-[#e5c98f] bg-[#fff8e8] px-5 py-4 text-sm text-[#78551c]">{error}</div> : null}
+      {llmUnavailableCount ? (
+        <div className="border border-[#d7dee8] bg-[#f5f8fc] px-5 py-4 text-sm leading-6 text-[#46586c]">
+          {llmUnavailableCount} 份纪要暂未完成 LLM 提取。当前只识别基金经理、基金代码和原文明示的分类/风格字段；不会把普通关键词当成已确认风格。
+        </div>
+      ) : null}
 
       <section aria-labelledby="review-heading" className="border-t border-[#dce1dc] pt-5">
-        <div className="flex items-center justify-between gap-4 pb-3">
-          <div><h2 id="review-heading" className="text-lg font-bold">待确认</h2><p className="mt-1 text-xs text-[#748078]">确认经理后，会自动关联 Tushare 已核验的任期基金。</p></div>
-          <span className="text-xs text-[#748078]">{reviewGroups.length} 份纪要 · {pendingReviews.length} 项</span>
+        <div className="flex flex-wrap items-end justify-between gap-4 pb-3">
+          <div><h2 id="review-heading" className="text-lg font-bold">待确认</h2><p className="mt-1 text-xs text-[#748078]">先确认基金经理；系统会自动关联 Tushare 已核验的任期基金。</p></div>
+          <span className="text-xs text-[#748078]">当前 {reviewGroups.length} 份纪要 · {visibleReviews.length} 项</span>
+        </div>
+        <div className="mb-3 flex flex-wrap gap-2" aria-label="待确认类型">
+          {([
+            ['manager', `经理归类 ${reviewCounts.manager}`],
+            ['labels', `分类与风格 ${reviewCounts.labels}`],
+            ['all', `全部 ${reviewCounts.all}`],
+          ] as Array<[ReviewFilter, string]>).map(([value, label]) => (
+            <button
+              key={value}
+              type="button"
+              onClick={() => setReviewFilter(value)}
+              className={`rounded-full px-3 py-1.5 text-xs font-bold ${reviewFilter === value ? 'bg-[#173f35] text-white' : 'border border-[#ccd5cf] bg-white text-[#59675f]'}`}
+            >
+              {label}
+            </button>
+          ))}
         </div>
         {reviewGroups.length ? (
           <div className="space-y-3">
@@ -390,7 +453,7 @@ export default function ResearchLibraryClient() {
             ))}
           </div>
         ) : (
-          <div className="flex h-20 items-center gap-2 border-y border-[#dbe1dc] bg-white px-5 text-sm text-[#718078]"><CheckCircle2 className="h-4 w-4 text-[#28745c]" />没有待确认内容</div>
+          <div className="flex h-20 items-center gap-2 border-y border-[#dbe1dc] bg-white px-5 text-sm text-[#718078]"><CheckCircle2 className="h-4 w-4 text-[#28745c]" />当前类型没有待确认内容</div>
         )}
       </section>
 
@@ -438,7 +501,7 @@ export default function ResearchLibraryClient() {
                       {[...(memo.classifications || []), ...(memo.style_labels || []), ...(memo.tags || [])].slice(0, 6).map((tag, index) => <span key={`${tag}-${index}`} className="rounded-sm bg-[#edf1ed] px-2 py-1 text-[11px] text-[#53625b]">{tag}</span>)}
                       {memo.review_status === 'pending' ? <span className="rounded-sm bg-[#fff2d8] px-2 py-1 text-[11px] text-[#795b1d]">有待确认内容</span> : null}
                     </div>
-                    {memo.llm_extraction_status === 'failed' ? <p className="mt-2 text-[11px] text-[#8a6a2d]">模型提取暂不可用，已使用原文规则继续处理</p> : null}
+                    {['failed', 'unavailable'].includes(String(memo.llm_extraction_status || '')) ? <p className="mt-2 text-[11px] text-[#8a6a2d]">LLM 提取暂不可用，仅保留身份信息和原文明示字段等待人工确认</p> : null}
                   </div>
                   <ChevronRight className="hidden h-4 w-4 self-center text-[#849088] sm:block" />
                 </button>
@@ -465,9 +528,9 @@ export default function ResearchLibraryClient() {
                 {[...(selectedMemo.classifications || []), ...(selectedMemo.style_labels || []), ...(selectedMemo.tags || [])].map((tag, index) => <span key={`${tag}-${index}`} className="inline-flex items-center gap-1 rounded-sm bg-[#e8efeb] px-2 py-1 text-xs text-[#315e4d]"><Tag className="h-3 w-3" />{tag}</span>)}
               </div>
               {selectedMemo.summary ? <p className="mt-5 border-l-4 border-[#d7b46a] bg-[#fff9eb] px-4 py-3 text-sm leading-7 text-[#66583a]">{selectedMemo.summary}</p> : null}
-              {selectedMemo.llm_extraction_status === 'failed' ? (
+              {['failed', 'unavailable'].includes(String(selectedMemo.llm_extraction_status || '')) ? (
                 <div className="mt-4 border border-[#e2d09d] bg-[#fff9ea] px-4 py-3 text-xs leading-6 text-[#725921]">
-                  模型提取暂不可用，已使用原文规则继续处理。经理、基金和标签仍需人工确认。
+                  LLM 提取暂不可用。当前只保留基金经理、基金代码和原文明示字段，所有结果仍需人工确认。
                 </div>
               ) : null}
               {(selectedMemo.key_points || []).length ? <div className="mt-6 space-y-2">{(selectedMemo.key_points || []).map((point, index) => <div key={index} className="flex gap-2 text-sm leading-7 text-[#435149]"><CheckCircle2 className="mt-1.5 h-4 w-4 shrink-0 text-[#28745c]" />{point}</div>)}</div> : null}

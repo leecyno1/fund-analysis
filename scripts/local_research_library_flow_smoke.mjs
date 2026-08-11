@@ -14,10 +14,12 @@ function assertIncludes(content, expected, label) {
 
 const page = read('app/(dashboard)/research/ResearchLibraryClient.tsx')
 const backendMain = read('backend/main.py')
-const reportRoute = read('backend/routes/research_reports.py')
+const memoRepo = read('backend/repositories/local_research_folder_repo.py')
 
 for (const expected of [
   '本地文件夹路径',
+  '已连接',
+  'research-folder-select',
   '扫描更新',
   '上次扫描',
   '新增',
@@ -28,7 +30,9 @@ for (const expected of [
   '确认',
   '拒绝',
   '来源原文',
-  '模型提取暂不可用，已使用原文规则继续处理',
+  '经理归类',
+  '当前只识别基金经理、基金代码和原文明示的分类/风格字段',
+  '不会把普通关键词当成已确认风格',
 ]) {
   assertIncludes(page, expected, 'research library user flow')
 }
@@ -44,7 +48,7 @@ for (const expected of [
 
 assertIncludes(backendMain, 'research_folders', 'backend registers local folder routes')
 for (const expected of ['llm_extraction_status', 'extraction_provider', 'extraction_model', 'llm_extraction_error']) {
-  assertIncludes(reportRoute, expected, 'memo detail exposes extraction provenance')
+  assertIncludes(memoRepo, expected, 'memo storage exposes extraction provenance')
 }
 
 for (const route of [

@@ -24,16 +24,30 @@ class ReviewDecisionRequest(BaseModel):
 @lru_cache(maxsize=1)
 def _get_service() -> LocalResearchFolderService:
     from repositories.local_research_folder_repo import PostgresLocalResearchFolderRepo
+    from repositories.manager_repo import ManagerRepo
     from services.research_memo_metadata_extractor import get_research_memo_metadata_extractor
     from services.research_memo_manager_fund_resolver import ResearchMemoManagerFundResolver
 
     repo = PostgresLocalResearchFolderRepo()
     repo.ensure_indexes()
     extractor = get_research_memo_metadata_extractor()
+    manager_repo = ManagerRepo()
     manager_fund_resolver = ResearchMemoManagerFundResolver()
     projector = ResearchMemoProfileProjectionService(report_repo=repo)
+
+    def resolve_manager(manager_name: str):
+        manager = manager_repo.get_manager(manager_name)
+        if not manager:
+            return None
+        return {
+            "manager_id": manager.get("wind_code"),
+            "manager_name": manager.get("name"),
+            "company": manager.get("company"),
+        }
+
     return LocalResearchFolderService(
         repo=repo,
+        manager_resolver=resolve_manager,
         metadata_extractor=extractor.extract,
         manager_fund_resolver=manager_fund_resolver.resolve,
         profile_projector=projector.project_report,

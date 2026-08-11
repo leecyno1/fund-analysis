@@ -350,6 +350,11 @@ class LocalResearchFolderService:
     def _extract_proposals(self, content: str, root: Path, path: Path) -> List[Dict[str, Any]]:
         proposals: List[Dict[str, Any]] = []
         explicit_manager = re.search(r"基金经理\s*[：:]\s*([\u4e00-\u9fffA-Za-z·]{2,40})", content)
+        if not explicit_manager:
+            explicit_manager = re.search(
+                r"(?:主讲人|主讲嘉宾)\s*[：:]\s*(?:基金经理\s*)?([\u4e00-\u9fff·]{2,4})(?=先生|女士|[，,、。\s])(?:先生|女士)?",
+                content,
+            )
         if explicit_manager:
             value = explicit_manager.group(1).strip()
             candidate = self.manager_resolver(value) if self.manager_resolver else None
@@ -374,6 +379,24 @@ class LocalResearchFolderService:
                 0.9 if candidate else 0.82,
                 candidate_id=(candidate or {}).get("manager_id"),
             ))
+        elif self.manager_resolver and (
+            embedded_manager := re.search(
+                r"^[\u4e00-\u9fff·]{2,12}?([\u4e00-\u9fff·]{2,4})(?:总)?(?:路演|交流|访谈)",
+                path.stem,
+            )
+        ):
+            value = embedded_manager.group(1).strip()
+            candidate = self.manager_resolver(value)
+            if candidate:
+                proposals.append(self._proposal(
+                    "manager",
+                    value,
+                    path,
+                    root,
+                    f"文件名：{path.name}",
+                    0.88,
+                    candidate_id=candidate.get("manager_id"),
+                ))
         elif path.parent != root and 2 <= len(path.parent.name) <= 40:
             proposals.append(self._proposal(
                 "manager",
@@ -395,16 +418,26 @@ class LocalResearchFolderService:
                 0.92,
             ))
 
-        for value in self.CLASSIFICATIONS:
-            if value.lower() in content.lower():
-                proposals.append(self._proposal(
-                    "classification", value, path, root, self._excerpt_for_value(content, value), 0.78
-                ))
-        for value in self.STYLE_LABELS:
-            if value.lower() in content.lower():
-                proposals.append(self._proposal(
-                    "style_label", value, path, root, self._excerpt_for_value(content, value), 0.76
-                ))
+        explicit_fields = (
+            ("classification", self.CLASSIFICATIONS, r"(?:基金分类|基金类型|产品类型)\s*[：:]\s*([^\r\n]+)"),
+            ("style_label", self.STYLE_LABELS, r"(?:投资风格|基金风格|风格标签|风格)\s*[：:]\s*([^\r\n]+)"),
+        )
+        for kind, allowed_values, pattern in explicit_fields:
+            for match in re.finditer(pattern, content, re.IGNORECASE):
+                stated_value = match.group(1).strip()
+                for value in allowed_values:
+                    if value.lower() not in stated_value.lower():
+                        continue
+                    proposal = self._proposal(
+                        kind,
+                        value,
+                        path,
+                        root,
+                        self._line_excerpt(content, match.start()),
+                        0.94,
+                    )
+                    proposal["extraction_source"] = "explicit_field"
+                    proposals.append(proposal)
         return proposals
 
     def _extract_metadata(self, content: str, filename: str) -> Dict[str, Any]:
@@ -426,21 +459,33 @@ class LocalResearchFolderService:
         if not source_path.exists() or not source_path.is_relative_to(root):
             source_path = path
         report_date = self._report_date(source_path, source_path.stat().st_mtime)
+        content = str(report.get("content") or "")
+        if not content:
+            content = self._extract_text(source_path, source_path.read_bytes()).strip()
         extraction = None
         if report.get("llm_extraction_status") != "complete":
-            content = str(report.get("content") or "")
-            if not content:
-                content = self._extract_text(source_path, source_path.read_bytes()).strip()
             extraction = self._extract_metadata(content, source_path.name)
-        proposals = [
-            proposal
-            for proposal in (report.get("review_proposals") or [])
-            if not (
-                proposal.get("kind") == "fund"
-                and proposal.get("extraction_source") == "tushare.fund_manager"
-                and proposal.get("review_status") != "confirmed"
-            )
+        proposals = self._extract_proposals(content, root, source_path)
+        proposals = self._merge_proposals(
+            proposals,
+            (extraction or {}).get("proposals") or [],
+            root,
+            source_path,
+        )
+        existing_llm_proposals = [
+            proposal for proposal in (report.get("review_proposals") or [])
+            if proposal.get("extraction_source") == "llm"
         ]
+        proposals_by_key = {
+            (proposal.get("kind"), proposal.get("value")): proposal
+            for proposal in proposals
+        }
+        for proposal in existing_llm_proposals:
+            key = (proposal.get("kind"), proposal.get("value"))
+            current = proposals_by_key.get(key)
+            if not current or float(proposal.get("confidence") or 0) > float(current.get("confidence") or 0):
+                proposals_by_key[key] = proposal
+        proposals = list(proposals_by_key.values())
         enriched = self._add_manager_fund_proposals(
             proposals,
             report_date,
@@ -448,17 +493,11 @@ class LocalResearchFolderService:
             root,
             source_path,
         )
-        if extraction:
-            enriched = self._merge_proposals(
-                enriched,
-                extraction.get("proposals") or [],
-                root,
-                source_path,
-            )
-            enriched = self._merge_review_state(
-                {**report, "review_proposals": enriched},
-                report,
-            )["review_proposals"]
+        merged_report = self._merge_review_state(
+            {**report, "review_proposals": enriched},
+            report,
+        )
+        enriched = merged_report["review_proposals"]
         if (
             enriched == (report.get("review_proposals") or [])
             and report_date == str(report.get("report_date") or "")
@@ -468,6 +507,12 @@ class LocalResearchFolderService:
         fields = {
             "report_date": report_date,
             "review_proposals": enriched,
+            "manager_id": merged_report.get("manager_id") or "",
+            "manager_name": merged_report.get("manager_name") or "",
+            "classifications": merged_report.get("classifications") or [],
+            "style_labels": merged_report.get("style_labels") or [],
+            "tags": merged_report.get("tags") or [],
+            "fund_ids": merged_report.get("fund_ids") or [],
             "review_status": "pending" if any(
                 proposal.get("review_status") == "pending" for proposal in enriched
             ) else "reviewed",

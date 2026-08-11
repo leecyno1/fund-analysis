@@ -193,6 +193,20 @@ def main() -> int:
         )
         if not any(item.get("kind") == "manager" and item.get("value") == "范妍" for item in filename_proposals):
             raise AssertionError(f"Manager name in a standard memo filename must be extracted: {filename_proposals}")
+        speaker_proposals = service._extract_proposals(
+            "会议时间：2025年2月11日\n主讲人：张仲维先生，现任基金经理。",
+            root,
+            root / "机构交流纪要.pdf",
+        )
+        if not any(item.get("kind") == "manager" and item.get("value") == "张仲维" for item in speaker_proposals):
+            raise AssertionError(f"Named speaker must be extracted as a manager candidate: {speaker_proposals}")
+        false_style_proposals = service._extract_proposals(
+            "会议主题是估值分析，组合需要均衡配置，渠道讨论了FOF业务。",
+            root,
+            root / "普通市场讨论.md",
+        )
+        if any(item.get("kind") in {"classification", "style_label"} for item in false_style_proposals):
+            raise AssertionError(f"Ordinary keywords must not become style or classification proposals: {false_style_proposals}")
         if service._report_date(root / "路演纪要20250207.pdf", 0) != "2025-02-07":
             raise AssertionError("Compact memo date in filename must override file mtime")
         if service._report_date(root / "范妍 25年2月18日.docx", 0) != "2025-02-18":
