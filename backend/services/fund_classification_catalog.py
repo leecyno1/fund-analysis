@@ -8,7 +8,7 @@ from typing import Any, Dict, List
 class FundClassificationCatalog:
     """标准分类定义的唯一来源。"""
 
-    VERSION = "fund_classification_catalog_v4"
+    VERSION = "fund_classification_catalog_v5"
 
     STRATEGY_FAMILIES: List[Dict[str, Any]] = [
         {
@@ -280,6 +280,33 @@ class FundClassificationCatalog:
         },
     ]
 
+    ACTIVE_EQUITY_SECTOR_RULES: List[Dict[str, Any]] = [
+        {
+            "aliases": ["中证上游资源产业指数"],
+            "benchmark_code": "SECTOR-RESOURCE",
+            "benchmark_name": "资源产业",
+            "peer_group_key": "peer-active-equity-sector-resource",
+        },
+        {
+            "aliases": ["中证全指信息技术指数", "中证全指电信业务指数"],
+            "benchmark_code": "SECTOR-TECH-MEDIA",
+            "benchmark_name": "信息技术/传媒",
+            "peer_group_key": "peer-active-equity-sector-tech-media",
+        },
+        {
+            "aliases": ["中证内地消费主题指数"],
+            "benchmark_code": "SECTOR-CONSUMPTION",
+            "benchmark_name": "消费主题",
+            "peer_group_key": "peer-active-equity-sector-consumption",
+        },
+        {
+            "aliases": ["中证新能源指数", "中证新能源汽车指数", "中证港股通能源综合指数"],
+            "benchmark_code": "SECTOR-NEW-ENERGY",
+            "benchmark_name": "新能源",
+            "peer_group_key": "peer-active-equity-sector-new-energy",
+        },
+    ]
+
     ACTIVE_FIXED_INCOME_REFERENCE_RULES: List[Dict[str, Any]] = [
         {
             "aliases": ["中证全债指数"],
@@ -415,6 +442,20 @@ class FundClassificationCatalog:
                 "exclusion_rules": {
                     "exclude": ["指数基金", "指数增强", "行业主题", "多权益市场基准"],
                 },
+                "minimum_peer_count": 5,
+            })
+        for rule in cls.ACTIVE_EQUITY_SECTOR_RULES:
+            groups.append({
+                "id": rule["peer_group_key"],
+                "key": rule["peer_group_key"],
+                "name": f"主动权益-行业/{rule['benchmark_name']}",
+                "strategy_family_key": "active_equity_sector",
+                "asset_class": "equity",
+                "active_passive": "active",
+                "benchmark_code": rule["benchmark_code"],
+                "benchmark_name": rule["benchmark_name"],
+                "inclusion_rules": {"legalType": "股票型", "minimumSectorBenchmarkWeight": 70},
+                "exclusion_rules": {"exclude": ["行业基准权重不足", "跨行业基准无法归一"]},
                 "minimum_peer_count": 5,
             })
         for rule in cls.ACTIVE_FIXED_INCOME_REFERENCE_RULES:

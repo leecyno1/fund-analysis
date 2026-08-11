@@ -29,7 +29,7 @@ class FundClassificationIngestionService:
         "事件驱动", "大数据",
     )
     ACTIVE_FIXED_INCOME_NAME_EXCLUSIONS = (
-        "可转债", "转债", "二级债", "信用", "产业债", "双债", "增强", "混合",
+        "可转债", "转债", "二级债", "信用", "产业债", "双债", "混合",
     )
     ACTIVE_EQUITY_ALLOWED_SECONDARY_TERMS = (
         "存款", "利率", "中债", "全债", "综合债", "国债", "债券", "同业存单",
@@ -43,6 +43,7 @@ class FundClassificationIngestionService:
 
     INDEX_RULES = tuple(FundClassificationCatalog.TRACKED_INDEX_RULES)
     ACTIVE_EQUITY_RULES = tuple(FundClassificationCatalog.ACTIVE_EQUITY_REFERENCE_RULES)
+    ACTIVE_EQUITY_SECTOR_RULES = tuple(FundClassificationCatalog.ACTIVE_EQUITY_SECTOR_RULES)
     ACTIVE_FIXED_INCOME_RULES = tuple(FundClassificationCatalog.ACTIVE_FIXED_INCOME_REFERENCE_RULES)
 
     def __init__(self, repository: Optional[Any] = None):
@@ -266,6 +267,9 @@ class FundClassificationIngestionService:
             return None, "active_equity_contract_type_conflict"
         if not declared_benchmark:
             return None, "missing_declared_benchmark"
+        sector_candidate = self._active_equity_sector_candidate(declared_benchmark)
+        if sector_candidate is not None:
+            return sector_candidate, "eligible"
         lower_name = name.lower()
         if any(term in lower_name for term in self.ACTIVE_EQUITY_NAME_EXCLUSIONS):
             return None, "unsupported_active_equity_sector_or_index_style"
@@ -298,6 +302,35 @@ class FundClassificationIngestionService:
                 f"为主权益参考（权重{match['weight']:g}%）。基准代码仅表示主权益参考，不代表完整复合基准。"
             ),
         }, "eligible"
+
+    def _active_equity_sector_candidate(self, declared_benchmark: str) -> Optional[Dict[str, Any]]:
+        matches = self._weighted_rule_matches(self.ACTIVE_EQUITY_SECTOR_RULES, declared_benchmark)
+        weights: Dict[str, float] = {}
+        rules: Dict[str, Dict[str, Any]] = {}
+        for match in matches:
+            key = match["rule"]["peer_group_key"]
+            weights[key] = weights.get(key, 0.0) + float(match["weight"])
+            rules[key] = match["rule"]
+        candidates = [key for key, weight in weights.items() if weight >= 70]
+        if len(candidates) != 1:
+            return None
+        key = candidates[0]
+        rule = rules[key]
+        return {
+            "strategy_family_key": "active_equity_sector",
+            "asset_class": "equity",
+            "active_passive": "active",
+            "peer_group_key": rule["peer_group_key"],
+            "benchmark_code": rule["benchmark_code"],
+            "benchmark_name": rule["benchmark_name"],
+            "benchmark_type": "declared_sector_bucket",
+            "mapping_method": "declared_benchmark_sector_alias_and_weight",
+            "classification_confidence": 0.96,
+            "benchmark_confidence": 0.96,
+            "benchmark_weight": round(weights[key], 4),
+            "automatic_rule_scope": "active_stock_explicit_sector_reference",
+            "rationale": f"合同基准中{rule['benchmark_name']}行业指数权重合计{weights[key]:g}%，达到行业主题分类门槛。",
+        }
 
     def _active_fixed_income_candidate(
         self,

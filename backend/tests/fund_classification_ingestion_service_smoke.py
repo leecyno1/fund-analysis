@@ -221,6 +221,16 @@ def main() -> int:
             }},
         },
         {
+            "wind_code": "980025.OF",
+            "name": "审计新能源股票A",
+            "type": "股票型",
+            "raw_data": {"universe": {
+                "benchmark": "中证新能源指数收益率×75%+中证港股通能源综合指数收益率×10%+中证综合债券指数收益率×15%",
+                "invest_type": "股票型",
+                "contract_type": "股票型",
+            }},
+        },
+        {
             "wind_code": "980021.OF",
             "name": "审计平衡配置混合A",
             "type": "混合型",
@@ -258,7 +268,7 @@ def main() -> int:
     ])
 
     groups = plan.get("groups") or []
-    if plan.get("summary", {}).get("eligible_funds") != 16 or len(groups) != 12:
+    if plan.get("summary", {}).get("eligible_funds") != 17 or len(groups) != 13:
         raise AssertionError(f"Only high-confidence standardized funds should be eligible: {plan}")
     money = next(group for group in groups if group.get("strategy_family_key") == "cash_management")
     if money.get("benchmark_code") != "DR007" or len(money.get("shares") or []) != 2:
@@ -300,6 +310,9 @@ def main() -> int:
     enhanced_bond = next(group for group in groups if group.get("strategy_family_key") == "fixed_income_equity_allocation")
     if enhanced_bond.get("benchmark_weight") != 10:
         raise AssertionError(f"Bond fund equity allocation bucket failed: {enhanced_bond}")
+    sector_equity = next(group for group in groups if group.get("peer_group_key") == "peer-active-equity-sector-new-energy")
+    if sector_equity.get("benchmark_weight") != 85:
+        raise AssertionError(f"Explicit sector benchmark classification failed: {sector_equity}")
 
     mixed_groups = {group.get("strategy_family_key"): group for group in groups if group.get("asset_class") == "multi_asset"}
     if mixed_groups.get("mixed_equity_allocation", {}).get("benchmark_weight") != 80:
