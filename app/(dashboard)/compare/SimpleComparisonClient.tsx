@@ -76,6 +76,16 @@ function volatilityMetric(fund: SimpleFund, window: string) {
   )
 }
 
+function latestMetric(fund: SimpleFund, metric: string) {
+  const performance = asRecord(fund.performanceData)
+  const latest = windowMetrics(fund, 'latest')
+  return numberValue(performance[metric], latest[metric])
+}
+
+function formatMoneyIncome(value: number | null | undefined) {
+  return value == null || Number.isNaN(value) ? '—' : `${value.toFixed(4)} 元`
+}
+
 function metricLeader(
   funds: ComparisonFund[],
   value: (fund: SimpleFund) => number | null,
@@ -95,6 +105,7 @@ export default function SimpleComparisonClient({ funds }: { funds: ComparisonFun
   const comparable = fullyClassified && peerGroupIds.length === 1
   const chartData = useMemo(() => normalizedChartData(funds, selectedWindow.days), [funds, selectedWindow.days])
   const peerGroup = comparable ? funds[0].classification.peerGroup : ''
+  const isMoneyMarket = peerGroup.startsWith('货币-')
   const scoreRanking = [...funds]
     .filter((item) => item.evaluation.score != null)
     .sort((left, right) => Number(right.evaluation.score) - Number(left.evaluation.score))
@@ -105,6 +116,9 @@ export default function SimpleComparisonClient({ funds }: { funds: ComparisonFun
   const returnLeader = metricLeader(funds, (fund) => returnMetric(fund, window))
   const drawdownLeader = metricLeader(funds, (fund) => drawdownMetric(fund, window), 'high')
   const sharpeLeader = metricLeader(funds, (fund) => sharpeMetric(fund, window))
+  const sevenDayYieldLeader = metricLeader(funds, (fund) => latestMetric(fund, 'seven_day_annualized_yield'))
+  const incomePer10000Leader = metricLeader(funds, (fund) => latestMetric(fund, 'income_per_10000'))
+  const assetLeader = metricLeader(funds, (fund) => numberValue(fund.totalAsset))
 
   return (
     <div className="space-y-7">
@@ -155,11 +169,21 @@ export default function SimpleComparisonClient({ funds }: { funds: ComparisonFun
             </div>
           </div>
           <div className="mt-5 grid gap-px overflow-hidden border border-[#e1e6e2] bg-[#e1e6e2] sm:grid-cols-3">
-            <div className="bg-[#f8faf8] p-4"><div className="text-xs text-[#748079]">{selectedWindow.label}收益领先</div><strong className="mt-2 block text-sm">{returnLeader?.item.fund.name || '数据待补'}</strong><span className="mt-1 block text-xs text-[#66726c]">{formatPercent(returnLeader?.value)}</span></div>
-            <div className="bg-[#f8faf8] p-4"><div className="text-xs text-[#748079]">回撤控制较好</div><strong className="mt-2 block text-sm">{drawdownLeader?.item.fund.name || '数据待补'}</strong><span className="mt-1 block text-xs text-[#66726c]">{formatPercent(drawdownLeader?.value)}</span></div>
-            <div className="bg-[#f8faf8] p-4"><div className="text-xs text-[#748079]">Sharpe 较高</div><strong className="mt-2 block text-sm">{sharpeLeader?.item.fund.name || '数据待补'}</strong><span className="mt-1 block text-xs text-[#66726c]">{sharpeLeader?.value?.toFixed(2) || '—'}</span></div>
+            {isMoneyMarket ? (
+              <>
+                <div className="bg-[#f8faf8] p-4"><div className="text-xs text-[#748079]">七日年化较高</div><strong className="mt-2 block text-sm">{sevenDayYieldLeader?.item.fund.name || '数据待补'}</strong><span className="mt-1 block text-xs text-[#66726c]">{formatPercent(sevenDayYieldLeader?.value)}</span></div>
+                <div className="bg-[#f8faf8] p-4"><div className="text-xs text-[#748079]">万份收益较高</div><strong className="mt-2 block text-sm">{incomePer10000Leader?.item.fund.name || '数据待补'}</strong><span className="mt-1 block text-xs text-[#66726c]">{formatMoneyIncome(incomePer10000Leader?.value)}</span></div>
+                <div className="bg-[#f8faf8] p-4"><div className="text-xs text-[#748079]">基金规模较大</div><strong className="mt-2 block text-sm">{assetLeader?.item.fund.name || '数据待补'}</strong><span className="mt-1 block text-xs text-[#66726c]">{formatAsset(assetLeader?.value)}</span></div>
+              </>
+            ) : (
+              <>
+                <div className="bg-[#f8faf8] p-4"><div className="text-xs text-[#748079]">{selectedWindow.label}收益领先</div><strong className="mt-2 block text-sm">{returnLeader?.item.fund.name || '数据待补'}</strong><span className="mt-1 block text-xs text-[#66726c]">{formatPercent(returnLeader?.value)}</span></div>
+                <div className="bg-[#f8faf8] p-4"><div className="text-xs text-[#748079]">回撤控制较好</div><strong className="mt-2 block text-sm">{drawdownLeader?.item.fund.name || '数据待补'}</strong><span className="mt-1 block text-xs text-[#66726c]">{formatPercent(drawdownLeader?.value)}</span></div>
+                <div className="bg-[#f8faf8] p-4"><div className="text-xs text-[#748079]">Sharpe 较高</div><strong className="mt-2 block text-sm">{sharpeLeader?.item.fund.name || '数据待补'}</strong><span className="mt-1 block text-xs text-[#66726c]">{sharpeLeader?.value?.toFixed(2) || '—'}</span></div>
+              </>
+            )}
           </div>
-          <div className="mt-4 flex gap-3 text-xs leading-6 text-[#65716b]"><ShieldCheck className="mt-1 h-4 w-4 shrink-0 text-[#28745c]" /><span>如果收益、回撤和 Sharpe 由不同基金领先，说明没有单一维度全面胜出，应继续查看经理、风格和归因证据。</span></div>
+          <div className="mt-4 flex gap-3 text-xs leading-6 text-[#65716b]"><ShieldCheck className="mt-1 h-4 w-4 shrink-0 text-[#28745c]" /><span>{isMoneyMarket ? '货币基金按收益率、万份收益、规模和净值稳定性评价，不使用股票基金的 Sharpe 结论。' : '如果收益、回撤和 Sharpe 由不同基金领先，说明没有单一维度全面胜出，应继续查看经理、风格和归因证据。'}</span></div>
         </section>
       ) : null}
 
@@ -234,6 +258,17 @@ export default function SimpleComparisonClient({ funds }: { funds: ComparisonFun
               <p className="mt-1 text-xs text-[#7a8580]">指标窗口与上方时间选择一致；缺失数据不会估算补齐。</p>
             </div>
             <div className="overflow-x-auto border border-[#dbe1dc] bg-white">
+              {isMoneyMarket ? (
+                <table className="w-full min-w-[760px] border-collapse text-left text-sm">
+                  <thead className="bg-[#f1f4f1] text-xs text-[#66726c]"><tr><th className="px-4 py-3">基金</th><th className="px-4 py-3 text-right">七日年化</th><th className="px-4 py-3 text-right">万份收益</th><th className="px-4 py-3 text-right">近 1 年收益</th><th className="px-4 py-3 text-right">规模</th><th className="px-4 py-3 text-right">同类有效样本</th></tr></thead>
+                  <tbody className="divide-y divide-[#e5e9e5]">
+                    {funds.map((item) => {
+                      const fund = item.fund as SimpleFund
+                      return <tr key={item.fund.windCode}><td className="px-4 py-4 font-bold">{item.fund.name || item.fund.windCode}</td><td className="px-4 py-4 text-right">{formatPercent(latestMetric(fund, 'seven_day_annualized_yield'))}</td><td className="px-4 py-4 text-right">{formatMoneyIncome(latestMetric(fund, 'income_per_10000'))}</td><td className="px-4 py-4 text-right">{formatPercent(returnMetric(fund, '1y'))}</td><td className="px-4 py-4 text-right">{formatAsset(item.fund.totalAsset)}</td><td className="px-4 py-4 text-right">{item.evaluation.validPeerCount || '—'}</td></tr>
+                    })}
+                  </tbody>
+                </table>
+              ) : (
               <table className="w-full min-w-[820px] border-collapse text-left text-sm">
                 <thead className="bg-[#f1f4f1] text-xs text-[#66726c]">
                   <tr>
@@ -263,6 +298,7 @@ export default function SimpleComparisonClient({ funds }: { funds: ComparisonFun
                   })}
                 </tbody>
               </table>
+              )}
             </div>
           </section>
         </>

@@ -72,7 +72,7 @@ for (const obsoleteNav of ['投资者选基', '销售规则', '基金池', '基�
   assertNotIncludes(appNavigation, obsoleteNav, 'primary navigation removes professional workflow label')
 }
 
-for (const activeNav of ['找基金', '调研库', 'AI 分析', '标签推荐']) {
+for (const activeNav of ['找基金', '调研库', 'AI 分析', '基金推荐']) {
   assertIncludes(appNavigation, activeNav, `primary navigation keeps simple product label ${activeNav}`)
 }
 for (const route of ['/discover', '/research', '/analysis', '/recommendations']) {
@@ -83,6 +83,8 @@ assertIncludes(simpleProductScope, '必须先确认基金类别，再进行同�
 assertIncludes(comparisonPage, 'peerGroupIds.length === 1', 'simple comparison enforces one professional peer group')
 assertIncludes(comparisonPage, '横向比较结论', 'simple comparison summarizes research priority for ordinary users')
 assertIncludes(comparisonPage, '现场综合分析', 'simple comparison links the leading candidate to on-demand analysis')
+assertIncludes(comparisonPage, '七日年化较高', 'money-market comparison uses category-specific income evidence')
+assertIncludes(comparisonPage, '不使用股票基金的 Sharpe 结论', 'money-market comparison rejects stock-fund comparison language')
 assertNotIncludes(comparisonPage, 'purchasePlan', 'simple comparison excludes purchase workflow state')
 
 assertIncludes(legacyRedirect, 'redirect(mergedResearchRouteTarget(pathname))', 'legacy redirect helper centralizes page redirect')
