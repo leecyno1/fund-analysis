@@ -23,6 +23,8 @@ const reportsRoute = read('backend/routes/reports.py')
 const evidenceReport = read('backend/services/evidence_report.py')
 const syncBff = read('app/api/sync/wind/route.ts')
 const syncPage = read('app/(dashboard)/sync/page.tsx')
+const managerSyncScript = read('backend/scripts/sync_fund_manager_tenure.py')
+const simpleFundDetail = read('app/(dashboard)/funds/[id]/SimpleFundDetailClient.tsx')
 
 assertIncludes(dataSyncRoute, 'from services.manager_tenure_metric_service import ManagerTenureMetricService', 'data sync imports manager tenure metric service')
 assertIncludes(dataSyncRoute, 'manager_tenure_start = max(active_begin_dates)', 'data sync uses conservative current team tenure start')
@@ -37,5 +39,8 @@ assertIncludes(evidenceReport, '## 现任经理任期切片', 'deterministic rep
 assertIncludes(evidenceReport, '不能把经理历史代表作或前任经理业绩直接外推', 'manager tenure section blocks misleading attribution')
 assertIncludes(syncBff, 'tenureMetrics: payload.tenure_metrics || null', 'sync BFF forwards manager tenure metrics')
 assertIncludes(syncPage, '经理任期切片', 'sync page displays manager tenure metric evidence')
+assertIncludes(managerSyncScript, '--fund-selection-coverage', 'manager sync can cover funds used by the selector')
+assertIncludes(managerSyncScript, "family.key NOT IN ('index_broad', 'index_fixed_income', 'cash_management')", 'manager sync focuses on manager-relevant fund categories')
+assertIncludes(simpleFundDetail, '现任团队起点', 'simple fund detail displays the conservative manager tenure start')
 
 console.log('OK manager tenure slice evidence is synced and reported')

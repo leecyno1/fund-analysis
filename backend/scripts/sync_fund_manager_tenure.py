@@ -68,18 +68,63 @@ def select_research_linked_codes(limit: int, missing_only: bool) -> List[str]:
         return [row.wind_code for row in conn.execute(sql, {"limit": max(1, limit)}).fetchall()]
 
 
+def select_fund_selection_coverage_codes(limit: int, missing_only: bool) -> List[str]:
+    """优先补齐有真实评价指标的主动与固收基金经理关系。"""
+    missing_sql = ""
+    if missing_only:
+        missing_sql = "AND COALESCE(cardinality(fund.manager_ids), 0) = 0"
+    sql = text(f"""
+        WITH representatives AS (
+          SELECT DISTINCT ON (entity.id)
+            share.wind_code,
+            fund.total_asset,
+            EXISTS (
+              SELECT 1 FROM metric_snapshots metric
+              WHERE metric.target_type = 'fund'
+                AND metric.target_id = share.wind_code
+                AND metric.metric_window = '1y'
+                AND metric.metric_name = 'annualized_return'
+            ) AS metric_ready
+          FROM fund_entities entity
+          JOIN strategy_families family ON family.id = entity.strategy_family_id
+          JOIN fund_share_classes share
+            ON share.entity_id = entity.id AND share.status = 'active'
+          JOIN funds fund ON fund.wind_code = share.wind_code
+          WHERE entity.lifecycle_stage = 'active'
+            AND family.key NOT IN ('index_broad', 'index_fixed_income', 'cash_management')
+            AND share.wind_code LIKE '%.OF'
+            {missing_sql}
+          ORDER BY entity.id, share.is_primary DESC, fund.total_asset DESC NULLS LAST, share.wind_code
+        )
+        SELECT wind_code
+        FROM representatives
+        ORDER BY metric_ready DESC, total_asset DESC NULLS LAST, wind_code
+        LIMIT :limit
+    """)
+    with get_engine().connect() as conn:
+        return [row.wind_code for row in conn.execute(sql, {"limit": max(1, limit)}).fetchall()]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="同步真实基金经理关系和任期指标")
     parser.add_argument("--codes", default="", help="逗号分隔基金代码")
     parser.add_argument("--limit", type=int, default=200)
     parser.add_argument("--include-existing", action="store_true")
+    parser.add_argument(
+        "--fund-selection-coverage",
+        action="store_true",
+        help="补齐基金选择器中主动与固收基金的经理关系",
+    )
     parser.add_argument("--throttle", type=float, default=0.15)
     args = parser.parse_args()
 
     init_database()
     codes = [item.strip().upper() for item in args.codes.split(",") if item.strip()]
     if not codes:
-        codes = select_research_linked_codes(args.limit, missing_only=not args.include_existing)
+        if args.fund_selection_coverage:
+            codes = select_fund_selection_coverage_codes(args.limit, missing_only=not args.include_existing)
+        else:
+            codes = select_research_linked_codes(args.limit, missing_only=not args.include_existing)
     else:
         codes = codes[:max(1, args.limit)]
     if not codes:

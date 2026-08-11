@@ -175,6 +175,10 @@ export default function SimpleFundDetailClient({ fund, nav, evaluation, research
   const scoreIsPartial = evaluation.status === 'partial'
   const usablePeerMetrics = evaluation.peerMetrics.filter((metric) => metric.sampleStatus === 'sufficient' && metric.percentile != null)
   const manager = managerName(typedFund)
+  const researchProfile = asRecord(fund.researchProfile)
+  const managerTenureStart = typeof researchProfile.managerTenureStart === 'string'
+    ? researchProfile.managerTenureStart
+    : ''
   const classification = evaluation.peerGroup || '专业分类待确认'
   const benchmark = evaluation.benchmark || String(fund.benchmark || '') || '基准待补充'
   const analysisHref = `/analysis?${new URLSearchParams({ fundCode: fund.windCode }).toString()}`
@@ -194,6 +198,7 @@ export default function SimpleFundDetailClient({ fund, nav, evaluation, research
             <h1 className="mt-3 break-words text-3xl font-bold leading-tight text-[#18231e] sm:text-4xl">{fund.name || fund.windCode}</h1>
             <div className="mt-4 flex flex-wrap gap-x-6 gap-y-2 text-sm text-[#65716b]">
               <span className="inline-flex items-center gap-2"><UserRound className="h-4 w-4 text-[#28745c]" />{manager}</span>
+              {managerTenureStart ? <span>现任团队起点 {formatDate(managerTenureStart)}</span> : null}
               <span>{styleLabel(typedFund)}</span>
               <span>{activePassiveLabels[evaluation.activePassive] || evaluation.activePassive || '管理方式待确认'}</span>
             </div>
