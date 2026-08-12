@@ -14,7 +14,7 @@ class FolderValidationError(ValueError):
 
 
 class LocalResearchFolderService:
-    SUPPORTED_SUFFIXES = {".md", ".txt", ".pdf", ".docx"}
+    SUPPORTED_SUFFIXES = {".md", ".txt", ".pdf", ".docx", ".pptx"}
     STYLE_LABELS = (
         "成长",
         "价值",
@@ -313,7 +313,7 @@ class LocalResearchFolderService:
                 self.repo.upsert_document(document)
                 return {"relative_path": relative_path, "status": "unchanged", "report_id": duplicate.get("report_id"), "duplicate": True}
 
-            content = self._extract_text(resolved_path, raw).strip()
+            content = self._extract_text(resolved_path, raw).replace("\x00", "").strip()
             if not content:
                 raise ValueError("未提取到可检索文字")
             extraction = self._extract_metadata(content, resolved_path.name)
@@ -408,6 +408,17 @@ class LocalResearchFolderService:
 
             document = Document(BytesIO(raw))
             return "\n".join(paragraph.text for paragraph in document.paragraphs)
+        if suffix == ".pptx":
+            from io import BytesIO
+            from pptx import Presentation
+
+            presentation = Presentation(BytesIO(raw))
+            return "\n".join(
+                shape.text
+                for slide in presentation.slides
+                for shape in slide.shapes
+                if getattr(shape, "has_text_frame", False) and shape.text.strip()
+            )
         raise ValueError(f"不支持的文件格式：{suffix}")
 
     def _extract_proposals(self, content: str, root: Path, path: Path) -> List[Dict[str, Any]]:
