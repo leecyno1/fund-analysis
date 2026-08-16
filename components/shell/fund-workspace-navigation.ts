@@ -4,6 +4,7 @@ import {
   Bot,
   BookOpenText,
   ChartNoAxesCombined,
+  ClipboardCheck,
   Compass,
   Database,
   GitCompareArrows,
@@ -40,6 +41,7 @@ export const fundWorkspaceNavigation: readonly FundWorkspaceNavigationGroup[] = 
     items: [
       { href: '/compare', label: '同类比较', shortLabel: '比较', icon: GitCompareArrows, matches: ['/compare'] },
       { href: '/evaluation', label: '评价与分类', shortLabel: '评价', icon: BadgeCheck, matches: ['/evaluation'] },
+      { href: '/research/pending', label: '待确认收件箱', shortLabel: '待确认', icon: ClipboardCheck, matches: ['/research/pending'] },
       { href: '/research', label: '调研纪要', shortLabel: '纪要', icon: BookOpenText, matches: ['/research', '/reports'] },
       { href: '/analysis/advanced', label: '业绩归因', shortLabel: '归因', icon: ChartNoAxesCombined, matches: ['/analysis/advanced', '/barra', '/brinson'] },
     ],
@@ -66,11 +68,36 @@ export function isFundWorkspaceItemActive(
   pathname: string,
   item: FundWorkspaceNavigationItem,
 ) {
-  return item.matches.some((match) => (
+  // First check if this item matches at all
+  const selfMatches = item.matches.some((match) => (
     match === '/'
       ? pathname === '/'
       : pathname === match || pathname.startsWith(`${match}/`)
   ))
+  if (!selfMatches) return false
+
+  // Deduplicate against more specific sibling items: only mark active if no
+  // other registered item claims a longer prefix of the same pathname. This
+  // prevents e.g. /research/pending activating both 「调研纪要」and 「待确认收件箱」.
+  const allItems = [
+    ...fundWorkspaceNavigation.flatMap((group) => group.items),
+    fundWorkspaceDataNavigation,
+  ]
+  const bestLength = allItems.reduce((best, candidate) => {
+    for (const match of candidate.matches) {
+      const matches = match === '/'
+        ? pathname === '/'
+        : pathname === match || pathname.startsWith(`${match}/`)
+      if (matches && match.length > best) return match.length
+    }
+    return best
+  }, 0)
+  return item.matches.some((match) => {
+    const matches = match === '/'
+      ? pathname === '/'
+      : pathname === match || pathname.startsWith(`${match}/`)
+    return matches && match.length === bestLength
+  })
 }
 
 export function currentFundWorkspaceItem(pathname: string) {
