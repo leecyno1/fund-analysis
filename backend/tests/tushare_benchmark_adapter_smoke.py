@@ -12,6 +12,8 @@ from services.tushare_service import TushareDataService
 class FakePro:
     def __init__(self):
         self.calls = []
+        self.global_calls = []
+        self.fx_calls = []
         self.repo_calls = []
 
     def index_daily(self, **kwargs):
@@ -32,6 +34,20 @@ class FakePro:
                 "adj_nav": 13940.0 + offset * 0.4,
             }
             for offset in range(20)
+        ])
+
+    def index_global(self, **kwargs):
+        self.global_calls.append(kwargs)
+        return pd.DataFrame([
+            {"ts_code": "HSI", "trade_date": "20260702", "close": 24100.0},
+            {"ts_code": "HSI", "trade_date": "20260701", "close": 24000.0},
+        ])
+
+    def fx_daily(self, **kwargs):
+        self.fx_calls.append(kwargs)
+        return pd.DataFrame([
+            {"ts_code": "USDCNH.FXCM", "trade_date": "20260702", "bid_close": 7.19, "ask_close": 7.21},
+            {"ts_code": "USDCNH.FXCM", "trade_date": "20260701", "bid_close": 7.09, "ask_close": 7.11},
         ])
 
     def repo_daily(self, **kwargs):
@@ -69,6 +85,42 @@ def main() -> int:
         raise AssertionError(f"Benchmark rows must retain source lineage: {series}")
     if fake_pro.calls[0].get("fields") != "ts_code,trade_date,close":
         raise AssertionError(f"Benchmark adapter must request only necessary fields: {fake_pro.calls}")
+
+    global_series = service.get_benchmark_nav("HSI", "2026-07-01", "2026-07-02")
+    if [item.get("date") for item in global_series] != ["2026-07-01", "2026-07-02"]:
+        raise AssertionError(f"Hang Seng benchmark must use global index data: {global_series}")
+    if any(item.get("source") != "tushare.index_global" for item in global_series):
+        raise AssertionError(f"Global benchmark source lineage is missing: {global_series}")
+
+    service._get_yahoo_index_nav = lambda symbol, start_date, end_date: [
+        {"date": "2026-07-01", "nav": 20000.0, "source": "yahoo.chart"},
+        {"date": "2026-07-02", "nav": 20200.0, "source": "yahoo.chart"},
+    ]
+    cny_series = service.get_benchmark_nav("NDX.CNY", "2026-07-01", "2026-07-02")
+    if [item.get("nav") for item in cny_series] != [142000.0, 145440.0]:
+        raise AssertionError(f"NDX.CNY must combine Nasdaq 100 close and USDCNH mid close: {cny_series}")
+    if any(
+        item.get("source") != "derived:yahoo.chart+tushare.fx_daily.common_dates_v1"
+        for item in cny_series
+    ):
+        raise AssertionError(f"Derived CNY benchmark source lineage is missing: {cny_series}")
+    if fake_pro.fx_calls[0].get("ts_code") != "USDCNH.FXCM":
+        raise AssertionError(f"NDX.CNY must use the verified USDCNH series: {fake_pro.fx_calls}")
+
+    fallback_service = TushareDataService(token="test", mock_mode=True)
+    fallback_service.mock_mode = False
+    fallback_service._pro = fake_pro
+    fallback_service._get_yahoo_index_nav = lambda symbol, start_date, end_date: []
+    fallback_service._get_fred_index_nav = lambda series_id, start_date, end_date: [
+        {"date": "2026-07-01", "nav": 20000.0, "source": "fred.fredgraph.csv:NASDAQ100"},
+        {"date": "2026-07-02", "nav": 20200.0, "source": "fred.fredgraph.csv:NASDAQ100"},
+    ]
+    fallback_series = fallback_service.get_benchmark_nav("NDX.CNY", "2026-07-01", "2026-07-02")
+    if any(
+        item.get("source") != "derived:fred.fredgraph.csv:NASDAQ100+tushare.fx_daily.common_dates_v1"
+        for item in fallback_series
+    ):
+        raise AssertionError(f"NDX.CNY must retain FRED fallback lineage when Yahoo is unavailable: {fallback_series}")
 
     call_count = len(fake_pro.calls)
     if service.get_benchmark_nav("DR007", "2026-07-01", "2026-07-02") != []:

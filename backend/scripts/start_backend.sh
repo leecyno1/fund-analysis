@@ -2,6 +2,7 @@
 set -euo pipefail
 
 BACKEND_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT_DIR="$(cd "$BACKEND_DIR/.." && pwd)"
 HOST="${HOST:-127.0.0.1}"
 PORT="${PORT:-8005}"
 
@@ -30,6 +31,7 @@ add_candidate() {
 
 PYTHON_CANDIDATES=()
 add_candidate "${BACKEND_PYTHON:-}"
+add_candidate "$ROOT_DIR/.venv/bin/python"
 add_candidate "/usr/local/bin/python3"
 add_candidate "/opt/homebrew/bin/python3"
 add_candidate "$(command -v python3 || true)"

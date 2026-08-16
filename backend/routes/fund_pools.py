@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from sqlalchemy.exc import SQLAlchemyError
 
 from repositories import get_fund_pool_repo
+from services.fund_watchlist_service import FundWatchlistService
 
 router = APIRouter(prefix="/api/fund-pools", tags=["基金池"])
 
@@ -32,7 +33,8 @@ class AddPoolMemberRequest(BaseModel):
 
 
 class UpdatePoolMemberRequest(BaseModel):
-    status: str
+    status: Optional[str] = None
+    reason: Optional[str] = None
     latestConclusion: Optional[str] = None
     nextReviewDate: Optional[date] = None
     evidence: Optional[Dict[str, Any]] = None
@@ -44,6 +46,7 @@ class UpdatePoolMemberRequest(BaseModel):
 def list_fund_pools() -> Dict[str, Any]:
     repo = get_fund_pool_repo()
     try:
+        repo.ensure_default_research_pool()
         pools = repo.list_pools()
     except SQLAlchemyError as exc:
         raise HTTPException(status_code=503, detail=f"Fund pool store unavailable: {exc.__class__.__name__}") from exc
@@ -53,9 +56,12 @@ def list_fund_pools() -> Dict[str, Any]:
 @router.post("")
 def create_fund_pool(payload: CreatePoolRequest) -> Dict[str, Any]:
     repo = get_fund_pool_repo()
+    name = payload.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="分组名称不能为空")
     try:
         pool = repo.create_pool(
-            name=payload.name,
+            name=name,
             description=payload.description,
             created_by=payload.createdBy,
             is_default=payload.isDefault,
@@ -102,6 +108,7 @@ def update_pool_member(member_id: str, payload: UpdatePoolMemberRequest) -> Dict
         member = repo.update_member_status(
             member_id=member_id,
             status=payload.status,
+            reason=payload.reason,
             latest_conclusion=payload.latestConclusion,
             evidence=payload.evidence,
             risk_notes=payload.riskNotes,
@@ -113,3 +120,15 @@ def update_pool_member(member_id: str, payload: UpdatePoolMemberRequest) -> Dict
     if not member:
         raise HTTPException(status_code=404, detail="Pool member not found")
     return member
+
+
+@router.delete("/members/{member_id}")
+def delete_pool_member(member_id: str) -> Dict[str, Any]:
+    repo = get_fund_pool_repo()
+    try:
+        member = repo.delete_member(member_id)
+    except SQLAlchemyError as exc:
+        raise HTTPException(status_code=503, detail=f"Fund pool store unavailable: {exc.__class__.__name__}") from exc
+    if not member:
+        raise HTTPException(status_code=404, detail="Pool member not found")
+    return {"deleted": True, **member}

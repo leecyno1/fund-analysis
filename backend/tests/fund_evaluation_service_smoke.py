@@ -114,9 +114,13 @@ def main() -> int:
     ).evaluate_fund("ACTIVE.TEST")
     if thin_peer.get("status") != "partial":
         raise AssertionError(f"Thin peer sample must be partial, not fabricated: {thin_peer}")
+    if thin_peer.get("evaluation", {}).get("overall_score") is not None:
+        raise AssertionError(f"Thin peer sample must not expose a composite score: {thin_peer}")
+    if thin_peer.get("evaluation", {}).get("peer_percentiles"):
+        raise AssertionError(f"Thin peer sample must not expose peer percentiles: {thin_peer}")
     if not thin_peer.get("missing_items"):
         raise AssertionError(f"Thin peer sample must explain the gap: {thin_peer}")
-    if "已分类实体 12，有效指标样本 3" not in " ".join(thin_peer.get("missing_items", [])):
+    if "已分类产品 12 只，具备完整指标 3 只" not in " ".join(thin_peer.get("missing_items", [])):
         raise AssertionError(f"Thin peer explanation must separate classification from coverage: {thin_peer}")
 
     missing_benchmark = {

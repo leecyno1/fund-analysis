@@ -27,6 +27,10 @@ from service_registry import get_strict_tushare_service
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/data-sync", tags=["数据同步"])
 
+# 最长评价窗口为 3 年（756 个交易日）。按 4 个自然年抓取，给节假日和停牌留出余量，
+# 避免只同步近一年后却生成缺少历史基准的 3 年指标。
+ROLLING_NAV_HISTORY_DAYS = 365 * 4
+
 
 # ─────────────────────────────────────────────
 # 请求/响应模型
@@ -83,6 +87,23 @@ def _years_since(date_text: Optional[str]) -> float:
         return round(max(0, (datetime.now(UTC).date() - datetime.fromisoformat(date_text).date()).days) / 365.25, 2)
     except ValueError:
         return 0.0
+
+
+def _quarter_before(quarter: str) -> str:
+    year = int(quarter[:4])
+    number = int(quarter[-1])
+    return f"{year - 1}Q4" if number == 1 else f"{year}Q{number - 1}"
+
+
+def _recent_completed_quarters(limit: int = 4, now: Optional[datetime] = None) -> list[str]:
+    reference = now or datetime.now()
+    current = f"{reference.year}Q{(reference.month - 1) // 3 + 1}"
+    quarter = _quarter_before(current)
+    result = []
+    for _ in range(max(0, limit)):
+        result.append(quarter)
+        quarter = _quarter_before(quarter)
+    return result
 
 
 def _sync_fund_managers(data_svc: Any, wind_code: str) -> tuple[list[str], list[str], Optional[str]]:
@@ -192,6 +213,9 @@ def _sync_fund(
     rolling_metrics = None
     tenure_metrics = None
     classification_ingestion = None
+    holdings_sync = []
+    asset_allocation_sync = None
+    holder_structure_sync = None
     nav_enrichment = {
         "benchmark_data_status": "not_checked",
         "benchmark_observations": 0,
@@ -242,11 +266,11 @@ def _sync_fund(
         except Exception as e:
             errors.append(f"[{wind_code}] 业绩数据错误: {e}")
 
-    # Step 3: 净值序列（最近一年）
+    # Step 3: 净值序列（覆盖最长滚动评价窗口）
     if include_nav:
         try:
             end_date = datetime.now()
-            start_date = end_date - timedelta(days=365)
+            start_date = end_date - timedelta(days=ROLLING_NAV_HISTORY_DAYS)
             nav_data = data_svc.get_fund_nav(
                 wind_code,
                 start_date=start_date.strftime("%Y%m%d"),
@@ -273,20 +297,14 @@ def _sync_fund(
     # Step 4: 持仓数据（最近 4 个季度）
     if include_holdings:
         try:
-            quarters = []
-            now = datetime.now()
-            for i in range(4):
-                q_month = ((now.month - 1) // 3 - i) * 3 + 1
-                q_year = now.year
-                if q_month < 1:
-                    q_month += 12
-                    q_year -= 1
-                quarter = f"{q_year}q{(q_month - 1) // 3 + 1}"
-                quarters.append(quarter)
-
-            holdings_list = data_svc.get_fund_holdings(wind_code, quarter=quarters[-1])
-            if holdings_list:
-                holding_repo.upsert_holdings(wind_code, quarters[-1], holdings_list)
+            for quarter in _recent_completed_quarters(4):
+                holdings_list = data_svc.get_fund_holdings(wind_code, quarter=quarter)
+                if not holdings_list:
+                    continue
+                if holding_repo.upsert_holdings(wind_code, quarter, holdings_list):
+                    holdings_sync.append({"quarter": quarter, "holding_count": len(holdings_list)})
+            if not holdings_sync:
+                warnings.append(f"[{wind_code}] 最近 4 个完整季度均未取得持仓")
         except Exception as e:
             errors.append(f"[{wind_code}] 持仓数据错误: {e}")
 
@@ -331,6 +349,22 @@ def _sync_fund(
         errors.append(f"[{wind_code}] 写入 PostgreSQL 失败")
     else:
         try:
+            from services.fund_asset_allocation_service import FundAssetAllocationService
+
+            asset_allocation_sync = FundAssetAllocationService().sync(wind_code)
+            if asset_allocation_sync.get("status") != "synced":
+                warnings.append(f"[{wind_code}] 资产配置同步失败: {'；'.join(asset_allocation_sync.get('missing_items') or [])}")
+        except Exception as e:
+            warnings.append(f"[{wind_code}] 资产配置同步失败: {e}")
+        try:
+            from services.fund_holder_structure_service import FundHolderStructureService
+
+            holder_structure_sync = FundHolderStructureService().sync(wind_code)
+            if holder_structure_sync.get("status") != "synced":
+                warnings.append(f"[{wind_code}] 持有人结构同步失败: {'；'.join(holder_structure_sync.get('missing_items') or [])}")
+        except Exception as e:
+            warnings.append(f"[{wind_code}] 持有人结构同步失败: {e}")
+        try:
             _upsert_research_profile_from_sync(wind_code, fund_payload, manager_tenure_start)
         except Exception as e:
             warnings.append(f"[{wind_code}] 研究画像/经理任期起点维护失败: {e}")
@@ -360,6 +394,9 @@ def _sync_fund(
         "manager_count": len(manager_ids),
         "manager_tenure_start": manager_tenure_start,
         "classification_ingestion": classification_ingestion,
+        "holdings_sync": holdings_sync,
+        "asset_allocation_sync": asset_allocation_sync,
+        "holder_structure_sync": holder_structure_sync,
         "rolling_metrics": rolling_metrics,
         "tenure_metrics": tenure_metrics,
         "errors": errors,
@@ -472,6 +509,8 @@ def sync_single_fund(wind_code: str):
         "manager_ids": result.get("manager_ids", []),
         "manager_count": result.get("manager_count", 0),
         "manager_tenure_start": result.get("manager_tenure_start"),
+        "asset_allocation_sync": result.get("asset_allocation_sync"),
+        "holder_structure_sync": result.get("holder_structure_sync"),
         "rolling_metrics": result.get("rolling_metrics"),
         "tenure_metrics": result.get("tenure_metrics"),
         "errors": result["errors"],

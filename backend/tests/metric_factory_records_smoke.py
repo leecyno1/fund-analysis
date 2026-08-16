@@ -20,7 +20,10 @@ def main() -> int:
         window="all",
     )
     names = {record["metric_name"] for record in records}
-    expected = {"total_return", "annualized_return", "max_drawdown", "sharpe_ratio"}
+    expected = {
+        "total_return", "annualized_return", "record_breaking_days_ratio",
+        "max_drawdown", "sharpe_ratio",
+    }
     missing = expected - names
     if missing:
         print(f"Missing metric records {missing}: {records}")

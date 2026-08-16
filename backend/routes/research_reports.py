@@ -31,8 +31,11 @@ class ResearchReportCreate(BaseModel):
 async def list_reports(
     manager_id: Optional[str] = Query(None),
     fund_id: Optional[str] = Query(None),
+    folder_id: Optional[str] = Query(None),
     keyword: Optional[str] = Query(None),
     tags: Optional[str] = Query(None, description="标签, 逗号分隔"),
+    viewpoint_topics: Optional[str] = Query(None, description="观点主题, 逗号分隔"),
+    research_domain: Optional[str] = Query(None, description="equity / fixed_income"),
     source: Optional[str] = Query(None),
     start_date: Optional[str] = Query(None),
     end_date: Optional[str] = Query(None),
@@ -48,8 +51,11 @@ async def list_reports(
         result = PostgresLocalResearchFolderRepo().list_reports(
             manager_id=manager_id,
             fund_id=fund_id,
+            folder_id=folder_id,
             keyword=keyword,
             tags=[item.strip() for item in tags.split(",") if item.strip()] if tags else None,
+            viewpoint_topics=[item.strip() for item in viewpoint_topics.split(",") if item.strip()] if viewpoint_topics else None,
+            research_domain=research_domain,
             source=source,
             start_date=start_date,
             end_date=end_date,

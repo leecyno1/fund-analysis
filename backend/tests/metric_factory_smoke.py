@@ -32,6 +32,7 @@ def main() -> int:
     relative = factory.calculate_relative_metrics(nav_series, benchmark_series)
 
     assert_close(returns["total_return"], 0.03)
+    assert_close(returns["record_breaking_days_ratio"], 0.75)
     if returns["annualized_return"] <= 0:
         raise AssertionError(f"Expected positive annualized return, got {returns}")
     if risks["annualized_volatility"] <= 0:

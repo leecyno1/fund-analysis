@@ -1,5 +1,6 @@
 import os
 import sys
+from datetime import date, timedelta
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
@@ -51,6 +52,25 @@ def main() -> int:
         raise AssertionError(f"Index dimensions leaked another category's method: {index}")
     if "index_fund" not in str(index.get("calculation_method")):
         raise AssertionError(f"Index method version must be auditable: {index}")
+
+    recent_index = service.score_from_inputs(
+        {
+            "wind_code": "INDEX.RECENT",
+            "name": "沪深300ETF联接A",
+            "type": "指数型",
+            "establishment_date": (date.today() - timedelta(days=300)).isoformat(),
+        },
+        {"peer_group": "沪深300同指数", "primary_benchmark": "沪深300"},
+        _panel({
+            "1y": {"tracking_error": 0.006, "excess_return": -0.004},
+            "latest": {"expense_ratio": 0.006, "aum": 45.0},
+        }),
+        QUALITY,
+    )
+    if recent_index.get("overall_score") is not None:
+        raise AssertionError(f"A fund younger than the selected window must not enter the ranking: {recent_index}")
+    if not any("近 1 年历史不足" in item for item in recent_index.get("missing_data", [])):
+        raise AssertionError(f"Selected-window history gap must be explicit: {recent_index}")
 
     index_gap = service.score_from_inputs(
         {"wind_code": "INDEX.GAP", "name": "中证500ETF", "type": "指数型"},
@@ -143,6 +163,66 @@ def main() -> int:
     if index_from_fund_facts.get("overall_score") is None:
         raise AssertionError(f"Fund facts should adapt into index methodology metrics: {index_from_fund_facts}")
 
+    enhanced = service.score_from_inputs(
+        {
+            "wind_code": "INDEX.ENHANCED",
+            "name": "沪深300指数增强A",
+            "type": "指数型",
+        },
+        {
+            "strategy_family_key": "index_enhanced",
+            "peer_group": "指数增强-沪深300",
+            "primary_benchmark": "沪深300",
+        },
+        _panel({
+            "1y": {
+                "excess_return": 0.035,
+                "information_ratio": 0.85,
+                "tracking_error": 0.06,
+                "max_drawdown": -0.16,
+            },
+            "latest": {"expense_ratio": 0.012, "aum": 35.0},
+        }),
+        QUALITY,
+    )
+    if enhanced.get("status") not in {"ok", "partial"} or enhanced.get("overall_score") is None:
+        raise AssertionError(f"Enhanced index evidence should produce an evaluation: {enhanced}")
+    if enhanced.get("fund_type_profile") != "index_enhanced":
+        raise AssertionError(f"Enhanced index methodology key missing: {enhanced}")
+    if set(enhanced.get("dimension_scores", {})) != {
+        "excess_return",
+        "active_efficiency",
+        "drawdown_control",
+        "cost_efficiency",
+        "scale_liquidity",
+        "data_quality",
+    }:
+        raise AssertionError(f"Enhanced index dimensions must be independent from passive tracking: {enhanced}")
+    if "index_enhanced" not in str(enhanced.get("calculation_method")):
+        raise AssertionError(f"Enhanced index method must be auditable: {enhanced}")
+
+    enhanced_gap = service.score_from_inputs(
+        {
+            "wind_code": "INDEX.ENHANCED.GAP",
+            "name": "中证500指数增强A",
+            "type": "指数型",
+        },
+        {
+            "strategy_family_key": "index_enhanced",
+            "peer_group": "指数增强-中证500",
+            "primary_benchmark": "中证500",
+        },
+        _panel({
+            "1y": {"excess_return": 0.03, "tracking_error": 0.06, "max_drawdown": -0.16},
+            "latest": {"expense_ratio": 0.012, "aum": 35.0},
+        }),
+        QUALITY,
+    )
+    if enhanced_gap.get("status") != "insufficient_evidence":
+        raise AssertionError(f"Enhanced index evaluation must stop without information ratio: {enhanced_gap}")
+    if not any("information_ratio" in item for item in enhanced_gap.get("missing_data", [])):
+        raise AssertionError(f"Enhanced index information-ratio gap must be explicit: {enhanced_gap}")
+
     fee_facts = service.metric_facts_from_fund({
         "raw_data": {
             "source": "tushare",
@@ -186,7 +266,7 @@ def main() -> int:
     if wrong_money_peer_score is not None:
         raise AssertionError(f"Money-market peer proxy must not reuse active-equity metrics: {wrong_money_peer_score}")
 
-    print("OK index and money-market evaluations use dedicated evidence gates and dimensions")
+    print("OK passive index, enhanced index and money-market evaluations use dedicated evidence gates and dimensions")
     return 0
 
 

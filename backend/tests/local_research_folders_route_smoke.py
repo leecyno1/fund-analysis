@@ -29,11 +29,12 @@ class FakeFolderService:
             raise research_folders.FolderValidationError("文件夹不存在或无法读取")
         return {"id": "folder-1", "name": "调研纪要", "path": path, "status": "ready"}
 
-    def scan_folder(self, folder_id):
+    def scan_folder(self, folder_id, retry_llm=False):
         if folder_id == "missing":
             raise research_folders.FolderValidationError("未找到已连接的调研文件夹")
         return {
             "folder_id": folder_id,
+            "retry_llm": retry_llm,
             "counts": {"created": 1, "updated": 0, "unchanged": 2, "failed": 0, "supported": 3},
             "results": [],
         }
@@ -55,10 +56,26 @@ class FakeFolderService:
         return {"status": action, "report": {"id": report_id}, "proposal": {"id": proposal_id}}
 
     def confirm_manager_proposals(self, folder_id=None, min_confidence=0.88):
-        return {"status": "completed", "confirmed": 1, "failed": 0, "linked_fund_count": 2, "min_confidence": min_confidence}
+        return {
+            "status": "completed",
+            "requested_reports": 2,
+            "confirmed": 2,
+            "multi_manager": 1,
+            "ambiguous": 0,
+            "failed": 0,
+            "linked_fund_count": 2,
+            "min_confidence": min_confidence,
+        }
 
     def confirm_label_proposals(self, folder_id=None, min_confidence=0.9):
-        return {"status": "completed", "confirmed": 2, "failed": 0, "min_confidence": min_confidence}
+        return {
+            "status": "completed",
+            "requested": 2,
+            "confirmed": 2,
+            "failed": 0,
+            "skipped_unresolved": 1,
+            "min_confidence": min_confidence,
+        }
 
 
 def main() -> int:
@@ -97,6 +114,9 @@ def main() -> int:
         scan = client.post("/api/research-folders/folder-1/scan")
         if scan.status_code != 200 or scan.json().get("counts", {}).get("created") != 1:
             raise AssertionError(f"Folder scan contract failed: {scan.status_code} {scan.text}")
+        retry_scan = client.post("/api/research-folders/folder-1/scan?retry_llm=true")
+        if retry_scan.status_code != 200 or retry_scan.json().get("retry_llm") is not True:
+            raise AssertionError(f"Explicit LLM retry contract failed: {retry_scan.status_code} {retry_scan.text}")
 
         reviews = client.get("/api/research-folders/reviews?folder_id=folder-1")
         if reviews.status_code != 200 or reviews.json().get("total") != 1:
@@ -106,7 +126,11 @@ def main() -> int:
             "/api/research-folders/reviews/confirm-managers",
             json={"folder_id": "folder-1", "min_confidence": 0.88},
         )
-        if bulk.status_code != 200 or bulk.json().get("confirmed") != 1:
+        if (
+            bulk.status_code != 200
+            or bulk.json().get("confirmed") != 2
+            or bulk.json().get("multi_manager") != 1
+        ):
             raise AssertionError(f"Bulk manager review contract failed: {bulk.status_code} {bulk.text}")
 
         labels = client.post(

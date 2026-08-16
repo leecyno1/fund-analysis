@@ -7,7 +7,9 @@ from typing import List, Optional
 from datetime import date, datetime
 from decimal import Decimal
 from uuid import UUID
+import anyio
 import logging
+import os
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/reports", tags=["基金研究报告"])
@@ -76,6 +78,88 @@ def _is_unusable_llm_report(content: str) -> bool:
     )
 
 
+def _brief_memo_summary(memo: dict, limit: int = 220) -> str:
+    key_points = [
+        str(item).strip()
+        for item in memo.get("key_points") or []
+        if str(item or "").strip()
+    ]
+    value = key_points[0] if key_points else str(memo.get("summary") or "").strip()
+    if not value:
+        return "暂无摘要"
+    value = " ".join(value.split())
+    return value if len(value) <= limit else f"{value[:limit].rstrip()}…"
+
+
+def _compact_research_reports(reports: list) -> list:
+    return [{
+        "id": item.get("id"),
+        "title": item.get("title"),
+        "report_date": item.get("report_date"),
+        "manager_name": item.get("manager_name"),
+        "evidence_scope": item.get("evidence_scope"),
+        "summary": _brief_memo_summary(item, limit=500),
+        "key_points": [
+            " ".join(str(point).split())[:300]
+            for point in (item.get("key_points") or [])[:3]
+            if str(point or "").strip()
+        ],
+        "classifications": (item.get("classifications") or [])[:8],
+        "style_labels": (item.get("style_labels") or [])[:8],
+    } for item in reports]
+
+
+async def _build_evaluation_snapshot(wind_code: str, include_research: bool) -> dict:
+    from services.fund_research_snapshot_service import FundResearchSnapshotService
+
+    service = FundResearchSnapshotService()
+    timeout_seconds = max(
+        5,
+        min(int(os.environ.get("FUND_EVALUATION_ATTRIBUTION_TIMEOUT_SECONDS", "25")), 60),
+    )
+
+    def build(live_attribution: bool) -> dict:
+        return service.build(
+            wind_code,
+            window="1y",
+            include_research=include_research,
+            include_attribution=True,
+            research_limit=5,
+            live_attribution=live_attribution,
+        )
+
+    try:
+        with anyio.fail_after(timeout_seconds):
+            return await anyio.to_thread.run_sync(
+                lambda: build(True),
+                abandon_on_cancel=True,
+            )
+    except TimeoutError:
+        logger.warning("Live attribution timed out for %s after %ss", wind_code, timeout_seconds)
+        snapshot = await anyio.to_thread.run_sync(lambda: build(False))
+        reason = f"现场归因计算超过 {timeout_seconds} 秒，本次先基于基金评价与纪要生成结果；可稍后单独运行归因。"
+        attribution = snapshot.get("attribution") or {}
+        attribution["evidence_origin"] = {
+            "mode": "timed_out",
+            "label": "现场归因超时",
+            "quarter": (attribution.get("evidence_origin") or {}).get("quarter"),
+            "updated_at": None,
+        }
+        for key in ("barra", "brinson", "nav_factor_lens", "nav_return_attribution"):
+            block = attribution.setdefault(key, {"status": "insufficient_evidence"})
+            block["missing_items"] = list(dict.fromkeys([
+                reason,
+                *(block.get("missing_items") or []),
+            ]))
+        snapshot["attribution"] = attribution
+        evidence = snapshot.setdefault("evidence", {})
+        evidence["missing_items"] = list(dict.fromkeys([
+            *(evidence.get("missing_items") or []),
+            reason,
+        ]))
+        return snapshot
+
+
 def _evaluation_analysis_fallback(
     fund_data: dict,
     evaluation: dict,
@@ -91,7 +175,9 @@ def _evaluation_analysis_fallback(
     result = evaluation.get("evaluation") or {}
     metric_scores = result.get("metric_scores") or {}
     attribution_benchmark_detail = attribution_evidence.get("benchmark_detail") or {}
+    attribution_origin = attribution_evidence.get("evidence_origin") or {}
     score = result.get("overall_score")
+    multi_period = evaluation.get("multi_period_evidence") or {}
     missing = list(dict.fromkeys(str(item) for item in evaluation.get("missing_items", []) if item))
     lines = [
         f"# {fund_data.get('name') or target.get('name') or fund_data.get('wind_code')} 基金评价",
@@ -160,8 +246,63 @@ def _evaluation_analysis_fallback(
             lines.append(f"- {label}：{display_value}；{comparison}")
     else:
         lines.append("- 当前没有可用的同类分位数据。")
+    period_performance = evaluation.get("period_performance") or {}
+    period_rows = period_performance.get("periods") or []
+    if period_rows:
+        lines.append("- 自然年度业绩：")
+        for period in period_rows[:5]:
+            period_return = period.get("return")
+            if period_return is None:
+                continue
+            detail = f"{float(period_return) * 100:.2f}%"
+            if period.get("rank") is not None and period.get("peer_count"):
+                detail += (
+                    f"；同类中位数 {float(period.get('peer_median_return') or 0) * 100:.2f}%"
+                    f"；同类排名 {period.get('rank')}/{period.get('peer_count')}"
+                )
+            elif period.get("coverage_status") != "complete":
+                detail += "；区间不完整，不参与年度同类排名"
+            else:
+                detail += "；同类样本不足"
+            lines.append(f"  - {period.get('label') or period.get('year')}：{detail}")
+
+    lines.extend(["", "## 多周期表现"])
+    if multi_period.get("status") == "long_term_ready":
+        lines.append("- 长期证据：近 3 年收益、最大回撤和 Sharpe 数据完整。")
+        for label, key, is_percent in (
+            ("近 6 月收益", "return_6m", True),
+            ("近 1 年收益", "return_1y", True),
+            ("近 1 年年化收益", "annualized_return_1y", True),
+            ("近 3 年年化收益", "annualized_return_3y", True),
+            ("近 1 年最大回撤", "max_drawdown_1y", True),
+            ("近 3 年最大回撤", "max_drawdown_3y", True),
+            ("近 3 年 Sharpe", "sharpe_ratio_3y", False),
+        ):
+            value = multi_period.get(key)
+            if value is None:
+                continue
+            display = f"{float(value) * 100:.2f}%" if is_percent else f"{float(value):.2f}"
+            lines.append(f"- {label}：{display}")
+        consistency_label = multi_period.get("consistency_label") or "短长期一致性待补"
+        return_gap = multi_period.get("annualized_return_gap")
+        gap_text = f"，相差 {float(return_gap) * 100:.1f} 个百分点" if return_gap is not None else ""
+        lines.append(f"- 短长期一致性：{consistency_label}{gap_text}。")
+    else:
+        lines.append("- 长期证据：近 3 年完整收益风险证据不足，不能把短期领先视为长期持续。")
+        for label, key in (("近 6 月收益", "return_6m"), ("近 1 年收益", "return_1y")):
+            value = multi_period.get(key)
+            if value is not None:
+                lines.append(f"- {label}：{float(value) * 100:.2f}%")
 
     lines.extend(["", "## 风险与归因"])
+    if attribution_origin.get("mode") == "saved_history":
+        lines.append(
+            f"- 归因证据来源：复用 {attribution_origin.get('quarter') or '当前季度'} 已保存结果"
+            + (f"（更新于 {attribution_origin.get('updated_at')}）" if attribution_origin.get("updated_at") else "")
+            + "。"
+        )
+    elif attribution_origin.get("mode") == "live_calculation":
+        lines.append(f"- 归因证据来源：本次现场计算（{attribution_origin.get('quarter') or '当前季度'}）。")
     risk_rows = [
         ("近 1 年最大回撤", metric_scores.get("1y.max_drawdown"), True),
         ("近 1 年年化波动", metric_scores.get("1y.annualized_volatility"), True),
@@ -171,6 +312,31 @@ def _evaluation_analysis_fallback(
         if value is not None:
             display = f"{float(value) * 100:.2f}%" if is_percent else f"{float(value):.2f}"
             lines.append(f"- {label}：{display}")
+    holding_stability = (
+        (evaluation.get("explanatory_evidence") or {}).get("holding_stability")
+        or {}
+    )
+    if holding_stability.get("status") == "available":
+        lines.append(
+            f"- 公开持仓延续性：{holding_stability.get('previous_quarter') or '上一期'} 至 "
+            f"{holding_stability.get('latest_quarter') or '最新一期'}，"
+            f"前十大权重重合度 {float(holding_stability.get('top10_overlap_ratio') or 0) * 100:.1f}%，"
+            f"延续 {int(holding_stability.get('retained_holding_count') or 0)} 只重仓，"
+            f"行业权重重合度 {float(holding_stability.get('industry_overlap_ratio') or 0) * 100:.1f}%。"
+        )
+        lines.append("- 上述只比较相邻两期公开前十大持仓，不等于完整组合换手率，也不参与基金评分。")
+    elif holding_stability.get("missing_items"):
+        lines.append(f"- 公开持仓延续性证据不足：{holding_stability['missing_items'][0]}")
+    holding_style_drift = (
+        evaluation.get("holding_style_drift")
+        or factor_evidence.get("holding_style_drift_evidence")
+        or {}
+    )
+    if holding_style_drift.get("status") == "available":
+        lines.append(f"- 公开持仓风格变化：{holding_style_drift.get('note')}")
+        lines.append("- 上述只比较同一专业同类组内相邻公开持仓期，不是完整组合、RBSA 或 Barra，也不参与基金评分。")
+    elif holding_style_drift.get("missing_items"):
+        lines.append(f"- 公开持仓风格变化证据不足：{holding_style_drift['missing_items'][0]}")
     if factor_evidence.get("status") == "ok":
         for item in (factor_evidence.get("risk_contributions") or [])[:4]:
             lines.append(f"- {item.get('label') or item.get('factor')}风险贡献：{float(item.get('risk_contribution') or 0) * 100:.1f}%")
@@ -180,6 +346,17 @@ def _evaluation_analysis_fallback(
             lines.append(f"- 已披露持仓中的{industry}暴露：{float(weight) * 100:.1f}%")
     else:
         lines.append("- Barra 因子风险解释证据不足，不对正式风格暴露作强结论。")
+    holding_style = factor_evidence.get("holding_style_peer_evidence") or {}
+    if holding_style.get("status") == "peer_percentile_ready":
+        labels = "、".join(str(item) for item in holding_style.get("labels") or [])
+        lines.append(
+            f"- 公开持仓同类风格：{labels or '同类分位已就绪'}；"
+            f"{holding_style.get('quarter') or '季度待补'}，"
+            f"{holding_style.get('peer_group_name') or '同类组待补'} {holding_style.get('sample_size') or 0} 只样本。"
+        )
+        lines.append("- 上述是公开持仓描述子的同类分位，不是完整 Barra 风险模型。")
+    elif holding_style.get("status") == "descriptor_ready":
+        lines.append("- 已取得公开持仓风格描述子，但同季度同类样本不足，当前不贴量化风格标签。")
     if attribution_evidence.get("status") in {"ok", "partial_evidence"}:
         returns = attribution_evidence.get("returns") or {}
         lines.append(f"- Brinson 归因区间主动收益：{float(returns.get('active') or 0) * 100:.2f}%")
@@ -196,17 +373,48 @@ def _evaluation_analysis_fallback(
         lines.append(f"- 补充净值行为解释：主动收益 {float(nav_returns.get('active') or 0) * 100:.2f}%（不是 Brinson）。")
 
     lines.extend(["", "## 经理与纪要证据"])
+    manager_tenure_performance = evaluation.get("manager_tenure_performance") or {}
+    manager_tenure_not_applicable = manager_tenure_performance.get("status") == "not_applicable"
+    if manager_tenure_not_applicable:
+        lines.append("- 基金经理任期：该类别评价不使用经理任期指标，不构成评价缺口。")
+    elif manager_tenure_performance.get("status") in {"available", "partial"}:
+        coverage_status = manager_tenure_performance.get("coverage_status")
+        requested_start = manager_tenure_performance.get("requested_start_date") or "上任日待补"
+        actual_start = manager_tenure_performance.get("actual_start_date") or "净值起点待补"
+        total_return = manager_tenure_performance.get("total_return")
+        if coverage_status == "full_tenure":
+            detail = f"现任团队自 {requested_start} 上任，净值完整覆盖"
+            if total_return is not None:
+                detail += f"；任期收益 {float(total_return) * 100:.2f}%"
+            peer_metric = (
+                ((manager_tenure_performance.get("peer_ranking") or {}).get("metrics") or {}).get("total_return")
+                or {}
+            )
+            if peer_metric.get("rank") is not None and peer_metric.get("peer_count"):
+                detail += f"；同区间同类第 {peer_metric['rank']}/{peer_metric['peer_count']} 名"
+            lines.append(f"- 现任经理任期：{detail}。")
+        else:
+            coverage_ratio = manager_tenure_performance.get("coverage_ratio")
+            detail = f"现任团队自 {requested_start} 上任，但本地净值从 {actual_start} 才开始"
+            if coverage_ratio is not None:
+                detail += f"，仅覆盖 {float(coverage_ratio) * 100:.0f}%"
+            if total_return is not None:
+                detail += f"；本地可见期收益 {float(total_return) * 100:.2f}%"
+            lines.append(f"- 现任经理任期：{detail}；不冒充完整任期，不生成同类排名，也不计入经理任期评分。")
+    else:
+        lines.append("- 现任经理任期表现待补，不能把基金历史业绩直接归因给当前经理。")
     if managers:
         for manager in managers:
             manager_name = manager.get("name") or manager.get("manager_id") or "姓名待补"
             management_years = manager.get("management_years")
             tenure = f"，管理年限约 {float(management_years):.1f} 年" if management_years is not None else ""
             lines.append(f"- 当前基金经理：{manager_name}{tenure}；来源为 Tushare 基金经理任职记录。")
-    else:
+    elif not manager_tenure_not_applicable:
         lines.append("- 当前基金经理资料待补。")
     if research_reports:
         for memo in research_reports[:5]:
-            lines.append(f"- 《{memo.get('title') or '无标题纪要'}》（{memo.get('report_date') or '日期待补'}）：{memo.get('summary') or '暂无摘要'}")
+            scope = "经理层证据，不代表该基金专属表述；" if memo.get("evidence_scope") == "manager_level" else "基金关联证据；"
+            lines.append(f"- 《{memo.get('title') or '无标题纪要'}》（{memo.get('report_date') or '日期待补'}）：{scope}{_brief_memo_summary(memo)}")
     else:
         lines.append("- 没有找到已关联到该基金的调研纪要。")
 
@@ -500,51 +708,62 @@ async def generate_fund_evaluation_analysis(
     """按需生成基金评价分析：分类内评价为主，归因与纪要为证据。"""
     from service_registry import get_data_service, get_db
     from services.ai_report import get_report_generator
-    from services.fund_research_snapshot_service import FundResearchSnapshotService
-
     data_svc = get_data_service()
     _reject_mock_data_source(data_svc, "基金评价")
     db = get_db()
 
     try:
-        snapshot = FundResearchSnapshotService().build(
-            wind_code,
-            window="1y",
-            include_research=payload.include_research,
-            include_attribution=True,
-            research_limit=5,
-        )
+        snapshot = await _build_evaluation_snapshot(wind_code, payload.include_research)
         fund_data = snapshot.get("fund") or {}
         managers = snapshot.get("managers") or []
         evaluation = snapshot.get("evaluation") or {}
+        period_performance = snapshot.get("period_performance") or {}
+        manager_tenure_performance = snapshot.get("manager_tenure_performance") or {}
+        multi_period_evidence = snapshot.get("multi_period_evidence") or {}
+        holding_style_drift = snapshot.get("holding_style_drift") or {}
+        evaluation_with_periods = {
+            **evaluation,
+            "period_performance": period_performance,
+            "manager_tenure_performance": manager_tenure_performance,
+            "multi_period_evidence": multi_period_evidence,
+            "holding_style_drift": holding_style_drift,
+        }
         attribution_bundle = snapshot.get("attribution") or {}
-        factor_evidence = {
-            **(attribution_bundle.get("barra") or {}),
-            "supplementary_nav_factor": attribution_bundle.get("nav_factor_lens") or {},
-        }
-        attribution_evidence = {
-            **(attribution_bundle.get("brinson") or {}),
-            "supplementary_nav_return": attribution_bundle.get("nav_return_attribution") or {},
-        }
+        assessment_summary = snapshot.get("assessment_summary") or {}
+        style_evidence_summary = assessment_summary.get("style_evidence") or {}
+        research_evidence_summary = assessment_summary.get("research_evidence") or {}
+        attribution_evidence_summary = assessment_summary.get("attribution_evidence") or {}
+        attribution_origin = attribution_bundle.get("evidence_origin") or {}
+        analysis_evidence = snapshot.get("analysis_evidence") or {}
+        factor_evidence = analysis_evidence.get("factor_evidence") or {}
+        attribution_evidence = analysis_evidence.get("attribution_evidence") or {}
         research_reports = (snapshot.get("research_memos") or {}).get("items") or []
+        fund_specific_research_count = sum(
+            1 for item in research_reports if item.get("evidence_scope") != "manager_level"
+        )
+        manager_level_research_count = len(research_reports) - fund_specific_research_count
+        compact_research_reports = _compact_research_reports(research_reports)
 
         generator = get_report_generator()
         generation_mode = "llm_evaluation_evidence"
         report_content = ""
         if generator.api_key:
-            report_content = generator.generate_fund_evaluation_analysis(
-                fund_data=fund_data,
-                evaluation_data=evaluation,
-                factor_evidence=factor_evidence,
-                attribution_evidence=attribution_evidence,
-                managers=managers,
-                research_reports=research_reports,
-                user_question=payload.question,
+            report_content = await anyio.to_thread.run_sync(
+                lambda: generator.generate_fund_evaluation_analysis(
+                    fund_data=fund_data,
+                    evaluation_data=evaluation_with_periods,
+                    factor_evidence=factor_evidence,
+                    attribution_evidence=attribution_evidence,
+                    managers=managers,
+                    research_reports=compact_research_reports,
+                    user_question=payload.question,
+                    assessment_summary=assessment_summary,
+                )
             )
         if not report_content or _is_unusable_llm_report(report_content):
             report_content = _evaluation_analysis_fallback(
                 fund_data=fund_data,
-                evaluation=evaluation,
+                evaluation=evaluation_with_periods,
                 factor_evidence=factor_evidence,
                 attribution_evidence=attribution_evidence,
                 managers=managers,
@@ -561,8 +780,11 @@ async def generate_fund_evaluation_analysis(
             "data_sources": {
                 "source": "fund_research_snapshot",
                 "research_snapshot": snapshot,
+                "assessment_summary": assessment_summary,
                 "generation_mode": generation_mode,
                 "research_reports_count": len(research_reports),
+                "fund_specific_research_count": fund_specific_research_count,
+                "manager_level_research_count": manager_level_research_count,
             },
             "research_reports_used": [item["id"] for item in research_reports],
             "generation_params": {
@@ -574,6 +796,40 @@ async def generate_fund_evaluation_analysis(
                 "peer_group": (evaluation.get("peer_context") or {}).get("peer_group"),
                 "provider": generator.provider,
                 "model": generator.model,
+                "research_reports_count": len(research_reports),
+                "fund_specific_research_count": fund_specific_research_count,
+                "manager_level_research_count": manager_level_research_count,
+                "attribution_evidence_mode": attribution_origin.get("mode"),
+                "attribution_quarter": attribution_origin.get("quarter") or attribution_bundle.get("quarter"),
+                "attribution_evidence_updated_at": attribution_origin.get("updated_at"),
+                "manager_tenure_coverage_status": manager_tenure_performance.get("coverage_status"),
+                "manager_tenure_coverage_ratio": manager_tenure_performance.get("coverage_ratio"),
+                "multi_period_status": multi_period_evidence.get("status"),
+                "multi_period_consistency_status": multi_period_evidence.get("consistency_status"),
+                "multi_period_consistency_label": multi_period_evidence.get("consistency_label"),
+                "multi_period_data_as_of": multi_period_evidence.get("data_as_of"),
+                "holding_style_drift_status": holding_style_drift.get("status"),
+                "holding_style_drift_level": holding_style_drift.get("level"),
+                "holding_style_drift_previous_quarter": holding_style_drift.get("previous_quarter"),
+                "holding_style_drift_latest_quarter": holding_style_drift.get("latest_quarter"),
+                "evaluation_score": assessment_summary.get("score"),
+                "evaluation_grade": assessment_summary.get("grade"),
+                "peer_rank": assessment_summary.get("peer_rank"),
+                "peer_count": assessment_summary.get("peer_count"),
+                "evaluation_verdict": assessment_summary.get("verdict"),
+                "style_evidence_status": style_evidence_summary.get("status"),
+                "style_evidence_scope": style_evidence_summary.get("scope"),
+                "style_evidence_quarter": style_evidence_summary.get("quarter"),
+                "style_labels": style_evidence_summary.get("labels") or [],
+                "memo_style_labels": style_evidence_summary.get("memo_labels") or [],
+                "research_evidence_status": research_evidence_summary.get("status"),
+                "research_evidence_note": research_evidence_summary.get("note"),
+                "attribution_evidence_status": attribution_evidence_summary.get("status"),
+                "attribution_evidence_headline": attribution_evidence_summary.get("headline"),
+                "attribution_evidence_detail": attribution_evidence_summary.get("detail"),
+                "attribution_disclosure_coverage": attribution_evidence_summary.get("coverage"),
+                "formal_barra_ready": attribution_evidence_summary.get("formal_barra_ready"),
+                "barra_descriptor_ready": attribution_evidence_summary.get("barra_descriptor_ready"),
             },
             "created_at": datetime.utcnow(),
         }
@@ -599,12 +855,45 @@ async def generate_fund_evaluation_analysis(
                 "fund_type": fund_data.get("type"),
                 "peer_group": (evaluation.get("peer_context") or {}).get("peer_group"),
                 "research_reports_count": len(research_reports),
+                "fund_specific_research_count": fund_specific_research_count,
+                "manager_level_research_count": manager_level_research_count,
                 "manager_count": len(managers),
                 "evaluation_status": evaluation.get("status"),
                 "factor_status": factor_evidence.get("status"),
                 "attribution_status": attribution_evidence.get("status"),
                 "attribution_benchmark": attribution_bundle.get("benchmark"),
                 "attribution_benchmark_source": attribution_bundle.get("benchmark_source"),
+                "attribution_evidence_mode": attribution_origin.get("mode"),
+                "attribution_quarter": attribution_origin.get("quarter") or attribution_bundle.get("quarter"),
+                "attribution_evidence_updated_at": attribution_origin.get("updated_at"),
+                "manager_tenure_coverage_status": manager_tenure_performance.get("coverage_status"),
+                "manager_tenure_coverage_ratio": manager_tenure_performance.get("coverage_ratio"),
+                "multi_period_status": multi_period_evidence.get("status"),
+                "multi_period_consistency_status": multi_period_evidence.get("consistency_status"),
+                "multi_period_consistency_label": multi_period_evidence.get("consistency_label"),
+                "multi_period_data_as_of": multi_period_evidence.get("data_as_of"),
+                "holding_style_drift_status": holding_style_drift.get("status"),
+                "holding_style_drift_level": holding_style_drift.get("level"),
+                "holding_style_drift_previous_quarter": holding_style_drift.get("previous_quarter"),
+                "holding_style_drift_latest_quarter": holding_style_drift.get("latest_quarter"),
+                "evaluation_score": assessment_summary.get("score"),
+                "evaluation_grade": assessment_summary.get("grade"),
+                "peer_rank": assessment_summary.get("peer_rank"),
+                "peer_count": assessment_summary.get("peer_count"),
+                "evaluation_verdict": assessment_summary.get("verdict"),
+                "style_evidence_status": style_evidence_summary.get("status"),
+                "style_evidence_scope": style_evidence_summary.get("scope"),
+                "style_evidence_quarter": style_evidence_summary.get("quarter"),
+                "style_labels": style_evidence_summary.get("labels") or [],
+                "memo_style_labels": style_evidence_summary.get("memo_labels") or [],
+                "research_evidence_status": research_evidence_summary.get("status"),
+                "research_evidence_note": research_evidence_summary.get("note"),
+                "attribution_evidence_status": attribution_evidence_summary.get("status"),
+                "attribution_evidence_headline": attribution_evidence_summary.get("headline"),
+                "attribution_evidence_detail": attribution_evidence_summary.get("detail"),
+                "attribution_disclosure_coverage": attribution_evidence_summary.get("coverage"),
+                "formal_barra_ready": attribution_evidence_summary.get("formal_barra_ready"),
+                "barra_descriptor_ready": attribution_evidence_summary.get("barra_descriptor_ready"),
             },
         }
     except HTTPException:

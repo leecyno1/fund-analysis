@@ -39,6 +39,15 @@ def main() -> int:
     if index_fund.get("evaluation_profile_key") != "index_fund":
         raise AssertionError(f"Index evaluation profile expected: {index_fund}")
 
+    sector_index = service.classify(
+        {"wind_code": "SECTOR.INDEX", "name": "沪深300医药卫生ETF", "type": "指数型"},
+        {},
+    )
+    if sector_index.get("strategy_family_key") != "index_sector":
+        raise AssertionError(f"Sector index must not fall into broad-index peers: {sector_index}")
+    if sector_index.get("evaluation_profile_key") != "index_fund":
+        raise AssertionError(f"Sector index should reuse passive-index evaluation: {sector_index}")
+
     fixed_index = service.classify(
         {"wind_code": "CD.TEST", "name": "中证同业存单AAA指数7天持有", "type": "指数型"},
         {},
@@ -49,13 +58,54 @@ def main() -> int:
         raise AssertionError(f"Fixed-income index must use index evaluation without entering equity peers: {fixed_index}")
 
     qdii_fund = service.classify(
-        {"wind_code": "QDII.TEST", "name": "全球消费精选QDII", "type": "QDII"},
+        {
+            "wind_code": "QDII.TEST",
+            "name": "全球消费精选QDII",
+            "type": "QDII",
+            "raw_data": {"universe": {
+                "invest_type": "股票型",
+                "contract_type": "股票型",
+                "benchmark": "MSCI全球指数收益率×100%",
+            }},
+        },
         {},
     )
-    if qdii_fund.get("strategy_family_key") != "qdii_global_theme":
+    if qdii_fund.get("strategy_family_key") != "qdii_equity":
         raise AssertionError(f"QDII classification failed: {qdii_fund}")
-    if qdii_fund.get("evaluation_profile_key") != "qdii":
+    if qdii_fund.get("evaluation_profile_key") != "qdii_equity":
         raise AssertionError(f"QDII must not fall into active equity scoring: {qdii_fund}")
+
+    qdii_name_only = service.classify(
+        {"wind_code": "QDII.NAME", "name": "全球消费精选QDII", "type": "QDII"},
+        {},
+    )
+    if qdii_name_only.get("status") != "insufficient_evidence":
+        raise AssertionError(f"QDII must not infer asset class from its name: {qdii_name_only}")
+
+    fof_fund = service.classify(
+        {
+            "wind_code": "FOF.TEST",
+            "name": "养老目标日期2035三年持有期混合(FOF)-A",
+            "type": "混合型",
+            "contract_benchmark": "沪深300指数收益率×40%+上证国债指数收益率×60%",
+            "invest_type": "混合型",
+            "contract_type": "混合型",
+        },
+        {},
+    )
+    if fof_fund.get("status") != "classified":
+        raise AssertionError(f"FOF with contract allocation evidence must be classified: {fof_fund}")
+    if fof_fund.get("strategy_family_key") != "fof_balanced_allocation":
+        raise AssertionError(f"FOF must enter its dedicated balanced peer family: {fof_fund}")
+    if fof_fund.get("evaluation_profile_key") != "fof_balanced":
+        raise AssertionError(f"FOF must use its dedicated evaluation profile: {fof_fund}")
+
+    fof_missing_benchmark = service.classify(
+        {"wind_code": "FOF.MISSING", "name": "养老目标日期混合(FOF)-A", "type": "混合型"},
+        {},
+    )
+    if fof_missing_benchmark.get("status") != "insufficient_evidence":
+        raise AssertionError(f"FOF without a contract benchmark must remain blocked: {fof_missing_benchmark}")
 
     profile_only = service.classify(
         {"wind_code": "PROFILE.TEST", "name": "基础信息待补", "type": ""},
@@ -75,7 +125,7 @@ def main() -> int:
     if not unknown.get("missing_items"):
         raise AssertionError(f"Unknown classification must explain the evidence gap: {unknown}")
 
-    for result in [explicit, index_fund, fixed_index, qdii_fund, profile_only, unknown]:
+    for result in [explicit, index_fund, sector_index, fixed_index, qdii_fund, qdii_name_only, fof_fund, fof_missing_benchmark, profile_only, unknown]:
         for key in [
             "status",
             "asset_class",

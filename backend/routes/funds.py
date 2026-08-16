@@ -13,6 +13,12 @@ from decimal import Decimal
 from uuid import UUID
 import logging
 
+from lib.holding_weight_validation import fund_nav_weight, validate_fund_nav_weights
+from services.fund_manager_tenure_context import (
+    enrich_profile_with_manager_tenure,
+    resolve_manager_tenure_context,
+)
+
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/funds", tags=["基金"])
 
@@ -30,6 +36,14 @@ FUND_TYPE_FILTER_MAP = {
 class CompareMatrixRequest(BaseModel):
     windCodes: List[str]
     window: str = "1y"
+
+
+class AlignedCompareRequest(BaseModel):
+    windCodes: List[str]
+
+
+class HoldingSimilarityRequest(BaseModel):
+    windCodes: List[str]
 
 
 def _clean_nan(obj):
@@ -102,10 +116,14 @@ def _api_fund_from_row(row: dict[str, Any], scoring_engine=None) -> dict[str, An
     risk = row.get("risk_metrics", {}) or {}
     raw_data = row.get("raw_data") or {}
     info = raw_data.get("info") if isinstance(raw_data, dict) else {}
+    universe = raw_data.get("universe") if isinstance(raw_data, dict) else {}
     if not isinstance(info, dict):
         info = {}
-    sales_status = _sales_status(info)
-    fee_info = _fee_info(info)
+    if not isinstance(universe, dict):
+        universe = {}
+    base_info = {**universe, **info}
+    sales_status = _sales_status(base_info)
+    fee_info = _fee_info(base_info)
     raw_state = sales_status.get("status") or (raw_data.get("status") if isinstance(raw_data, dict) else None)
     operation_status = _operation_status(row.get("name") or "", raw_state, sales_status)
     scoring = None
@@ -125,12 +143,19 @@ def _api_fund_from_row(row: dict[str, Any], scoring_engine=None) -> dict[str, An
         "total_asset": row.get("total_asset"),
         "nav": row.get("nav"),
         "nav_date": row.get("nav_date"),
-        "establishment_date": row.get("establishment_date"),
+        "establishment_date": row.get("establishment_date") or base_info.get("establishment_date"),
         "updated_at": row.get("updated_at"),
         "operation_status": operation_status,
         "sales_status": sales_status,
         "fee_info": fee_info,
-        "benchmark": info.get("benchmark") or None,
+        "benchmark": base_info.get("benchmark") or row.get("benchmark") or None,
+        "contract_benchmark": base_info.get("benchmark") or row.get("benchmark") or None,
+        "company": row.get("company") or base_info.get("company") or raw_data.get("company"),
+        "custodian": row.get("custodian") or base_info.get("custodian"),
+        "invest_type": row.get("invest_type") or base_info.get("invest_type"),
+        "contract_type": row.get("contract_type") or base_info.get("contract_type"),
+        "management_fee": row.get("management_fee") or base_info.get("management_fee"),
+        "custodian_fee": row.get("custodian_fee") or base_info.get("custodian_fee"),
         "performance": perf,
         "performance_data": perf,
         "risk_metrics": risk,
@@ -280,6 +305,152 @@ def _rolling_metric_panel(panel: list[dict[str, Any]]) -> dict[str, dict[str, An
         if item.get("peer_group_key"):
             result[window]["peer_group_key"] = item.get("peer_group_key")
     return result
+
+
+def _quarter_before(quarter: str) -> str:
+    year = int(quarter[:4])
+    number = int(quarter[-1])
+    return f"{year - 1}Q4" if number == 1 else f"{year}Q{number - 1}"
+
+
+def _latest_holding_quarter_candidates(limit: int = 6) -> list[str]:
+    current = f"{datetime.now().year}Q{(datetime.now().month - 1) // 3 + 1}"
+    current = _quarter_before(current)
+    result = []
+    for _ in range(limit):
+        result.append(current)
+        current = _quarter_before(current)
+    return result
+
+
+def _holding_market(stock_code: Any) -> str:
+    code = str(stock_code or "").upper()
+    if code.endswith(".HK"):
+        return "港股"
+    if code.endswith(".SH"):
+        return "沪市"
+    if code.endswith(".SZ"):
+        return "深市"
+    if code.endswith(".BJ"):
+        return "北交所"
+    return "其他"
+
+
+def _enrich_holding_industry_evidence(holdings: list[dict[str, Any]]) -> dict[str, Any]:
+    hong_kong_holdings = []
+    for holding in holdings:
+        holding["market"] = _holding_market(holding.get("stock_code"))
+        if holding["market"] == "港股":
+            hong_kong_holdings.append(holding)
+
+    if not hong_kong_holdings:
+        return {
+            "status": "not_applicable",
+            "hong_kong_holding_count": 0,
+            "matched_holding_count": 0,
+        }
+
+    try:
+        from repositories import get_market_index_constituent_repo
+
+        snapshot = get_market_index_constituent_repo().get_latest("HSCI-INDUSTRY")
+    except Exception as exc:
+        logger.warning("Holding industry evidence unavailable: %s", exc)
+        snapshot = None
+
+    if not snapshot:
+        return {
+            "status": "unavailable",
+            "hong_kong_holding_count": len(hong_kong_holdings),
+            "matched_holding_count": 0,
+            "note": "尚无恒生指数公司行业分类快照。",
+        }
+
+    constituent_map = {
+        str(item.get("constituent_code") or "").upper(): item
+        for item in snapshot.get("constituents") or []
+    }
+    matched = 0
+    evidence_url = None
+    for holding in hong_kong_holdings:
+        evidence = constituent_map.get(str(holding.get("stock_code") or "").upper())
+        if not evidence or not evidence.get("industry"):
+            continue
+        matched += 1
+        evidence_url = evidence_url or evidence.get("evidence_url")
+        holding["industry"] = evidence.get("industry")
+        holding["industry_source"] = snapshot.get("source")
+        holding["industry_as_of_date"] = snapshot.get("as_of_date")
+        holding["industry_evidence_url"] = evidence.get("evidence_url")
+
+    return {
+        "status": "available" if matched == len(hong_kong_holdings) else "partial_evidence",
+        "hong_kong_holding_count": len(hong_kong_holdings),
+        "matched_holding_count": matched,
+        "as_of_date": snapshot.get("as_of_date"),
+        "source": snapshot.get("source"),
+        "evidence_url": evidence_url,
+        "note": "港股行业名称采用最新恒生行业分类，仅用于持仓展示；历史 Brinson 仍只使用区间开始日前快照。",
+    }
+
+
+def _holding_summary(holdings: list[dict[str, Any]]) -> dict[str, Any]:
+    weight_validation = validate_fund_nav_weights(holdings)
+    fund_nav_weights = [fund_nav_weight(item) for item in holdings]
+    equity_weights = [_as_float(item.get("equity_portfolio_weight")) for item in holdings]
+    has_fund_nav_weights = bool(holdings) and all(value is not None and value >= 0 for value in fund_nav_weights)
+    has_equity_weights = bool(holdings) and any(value is not None and value >= 0 for value in equity_weights)
+    selected_weights = fund_nav_weights if has_fund_nav_weights else equity_weights
+    industry_buckets: dict[str, float] = {}
+    market_buckets: dict[str, float] = {}
+    holding_sources = list(dict.fromkeys(
+        str(item.get("source") or "") for item in holdings if item.get("source")
+    ))
+    weight_sources = list(dict.fromkeys(
+        str(item.get("weight_source") or "") for item in holdings if item.get("weight_source")
+    ))
+    fund_net_asset_bases = list(dict.fromkeys(
+        str(item.get("fund_net_asset_basis") or "")
+        for item in holdings
+        if item.get("fund_net_asset_basis")
+    ))
+    for item, weight in zip(holdings, selected_weights):
+        if weight is None:
+            continue
+        industry = str(item.get("industry") or "未知")
+        market = str(item.get("market") or _holding_market(item.get("stock_code")))
+        industry_buckets[industry] = industry_buckets.get(industry, 0.0) + weight
+        market_buckets[market] = market_buckets.get(market, 0.0) + weight
+    return {
+        "holding_count": len(holdings),
+        "weight_basis": "fund_nav" if has_fund_nav_weights else "equity_portfolio",
+        "weight_validation": weight_validation.as_dict(),
+        "report_date": max((str(item.get("report_date") or "") for item in holdings), default="") or None,
+        "announcement_date": max((str(item.get("announcement_date") or "") for item in holdings), default="") or None,
+        "synced_at": max((str(item.get("synced_at") or "") for item in holdings), default="") or None,
+        "holding_sources": holding_sources,
+        "weight_sources": weight_sources,
+        "weight_source_urls": list(dict.fromkeys(
+            str(item.get("weight_source_url") or "")
+            for item in holdings
+            if item.get("weight_source_url")
+        )),
+        "fund_net_asset_bases": fund_net_asset_bases,
+        "fund_net_asset_date": max((str(item.get("fund_net_asset_date") or "") for item in holdings), default="") or None,
+        "top_three_weight": round(sum(value for value in fund_nav_weights[:3] if value is not None), 6) if has_fund_nav_weights else None,
+        "top_ten_weight": round(sum(value for value in fund_nav_weights[:10] if value is not None), 6) if has_fund_nav_weights else None,
+        "top_three_equity_weight": round(sum(value for value in equity_weights[:3] if value is not None), 6) if has_equity_weights else None,
+        "top_ten_equity_weight": round(sum(value for value in equity_weights[:10] if value is not None), 6) if has_equity_weights else None,
+        "industry_buckets": [
+            {"industry": industry, "weight": round(weight, 6)}
+            for industry, weight in sorted(industry_buckets.items(), key=lambda item: item[1], reverse=True)
+        ],
+        "market_buckets": [
+            {"market": market, "weight": round(weight, 6)}
+            for market, weight in sorted(market_buckets.items(), key=lambda item: item[1], reverse=True)
+        ],
+        "industry_weight_basis": "fund_nav" if has_fund_nav_weights else "equity_portfolio",
+    }
 
 
 @router.get("/")
@@ -552,6 +723,34 @@ async def compare_fund_matrix(payload: CompareMatrixRequest):
         raise HTTPException(status_code=500, detail=str(exc))
 
 
+@router.post("/compare-aligned")
+async def compare_fund_aligned(payload: AlignedCompareRequest):
+    """仅使用共同净值日期计算同区间曲线和风险收益指标。"""
+    try:
+        from services.fund_aligned_comparison_service import FundAlignedComparisonService
+
+        return _clean_nan(FundAlignedComparisonService().build(payload.windCodes))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        logger.error(f"Aligned fund comparison error: {exc}")
+        raise HTTPException(status_code=500, detail="基金同区间比较暂时不可用")
+
+
+@router.post("/holding-similarity")
+async def compare_fund_holding_similarity(payload: HoldingSimilarityRequest):
+    """比较同一报告期前十大公开重仓股的重合度。"""
+    try:
+        from services.fund_holding_similarity_service import FundHoldingSimilarityService
+
+        return _clean_nan(FundHoldingSimilarityService().build(payload.windCodes))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        logger.error(f"Fund holding similarity error: {exc}")
+        raise HTTPException(status_code=500, detail="基金重仓相似度暂时不可用")
+
+
 @router.get("/{wind_code}/peer-percentiles")
 async def get_fund_peer_percentiles(wind_code: str, window: str = Query("1y")):
     """获取单只基金在同类池中的指标分位。"""
@@ -634,8 +833,10 @@ async def get_recommendation_candidates(
             limit=limit,
         )
         _attach_manager_summaries(result.get("candidates") or [], get_manager_repo())
-        for candidate in result.get("candidates") or []:
-            candidate["research_snapshot"] = FundResearchSnapshotService.candidate_snapshot(candidate)
+        result["candidates"] = [
+            FundResearchSnapshotService.candidate_snapshot(candidate)
+            for candidate in result.get("candidates") or []
+        ]
         return _clean_nan(result)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -666,6 +867,27 @@ async def get_peer_group_universe(
     return await get_recommendation_universe(peer_group=peer_group, limit=limit, keyword=keyword)
 
 
+@router.get("/evaluation-history/recent")
+async def get_recent_fund_evaluation_history(
+    window: Optional[str] = Query(None),
+    status: Optional[str] = Query(None),
+    limit: int = Query(30, ge=1, le=100),
+):
+    """读取最近的基金评价结果，供评价中心统一回看。"""
+    try:
+        from services.fund_evaluation_history_service import FundEvaluationHistoryService
+
+        result = FundEvaluationHistoryService().list_recent(
+            evaluation_window=window,
+            status=status,
+            limit=limit,
+        )
+        return _clean_nan(result)
+    except Exception as exc:
+        logger.error(f"Get recent fund evaluation history error: {exc}")
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
 @router.get("/{wind_code}/evaluation")
 async def get_fund_evaluation(wind_code: str, window: str = Query("1y")):
     """获取分类、同类组、基准、专业评分和同类分位组成的基金评价快照。"""
@@ -679,12 +901,90 @@ async def get_fund_evaluation(wind_code: str, window: str = Query("1y")):
         raise HTTPException(status_code=500, detail=str(exc))
 
 
+@router.get("/{wind_code}/evaluation-statistics")
+async def get_fund_evaluation_statistics(wind_code: str, window: str = Query("1y")):
+    """获取同类可比评分的分布、统计和当前基金位置。"""
+    try:
+        from services.fund_evaluation_service import FundEvaluationService
+
+        evaluation_service = FundEvaluationService()
+        context = evaluation_service.load_context(wind_code)
+        if not context.get("found"):
+            raise HTTPException(status_code=404, detail=f"基金不存在: {wind_code}")
+        result = evaluation_service.peer_comparison_service.build_peer_statistics(
+            wind_code,
+            window=window,
+            target_context=context,
+        )
+        return _clean_nan(result)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"Get fund evaluation statistics error for {wind_code}: {exc}")
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.get("/{wind_code}/evaluation-history")
+async def get_fund_evaluation_history(
+    wind_code: str,
+    window: Optional[str] = Query(None),
+    limit: int = Query(30, ge=1, le=100),
+):
+    """读取用户主动保存的专业评价历史。"""
+    try:
+        from services.fund_evaluation_history_service import FundEvaluationHistoryService
+
+        result = FundEvaluationHistoryService().list_history(
+            wind_code,
+            evaluation_window=window,
+            limit=limit,
+        )
+        return _clean_nan(result)
+    except Exception as exc:
+        logger.error(f"Get fund evaluation history error for {wind_code}: {exc}")
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.post("/{wind_code}/evaluation-history")
+async def save_fund_evaluation_history(
+    wind_code: str,
+    window: str = Query("1y"),
+):
+    """现场计算并保存一次专业评价；页面刷新不会自动新增记录。"""
+    try:
+        from services.fund_evaluation_history_service import FundEvaluationHistoryService
+
+        result = FundEvaluationHistoryService().save_current(wind_code, window=window)
+        return _clean_nan(result)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except Exception as exc:
+        logger.error(f"Save fund evaluation history error for {wind_code}: {exc}")
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.get("/{wind_code}/evaluation-history/{snapshot_id}")
+async def get_fund_evaluation_history_snapshot(wind_code: str, snapshot_id: str):
+    """读取一条已保存评价，供用户复核当时的完整结果。"""
+    try:
+        from services.fund_evaluation_history_service import FundEvaluationHistoryService
+
+        result = FundEvaluationHistoryService().get_snapshot(wind_code, snapshot_id)
+        return _clean_nan(result)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except Exception as exc:
+        logger.error(f"Get fund evaluation history snapshot error for {wind_code}: {exc}")
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
 @router.get("/{wind_code}/research-snapshot")
 async def get_fund_research_snapshot(
     wind_code: str,
     window: str = Query("1y"),
     include_research: bool = Query(True),
     include_attribution: bool = Query(False),
+    live_attribution: bool = Query(True),
 ):
     """详情、推荐和 AI 共用的统一基金研究快照。"""
     from services.fund_research_snapshot_service import FundResearchSnapshotService
@@ -695,6 +995,7 @@ async def get_fund_research_snapshot(
             window=window,
             include_research=include_research,
             include_attribution=include_attribution,
+            live_attribution=live_attribution,
         )
         return _clean_nan(result)
     except ValueError as exc:
@@ -702,6 +1003,211 @@ async def get_fund_research_snapshot(
     except Exception as exc:
         logger.error(f"Get fund research snapshot error for {wind_code}: {exc}")
         raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.get("/{wind_code}/product-profile")
+async def get_fund_product_profile(wind_code: str, refresh: bool = Query(False)):
+    """读取本地产品介绍与费率档案；仅在明确 refresh 时更新外部公开数据。"""
+    from services.fund_product_profile_service import FundProductProfileService
+
+    try:
+        service = FundProductProfileService()
+        return _clean_nan(service.sync(wind_code) if refresh else service.get(wind_code))
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except Exception as exc:
+        logger.error(f"Get fund product profile error for {wind_code}: {exc}")
+        raise HTTPException(status_code=500, detail="基金产品档案暂时不可用")
+
+
+@router.get("/{wind_code}/asset-allocation")
+async def get_fund_asset_allocation(
+    wind_code: str,
+    limit: int = Query(20, ge=1, le=100),
+    refresh: bool = Query(False),
+):
+    """获取基金定期报告披露的股票、债券、现金和净资产历史。"""
+    from services.fund_asset_allocation_service import FundAssetAllocationService
+
+    return _clean_nan(FundAssetAllocationService().get(wind_code, limit=limit, refresh=refresh))
+
+
+@router.get("/{wind_code}/share-classes")
+async def get_fund_share_classes(wind_code: str):
+    """获取同一基金实体的 A/C/Y 等份额及可核验费率事实。"""
+    from services.fund_share_class_service import FundShareClassService
+
+    try:
+        return _clean_nan(FundShareClassService().get(wind_code))
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except Exception as exc:
+        logger.error(f"Get fund share classes error for {wind_code}: {exc}")
+        raise HTTPException(status_code=500, detail="基金份额比较暂时不可用")
+
+
+@router.get("/{wind_code}/manager-history")
+async def get_fund_manager_history(wind_code: str):
+    """获取基金实体的历任经理记录；同一基金的不同份额会合并。"""
+    from services.fund_manager_history_service import FundManagerHistoryService
+
+    try:
+        return _clean_nan(FundManagerHistoryService().get(wind_code))
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except Exception as exc:
+        logger.error(f"Get fund manager history error for {wind_code}: {exc}")
+        raise HTTPException(status_code=500, detail="基金经理历史暂时不可用")
+
+
+@router.get("/{wind_code}/drawdown-recovery")
+async def get_fund_drawdown_recovery(wind_code: str):
+    """获取本地真实净值的回撤事件、持续时间和修复时间。"""
+    from services.fund_drawdown_recovery_service import FundDrawdownRecoveryService
+
+    try:
+        return _clean_nan(FundDrawdownRecoveryService().get(wind_code))
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except Exception as exc:
+        logger.error(f"Get fund drawdown recovery error for {wind_code}: {exc}")
+        raise HTTPException(status_code=500, detail="基金回撤修复分析暂时不可用")
+
+
+@router.get("/{wind_code}/period-performance")
+async def get_fund_period_performance(
+    wind_code: str,
+    years: int = Query(5, ge=1, le=8),
+):
+    """获取自然年度收益及严格同类年度排名。"""
+    from services.fund_period_performance_service import FundPeriodPerformanceService
+
+    try:
+        return _clean_nan(FundPeriodPerformanceService().get(wind_code, years=years))
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except Exception as exc:
+        logger.error(f"Get fund period performance error for {wind_code}: {exc}")
+        raise HTTPException(status_code=500, detail="基金年度业绩暂时不可用")
+
+
+@router.post("/{wind_code}/manager-history/sync")
+async def sync_fund_manager_history(wind_code: str):
+    """从 Tushare 现场补齐一只基金的经理任职历史。"""
+    from service_registry import get_strict_tushare_service
+    from services.fund_manager_history_service import FundManagerHistoryService
+    from services.fund_manager_tenure_sync_service import FundManagerTenureSyncService
+
+    try:
+        sync_result = FundManagerTenureSyncService(get_strict_tushare_service()).sync_fund_history(wind_code)
+        if sync_result.get("status") != "synced":
+            raise HTTPException(status_code=422, detail=sync_result.get("reason") or "经理任职数据同步失败")
+        return _clean_nan({
+            "sync": sync_result,
+            "history": FundManagerHistoryService().get(wind_code),
+        })
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"Sync fund manager history error for {wind_code}: {exc}")
+        raise HTTPException(status_code=500, detail="基金经理历史同步失败")
+
+
+@router.get("/{wind_code}/bond-holdings")
+async def get_fund_bond_holdings(
+    wind_code: str,
+    limit: int = Query(8, ge=1, le=20),
+    refresh: bool = Query(False),
+):
+    """获取本地公开重仓债券明细及券种结构；refresh=true 时同步公开披露。"""
+    from services.fund_bond_holding_service import FundBondHoldingService
+
+    return _clean_nan(FundBondHoldingService().get(wind_code, limit=limit, refresh=refresh))
+
+
+@router.get("/{wind_code}/fof-holdings")
+async def get_fund_fof_holdings(
+    wind_code: str,
+    limit: int = Query(8, ge=1, le=20),
+    refresh: bool = Query(False),
+):
+    """获取 FOF 公开底层基金持仓、集中度和评价证据门槛。"""
+    from services.fund_fof_holding_service import FundFofHoldingService
+
+    return _clean_nan(FundFofHoldingService().get(wind_code, limit=limit, refresh=refresh))
+
+
+@router.get("/{wind_code}/bond-duration")
+async def get_fund_bond_duration(
+    wind_code: str,
+    window_weeks: int = Query(104, ge=52, le=156),
+):
+    """读取最近一次债基净值回归久期；不会自动触发外部数据同步。"""
+    from services.fund_bond_duration_service import FundBondDurationService
+
+    try:
+        return _clean_nan(FundBondDurationService().get(wind_code, window_weeks=window_weeks))
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.post("/{wind_code}/bond-duration/calculate")
+async def calculate_fund_bond_duration(
+    wind_code: str,
+    window_weeks: int = Query(104, ge=52, le=156),
+    refresh_indices: bool = Query(False),
+):
+    """现场运行中债分期限指数 + Sharpe 收益率风格回归久期。"""
+    from services.fund_bond_duration_service import FundBondDurationService
+
+    try:
+        return _clean_nan(FundBondDurationService().calculate(
+            wind_code,
+            window_weeks=window_weeks,
+            refresh_indices=refresh_indices,
+        ))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except Exception as exc:
+        logger.error(f"Calculate bond duration error for {wind_code}: {exc}")
+        raise HTTPException(status_code=500, detail="债基久期现场测算失败")
+
+
+@router.get("/{wind_code}/bond-anomaly")
+async def get_fund_bond_anomaly(
+    wind_code: str,
+    window_days: int = Query(252, ge=126, le=756),
+):
+    """按26日布林带和标准化同类收益门槛监控债基异常波动。"""
+    from services.fund_bond_anomaly_service import FundBondAnomalyService
+
+    try:
+        return _clean_nan(FundBondAnomalyService().analyze(wind_code, window_days=window_days))
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except Exception as exc:
+        logger.error(f"Get bond anomaly monitor error for {wind_code}: {exc}")
+        raise HTTPException(status_code=500, detail="债基异常监控暂时不可用")
+
+
+@router.get("/{wind_code}/holding-changes")
+async def get_fund_holding_changes(wind_code: str):
+    """对比最近两期公开披露的前十大重仓股。"""
+    from services.fund_holding_change_service import FundHoldingChangeService
+
+    return _clean_nan(FundHoldingChangeService().analyze(wind_code))
+
+
+@router.get("/{wind_code}/holder-structure")
+async def get_fund_holder_structure(
+    wind_code: str,
+    limit: int = Query(20, ge=1, le=100),
+    refresh: bool = Query(False),
+):
+    """获取基金半年报、年报披露的机构、个人和内部持有比例。"""
+    from services.fund_holder_structure_service import FundHolderStructureService
+
+    return _clean_nan(FundHolderStructureService().get(wind_code, limit=limit, refresh=refresh))
 
 
 @router.get("/{wind_code}")
@@ -714,7 +1220,7 @@ async def get_fund_detail(wind_code: str):
     from repositories import get_fund_repo, get_factor_repo, get_manager_repo, get_metric_snapshot_repo, get_research_profile_repo
 
     cache = get_cache()
-    cache_key = f"fund:detail:v8:{wind_code}"
+    cache_key = f"fund:detail:v10:{wind_code}"
 
     # 尝试从缓存获取
     cached = cache.get(cache_key)
@@ -742,7 +1248,16 @@ async def get_fund_detail(wind_code: str):
                 fund_id=str(payload.get("id")),
                 wind_code=payload.get("wind_code"),
             )
-            payload["research_profile"] = research_profile_repo.get_profile(payload.get("wind_code"))
+            stored_profile = research_profile_repo.get_profile(payload.get("wind_code")) or {}
+            manager_tenure_context = resolve_manager_tenure_context(
+                db_fund,
+                stored_profile,
+                manager_repo.get_current_fund_tenure_context(payload.get("wind_code")),
+            )
+            payload["research_profile"] = enrich_profile_with_manager_tenure(
+                stored_profile,
+                manager_tenure_context,
+            )
             try:
                 payload["rolling_metrics"] = _rolling_metric_panel(
                     metric_snapshot_repo.get_latest_panel("fund", payload.get("wind_code"))
@@ -757,6 +1272,13 @@ async def get_fund_detail(wind_code: str):
                 payload["data_quality"] = {"status": "unknown", "score": 0, "issues": ["数据质量评估暂不可用"]}
             try:
                 payload["professional_scoring"] = professional_scoring_service.score_fund(payload.get("wind_code"))
+                professional = payload["professional_scoring"] or {}
+                payload["scoring"] = {
+                    "overall_score": professional.get("overall_score"),
+                    "overall_grade": professional.get("overall_grade"),
+                    "status": professional.get("status"),
+                    "calculation_method": professional.get("calculation_method"),
+                }
             except Exception as exc:
                 logger.warning(f"Professional scoring unavailable for {payload.get('wind_code')}: {exc}")
                 payload["professional_scoring"] = None
@@ -818,16 +1340,21 @@ async def get_fund_nav(
 ):
     """获取基金净值序列"""
     from services.cache_service import get_cache, CacheKey, TTL
+    from repositories import get_nav_repo
     from service_registry import get_data_service
 
     cache = get_cache()
-    cache_key = f"fund:nav:{wind_code}:{start_date}:{end_date}:{freq}"
+    cache_key = f"fund:nav:v2:{wind_code}:{start_date}:{end_date}:{freq}"
     cached = cache.get(cache_key)
     if cached is not None:
         return cached
 
-    data_svc = get_data_service()
-    data = data_svc.get_fund_nav(wind_code, start_date, end_date)
+    data = get_nav_repo().get_nav_series(wind_code, start_date, end_date)
+    source = "local.postgres.fund_nav"
+    if not data:
+        data_svc = get_data_service()
+        data = data_svc.get_fund_nav(wind_code, start_date, end_date)
+        source = "market_data.fund_nav"
 
     if freq == "monthly":
         monthly = {}
@@ -837,65 +1364,94 @@ async def get_fund_nav(
                 monthly[month_key] = d["nav"]
         data = [{"date": k, "nav": v} for k, v in monthly.items()]
 
-    result = {"wind_code": wind_code, "start_date": start_date, "end_date": end_date, "count": len(data), "data": data}
+    result = {
+        "wind_code": wind_code,
+        "start_date": start_date,
+        "end_date": end_date,
+        "count": len(data),
+        "source": source,
+        "benchmark_count": sum(1 for item in data if item.get("benchmark_nav") is not None),
+        "data": data,
+    }
     cache.set(cache_key, result, TTL.LONG)
     return _clean_nan(result)
+
+
+@router.get("/{wind_code}/holding-experience")
+async def get_fund_holding_experience(wind_code: str):
+    """回放历史买入日下的 1/3/6/12 个月持有体验。"""
+    from services.fund_holding_experience_service import FundHoldingExperienceService
+
+    return _clean_nan(FundHoldingExperienceService().analyze(wind_code))
 
 
 @router.get("/{wind_code}/holdings")
 async def get_fund_holdings(
     wind_code: str,
     quarter: Optional[str] = Query(None, description="季度, 如: 2024Q3, 2024Q4"),
+    local_only: bool = Query(False, description="仅读取本地持仓库，不触发外部数据同步"),
 ):
     """获取基金持仓"""
-    from services.cache_service import get_cache, CacheKey, TTL
     from service_registry import get_data_service
     from repositories import get_holding_repo
-
-    cache = get_cache()
-    cache_key = f"fund:holdings:{wind_code}:{quarter or 'current'}"
-    cached = cache.get(cache_key)
-    if cached is not None:
-        return cached
 
     data_svc = get_data_service()
     holding_repo = get_holding_repo()
 
-    if quarter is None:
-        current_year = datetime.now().year
-        current_q = (datetime.now().month - 1) // 3 + 1
-        quarters = [f"{current_year}Q{current_q}"]
-        if current_q > 1:
-            quarters.insert(0, f"{current_year}Q{current_q-1}")
-        elif current_year > 2020:
-            quarters.insert(0, f"{current_year-1}Q4")
+    requested_quarters = [quarter] if quarter else _latest_holding_quarter_candidates()
+    holdings: list[dict[str, Any]] = []
+    latest_quarter = None
+    source = None
+    weight_evidence: dict[str, Any] = {}
+    for candidate in requested_quarters:
+        local_holdings = holding_repo.get_holdings(wind_code, candidate)
+        if local_holdings:
+            candidate_holdings = local_holdings
+            source = "local.postgres.holdings"
+        elif not local_only:
+            candidate_holdings = data_svc.get_fund_holdings(wind_code, candidate)
+            source = "tushare.fund_portfolio" if candidate_holdings else None
+        else:
+            candidate_holdings = []
+        if not candidate_holdings:
+            continue
+        from services.fund_holding_weight_service import FundHoldingWeightService
 
-        all_holdings = {}
-        for q in quarters:
-            holdings = data_svc.get_fund_holdings(wind_code, q)
-            for h in holdings:
-                key = h["stock_code"]
-                if key not in all_holdings:
-                    all_holdings[key] = {**h, "quarters": [q]}
-                else:
-                    all_holdings[key]["quarters"].append(q)
-
-            # 持久化持仓
-            try:
-                holding_repo.upsert_holdings(wind_code, q, holdings)
-            except:
-                pass
-
-        result = {"wind_code": wind_code, "quarters": quarters, "holdings": list(all_holdings.values())}
-    else:
-        holdings = data_svc.get_fund_holdings(wind_code, quarter)
+        enrichment = FundHoldingWeightService().enrich(
+            wind_code,
+            candidate,
+            candidate_holdings,
+            refresh_allocation=not local_only,
+        )
+        holdings = enrichment["holdings"]
+        industry_evidence = _enrich_holding_industry_evidence(holdings)
+        weight_evidence = {
+            key: value
+            for key, value in enrichment.items()
+            if key not in {"holdings", "allocation"}
+        }
+        latest_quarter = candidate
         try:
-            holding_repo.upsert_holdings(wind_code, quarter, holdings)
-        except:
+            holding_repo.upsert_holdings(wind_code, candidate, holdings)
+        except Exception:
             pass
-        result = {"wind_code": wind_code, "quarter": quarter, "holdings": holdings}
+        break
 
-    cache.set(cache_key, result, TTL.LONG)
+    result = {
+        "wind_code": wind_code,
+        "requested_quarter": quarter,
+        "latest_quarter": latest_quarter,
+        "source": source,
+        "holdings": holdings,
+        "summary": _holding_summary(holdings),
+        "weight_evidence": weight_evidence,
+        "industry_evidence": industry_evidence if holdings else {
+            "status": "not_applicable",
+            "hong_kong_holding_count": 0,
+            "matched_holding_count": 0,
+        },
+    }
+
     return _clean_nan(result)
 
 

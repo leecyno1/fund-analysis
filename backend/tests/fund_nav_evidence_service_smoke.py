@@ -8,8 +8,11 @@ from services.fund_nav_evidence_service import FundNavDataEnrichmentService, Fun
 
 
 class FakeClassificationAdapter:
-    def __init__(self, benchmark_code=None):
+    def __init__(self, benchmark_code=None, benchmark_type=None, benchmark_components=None, declared_benchmark=None):
         self.benchmark_code = benchmark_code
+        self.benchmark_type = benchmark_type
+        self.benchmark_components = benchmark_components
+        self.declared_benchmark = declared_benchmark
 
     def get_classification_context(self, wind_code: str):
         return {
@@ -18,6 +21,11 @@ class FakeClassificationAdapter:
             "benchmark_mapping": (
                 {
                     "benchmark_code": self.benchmark_code,
+                    "benchmark_type": self.benchmark_type,
+                    "evidence_refs": {
+                        **({"benchmarkComponents": self.benchmark_components} if self.benchmark_components else {}),
+                        **({"declaredBenchmark": self.declared_benchmark} if self.declared_benchmark else {}),
+                    },
                     "source": "benchmark_mappings",
                     "mapping_method": "test_mapping",
                 }
@@ -36,6 +44,8 @@ class FakeMarketDataAdapter:
 
     def get_benchmark_nav(self, benchmark_code: str, start_date: str, end_date: str):
         self.calls.append((benchmark_code, start_date, end_date))
+        if isinstance(self.benchmark_series, dict):
+            return list(self.benchmark_series.get(benchmark_code) or [])
         return list(self.benchmark_series)
 
     def get_benchmark_rate(self, benchmark_code: str, start_date: str, end_date: str):
@@ -113,6 +123,67 @@ def main() -> int:
         raise AssertionError(f"Shared benchmark dates must be attached exactly: {enrichment}")
     if enrichment.get("nav_data_status") != "valid":
         raise AssertionError(f"Ordinary index NAV should pass the quality gate: {enrichment}")
+
+    component_series = {
+        "000300.SH": [{"date": f"2026-07-{day:02d}", "nav": 4000 + day} for day in range(1, 11)],
+        "HSI": [{"date": f"2026-07-{day:02d}", "nav": 24000 + day * 3} for day in range(1, 11)],
+        "H11001.CSI": [{"date": f"2026-07-{day:02d}", "nav": 250 + day / 10} for day in range(1, 11)],
+    }
+    composite = FundNavDataEnrichmentService(
+        FakeMarketDataAdapter(component_series),
+        classification_adapter=FakeClassificationAdapter(
+            "CONTRACT-CN-HK-EQUITY",
+            "contract_composite_benchmark",
+            [
+                {"code": "000300.SH", "weight": 45},
+                {"code": "HSI", "weight": 45},
+                {"code": "H11001.CSI", "weight": 10},
+            ],
+        ),
+    ).enrich(
+        wind_code="CROSS.MARKET",
+        fund_type="股票型",
+        nav_series=fund_series,
+        start_date="2026-07-01",
+        end_date="2026-07-10",
+    )
+    if composite.get("benchmark_data_status") != "available" or composite.get("benchmark_observations") != 10:
+        raise AssertionError(f"Verified contract components must form a composite benchmark: {composite}")
+    if composite.get("benchmark_source") != "derived:tushare.contract_composite.daily_rebalanced_v1":
+        raise AssertionError(f"Composite benchmark methodology lineage is missing: {composite}")
+
+    allocation_bucket_market = FakeMarketDataAdapter({
+        "000300.SH": component_series["000300.SH"],
+        "H11009.CSI": component_series["H11001.CSI"],
+        "HSI": component_series["HSI"],
+    })
+    allocation_bucket = FundNavDataEnrichmentService(
+        allocation_bucket_market,
+        classification_adapter=FakeClassificationAdapter(
+            "MIXED-EQUITY-60",
+            "declared_allocation_bucket",
+            declared_benchmark="沪深300指数收益率×60%+中证综合债券指数收益率×30%+恒生指数收益率×10%",
+        ),
+    ).enrich(
+        wind_code="MIXED.CONTRACT",
+        fund_type="混合型",
+        nav_series=fund_series,
+        start_date="2026-07-01",
+        end_date="2026-07-10",
+    )
+    if allocation_bucket.get("benchmark_code") != "MIXED-EQUITY-60":
+        raise AssertionError(f"Classification benchmark bucket must remain unchanged: {allocation_bucket}")
+    if allocation_bucket.get("performance_benchmark_type") != "contract_composite_benchmark":
+        raise AssertionError(f"Allocation bucket must expose a separate performance benchmark: {allocation_bucket}")
+    if allocation_bucket.get("benchmark_observations") != 10:
+        raise AssertionError(f"Declared contract components must build a real benchmark curve: {allocation_bucket}")
+    called_codes = {item[0] for item in allocation_bucket_market.calls}
+    if called_codes != {"000300.SH", "H11009.CSI", "HSI"}:
+        raise AssertionError(f"Classification bucket must not be requested as a market code: {called_codes}")
+    if {item.get("code") for item in allocation_bucket.get("performance_benchmark_components") or []} != {
+        "000300.SH", "H11009.CSI", "HSI"
+    }:
+        raise AssertionError(f"Contract component evidence is incomplete: {allocation_bucket}")
 
     no_mapping_market = FakeMarketDataAdapter(benchmark_series)
     no_mapping = FundNavDataEnrichmentService(

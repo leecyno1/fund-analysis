@@ -28,8 +28,8 @@ import math
 import uuid
 import json
 
-from routes import funds, managers, scoring, reports, research_reports, research_memos, research_folders, screening
-from routes import attribution, barra, brinson, export, data_sync, data_health, metrics, fund_pools, alerts, investment_analysis, fund_browser
+from routes import funds, fund_companies, home, managers, scoring, reports, research_reports, research_memos, research_folders, screening, watchlists
+from routes import attribution, barra, brinson, export, data_sync, data_health, metrics, fund_pools, alerts, investment_analysis, fund_browser, market_indices, newma_desk
 from service_registry import get_data_service, get_scoring_engine, get_db
 
 logging.basicConfig(
@@ -141,7 +141,9 @@ app.add_middleware(
 )
 
 app.include_router(funds.router, tags=["基金"])
+app.include_router(home.router, tags=["选基首页"])
 app.include_router(fund_browser.router, tags=["基金浏览器"])
+app.include_router(fund_companies.router, tags=["基金公司"])
 app.include_router(managers.router, tags=["基金经理"])
 app.include_router(scoring.router, tags=["评分系统"])
 app.include_router(reports.router, tags=["AI报告"])
@@ -157,8 +159,11 @@ app.include_router(data_sync.router, tags=["数据同步"])
 app.include_router(data_health.router, tags=["数据健康"])
 app.include_router(metrics.router, tags=["指标快照"])
 app.include_router(fund_pools.router, tags=["基金池"])
+app.include_router(market_indices.router, tags=["市场指数"])
+app.include_router(watchlists.router, tags=["我的自选"])
 app.include_router(alerts.router, tags=["预警中心"])
 app.include_router(investment_analysis.router, tags=["高级投资分析"])
+app.include_router(newma_desk.router, tags=["Newma Desk"])
 
 
 @app.get("/api/health")
@@ -191,12 +196,16 @@ async def get_config():
         value = (os.environ.get(name) or "").strip()
         return len(value) >= 30
 
-    siliconflow_key_configured = bool(
-        _valid_secret("LLM_API_KEY")
-        or _valid_secret("SILICONFLOW_API_KEY")
-        or _valid_secret("OPENAI_COMPATIBLE_API_KEY")
-        or (_valid_secret("OPENAI_API_KEY") if compatible_provider else False)
-    )
+    if provider in {"siliconflow", "deepseek"}:
+        compatible_key_configured = _valid_secret("SILICONFLOW_API_KEY") or _valid_secret("LLM_API_KEY")
+    elif provider == "openai-compatible":
+        compatible_key_configured = bool(
+            _valid_secret("OPENAI_COMPATIBLE_API_KEY")
+            or _valid_secret("LLM_API_KEY")
+            or _valid_secret("OPENAI_API_KEY")
+        )
+    else:
+        compatible_key_configured = False
     anthropic_key_configured = _valid_secret("ANTHROPIC_API_KEY")
     return {
         "data_source": DATA_SOURCE,
@@ -205,8 +214,10 @@ async def get_config():
         "llm_provider": provider,
         "llm_model": os.environ.get("LLM_MODEL") or os.environ.get("SILICONFLOW_MODEL") or os.environ.get("OPENAI_COMPATIBLE_MODEL"),
         "llm_base_url": os.environ.get("LLM_BASE_URL") or os.environ.get("SILICONFLOW_BASE_URL") or os.environ.get("OPENAI_COMPATIBLE_BASE_URL"),
-        "llm_api_configured": siliconflow_key_configured if compatible_provider else anthropic_key_configured,
-        "siliconflow_api_configured": siliconflow_key_configured,
+        "llm_api_configured": compatible_key_configured if compatible_provider else anthropic_key_configured,
+        "siliconflow_api_configured": bool(
+            _valid_secret("SILICONFLOW_API_KEY") or _valid_secret("LLM_API_KEY")
+        ) if provider in {"siliconflow", "deepseek"} else False,
     }
 
 

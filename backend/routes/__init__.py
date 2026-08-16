@@ -1,10 +1,10 @@
 """
 路由包初始化
 """
-from . import funds, managers, scoring, reports, research_reports, research_memos, screening, attribution, barra, brinson, export, data_sync, investment_analysis
+from . import funds, home, managers, scoring, reports, research_reports, research_memos, screening, attribution, barra, brinson, export, data_sync, investment_analysis, market_indices, watchlists
 
 __all__ = [
-    "funds", "managers", "scoring", "reports",
+    "funds", "home", "managers", "scoring", "reports",
     "research_reports", "research_memos", "screening", "attribution", "barra", "brinson",
-    "export", "data_sync", "investment_analysis",
+    "export", "data_sync", "investment_analysis", "market_indices", "watchlists",
 ]

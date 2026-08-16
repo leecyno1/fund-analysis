@@ -7,6 +7,8 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from services.local_research_folder_service import FolderValidationError, LocalResearchFolderService
+from services.research_memo_manager_matcher import ResearchMemoManagerMatcher
+from services.research_memo_manager_profile_projection_service import ResearchMemoManagerProfileProjectionService
 from services.research_memo_profile_projection_service import ResearchMemoProfileProjectionService
 
 
@@ -42,8 +44,16 @@ def _get_service() -> LocalResearchFolderService:
     repo.ensure_indexes()
     extractor = get_research_memo_metadata_extractor()
     manager_repo = ManagerRepo()
+    manager_matcher = ResearchMemoManagerMatcher(
+        manager_repo.list_identity_catalog(),
+        company_names=manager_repo.list_fund_company_catalog(),
+    )
     manager_fund_resolver = ResearchMemoManagerFundResolver()
-    projector = ResearchMemoProfileProjectionService(report_repo=repo)
+    fund_projector = ResearchMemoProfileProjectionService(report_repo=repo)
+    manager_projector = ResearchMemoManagerProfileProjectionService(
+        report_repo=repo,
+        manager_repo=manager_repo,
+    )
 
     def resolve_manager(manager_name: str):
         manager = manager_repo.get_manager(manager_name)
@@ -59,8 +69,10 @@ def _get_service() -> LocalResearchFolderService:
         repo=repo,
         manager_resolver=resolve_manager,
         metadata_extractor=extractor.extract,
+        manager_matcher=manager_matcher,
         manager_fund_resolver=manager_fund_resolver.resolve,
-        profile_projector=projector.project_report,
+        profile_projector=fund_projector.project_report,
+        manager_profile_projector=manager_projector.project_report,
     )
 
 
@@ -78,9 +90,9 @@ async def connect_folder(payload: FolderConnectRequest):
 
 
 @router.post("/{folder_id}/scan")
-async def scan_folder(folder_id: str):
+async def scan_folder(folder_id: str, retry_llm: bool = Query(False)):
     try:
-        return _get_service().scan_folder(folder_id)
+        return _get_service().scan_folder(folder_id, retry_llm=retry_llm)
     except FolderValidationError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

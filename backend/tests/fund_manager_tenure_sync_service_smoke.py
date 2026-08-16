@@ -11,7 +11,11 @@ class FundRepo:
         self.assignment = None
 
     def get_fund(self, code):
-        return {"wind_code": code, "name": "真实基金"}
+        return {
+            "wind_code": code,
+            "name": "真实基金",
+            "raw_data": {"universe": {"company": "示例基金管理有限公司"}},
+        }
 
     def update_manager_assignments(self, code, manager_ids, evidence):
         self.assignment = (code, manager_ids, evidence)
@@ -25,6 +29,10 @@ class ManagerRepo:
     def upsert_manager(self, manager_id, data):
         self.rows.append((manager_id, data))
         return True
+
+    def upsert_fund_tenures(self, manager_id, rows):
+        self.tenure_rows = getattr(self, "tenure_rows", []) + [(manager_id, rows)]
+        return len(rows)
 
 
 class ProfileRepo:
@@ -105,6 +113,13 @@ def main() -> int:
         raise AssertionError(profile_repo.fields)
     if tenure_service.code != "000390.OF" or len(manager_repo.rows) != 3:
         raise AssertionError("经理关系或任期指标没有完整同步")
+    if any(row[1].get("company") != "示例基金管理有限公司" for row in manager_repo.rows):
+        raise AssertionError("经理同步必须继承基金档案中的真实基金公司")
+    history_result = service.sync_fund_history("000390.OF")
+    if history_result.get("status") != "synced" or history_result.get("tenure_records_saved") != 4:
+        raise AssertionError(history_result)
+    if len(manager_repo.tenure_rows) != 3:
+        raise AssertionError("基金经理历史没有按真实经理增量写入")
     print("OK real manager records feed fund assignments, conservative team tenure and tenure metrics")
     return 0
 

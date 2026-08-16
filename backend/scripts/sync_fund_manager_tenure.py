@@ -108,6 +108,7 @@ def select_fund_selection_coverage_codes(limit: int, missing_only: bool) -> List
 def main() -> int:
     parser = argparse.ArgumentParser(description="同步真实基金经理关系和任期指标")
     parser.add_argument("--codes", default="", help="逗号分隔基金代码")
+    parser.add_argument("--manager-id", default="", help="规范基金经理 ID；同步该经理完整产品任职史")
     parser.add_argument("--limit", type=int, default=200)
     parser.add_argument("--include-existing", action="store_true")
     parser.add_argument(
@@ -119,6 +120,11 @@ def main() -> int:
     args = parser.parse_args()
 
     init_database()
+    if args.manager_id.strip():
+        result = FundManagerTenureSyncService(get_strict_tushare_service()).sync_manager(args.manager_id.strip())
+        print(json.dumps(result, ensure_ascii=False))
+        return 1 if result.get("status") == "failed" else 0
+
     codes = [item.strip().upper() for item in args.codes.split(",") if item.strip()]
     if not codes:
         if args.fund_selection_coverage:

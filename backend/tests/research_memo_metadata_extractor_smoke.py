@@ -13,6 +13,13 @@ class FakeGenerator:
     def extract_research_memo_metadata(self, content, filename):
         if filename == "invalid.md":
             return "not json"
+        if filename == "explained.md":
+            return '''提取结果如下：
+            {"manager_names": [], "fund_ids": [], "classifications": [],
+             "style_labels": [{"value": "成长", "confidence": 0.82, "excerpt": "风格偏成长"}]}
+            以上候选均来自原文。'''
+        if filename == "stringified.md":
+            return '{"result":"{\\"manager_names\\":[],\\"fund_ids\\":[],\\"classifications\\":[],\\"style_labels\\":[{\\"value\\":\\"成长\\",\\"confidence\\":0.82,\\"excerpt\\":\\"风格偏成长\\"}]}"}'
         return """```json
         {
           "manager_names": [
@@ -61,6 +68,14 @@ def main() -> int:
     invalid = extractor.extract(content, "invalid.md")
     if invalid.get("status") != "failed" or invalid.get("proposals"):
         raise AssertionError(f"Invalid model output must fail closed: {invalid}")
+
+    explained = extractor.extract(content, "explained.md")
+    if {(item.get("kind"), item.get("value")) for item in explained.get("proposals", [])} != {("style_label", "成长")}:
+        raise AssertionError(f"JSON surrounded by model explanation must be parsed: {explained}")
+
+    stringified = extractor.extract(content, "stringified.md")
+    if {(item.get("kind"), item.get("value")) for item in stringified.get("proposals", [])} != {("style_label", "成长")}:
+        raise AssertionError(f"Stringified JSON payload must be parsed: {stringified}")
 
     unavailable = ResearchMemoMetadataExtractor(generator=None).extract(content, "访谈.md")
     if unavailable.get("status") != "unavailable" or unavailable.get("proposals"):

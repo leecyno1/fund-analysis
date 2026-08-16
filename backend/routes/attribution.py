@@ -32,3 +32,21 @@ def get_fund_attribution(
         raise HTTPException(status_code=503, detail=f"Attribution store unavailable: {exc.__class__.__name__}") from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.get("/fund/{wind_code}/history")
+def get_fund_attribution_history(
+    wind_code: str,
+    limit: int = Query(8, ge=1, le=40),
+) -> Dict[str, Any]:
+    try:
+        from repositories import get_attribution_repo
+
+        rows = get_attribution_repo().list_history(wind_code, limit)
+        return {
+            "wind_code": wind_code,
+            "count": len(rows),
+            "history": rows,
+        }
+    except SQLAlchemyError as exc:
+        raise HTTPException(status_code=503, detail=f"Attribution store unavailable: {exc.__class__.__name__}") from exc

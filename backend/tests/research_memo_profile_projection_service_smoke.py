@@ -76,7 +76,7 @@ class FakeClassificationAdapter:
         return [wind_code]
 
 
-def proposal(proposal_id, kind, value, status, excerpt, confidence=0.9):
+def proposal(proposal_id, kind, value, status, excerpt, confidence=0.9, target_fund_ids=None):
     return {
         "id": proposal_id,
         "kind": kind,
@@ -84,6 +84,8 @@ def proposal(proposal_id, kind, value, status, excerpt, confidence=0.9):
         "review_status": status,
         "reviewed_at": "2026-08-10T08:00:00+00:00" if status != "pending" else None,
         "confidence": confidence,
+        "scope": "fund",
+        "target_fund_ids": target_fund_ids if target_fund_ids is not None else ["000001.OF", "000001.C"],
         "source_ref": {
             "relative_path": f"张三/{proposal_id}.md",
             "source_path": f"/research/张三/{proposal_id}.md",
@@ -105,6 +107,15 @@ def main() -> int:
             "tags": ["低换手"],
             "review_proposals": [
                 proposal("style-growth-1", "style_label", "成长", "confirmed", "长期偏好成长股", 0.95),
+                proposal(
+                    "manager-style",
+                    "style_label",
+                    "红利",
+                    "confirmed",
+                    "经理整体偏好红利",
+                    0.99,
+                    target_fund_ids=[],
+                ),
                 proposal("class-equity", "classification", "主动权益", "confirmed", "以主动选股为主"),
                 proposal("tag-turnover", "tag", "低换手", "confirmed", "组合换手率较低"),
                 proposal("style-pending", "style_label", "主题", "pending", "阶段性关注主题"),
@@ -147,6 +158,19 @@ def main() -> int:
         raise AssertionError(f"Confirmed labels should aggregate and deduplicate: {profile}")
     if "主题" in profile.get("strategy_tags", []):
         raise AssertionError(f"Pending labels must not enter the profile: {profile}")
+    if "红利" in profile.get("strategy_tags", []):
+        raise AssertionError(f"Manager-level styles must not leak into a fund profile: {profile}")
+
+    profile_repo.profiles["000001.C"] = {
+        "wind_code": "000001.C",
+        "style_label": "旧份额标签",
+        "updated_by": service.UPDATED_BY,
+    }
+    alias_cleaned = service.project_report(reports[1], ["000001.C"])
+    if profile_repo.get_profile("000001.C") is not None:
+        raise AssertionError("Non-canonical share-class style profiles must be removed")
+    if alias_cleaned.get("funds", [{}])[0].get("alias_cleanup_count") != 1:
+        raise AssertionError(f"Share-class cleanup must be auditable: {alias_cleaned}")
 
     evidence = profile.get("evidence", {}).get("research_memos", [])
     growth_evidence = next(item for item in evidence if item.get("value") == "成长")
@@ -185,7 +209,7 @@ def main() -> int:
     tenure_report["fund_ids"] = ["000003.OF"]
     tenure_report["style_labels"] = ["成长"]
     tenure_report["review_proposals"] = [
-        proposal("tenure-growth", "style_label", "成长", "confirmed", "成长风格")
+        proposal("tenure-growth", "style_label", "成长", "confirmed", "成长风格", target_fund_ids=["000003.OF"])
     ]
     report_repo.reports[tenure_report["id"]] = tenure_report
     profile_repo.profiles["000003.OF"] = {

@@ -35,7 +35,7 @@ def main() -> int:
     )
     if fixed_income_plus.get("status") not in {"ok", "partial"}:
         raise AssertionError(f"含权益配置债券评价不可用: {fixed_income_plus}")
-    mixed_profiles = ["multi_asset_equity", "multi_asset_balanced", "multi_asset_bond"]
+    mixed_profiles = ["multi_asset", "multi_asset_equity", "multi_asset_balanced", "multi_asset_bond"]
     for profile_key in mixed_profiles:
         configs = methodology.peer_metric_configs(profile_key)
         required_metrics = {"annualized_return", "max_drawdown", "sharpe_ratio"}
@@ -107,7 +107,7 @@ def main() -> int:
     ManagerTenureMetricService().calculate_and_save_for_fund(fund_code)
 
     result = ProfessionalScoringService().score_fund(fund_code)
-    if result.get("calculation_method") != "category_evaluation_methodology_v1:active_equity":
+    if result.get("calculation_method") != "category_evaluation_methodology_v6:active_equity:1y":
         raise AssertionError(f"Unexpected calculation method: {result}")
     if result.get("fund_type_profile") != "active_equity":
         raise AssertionError(f"Expected active_equity profile, got {result}")
