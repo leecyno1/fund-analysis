@@ -120,6 +120,94 @@ class LocalResearchFolderRepo:
         ])
         return [_document(item) for item in cursor]
 
+    def list_reports_for_manager_exact(self, manager_id: str, limit: int = 50) -> List[Dict[str, Any]]:
+        cursor = self.db.research_reports.find({
+            "$or": [
+                {"manager_id": manager_id},
+                {"manager_links.manager_id": manager_id},
+            ]
+        }).sort([
+            ("report_date", -1),
+            ("updated_at", -1),
+        ]).limit(max(1, min(int(limit), 200)))
+        return [_document(item) for item in cursor]
+
+    def list_confirmed_manager_ids(self, folder_id: Optional[str] = None) -> List[str]:
+        query: Dict[str, Any] = {
+            "$or": [
+                {"manager_id": {"$nin": [None, ""]}},
+                {"manager_links.manager_id": {"$nin": [None, ""]}},
+            ]
+        }
+        if folder_id:
+            query["local_folder_id"] = folder_id
+        manager_ids = {
+            str(item.get("manager_id") or "").strip()
+            for item in self.db.research_reports.find(query, {"manager_id": 1, "manager_links": 1})
+            if str(item.get("manager_id") or "").strip()
+        }
+        manager_ids.update(
+            str(link.get("manager_id") or "").strip()
+            for item in self.db.research_reports.find(query, {"manager_links": 1})
+            for link in item.get("manager_links") or []
+            if str(link.get("manager_id") or "").strip()
+        )
+        return sorted(manager_ids)
+
+    def list_manager_review_reports(self, folder_id: Optional[str] = None) -> List[Dict[str, Any]]:
+        query: Dict[str, Any] = {"review_proposals": {"$elemMatch": {"kind": "manager"}}}
+        if folder_id:
+            query["local_folder_id"] = folder_id
+        return [
+            _document(item)
+            for item in self.db.research_reports.find(query).sort("updated_at", -1)
+        ]
+
+    def list_report_manager_links(self, report_id: str) -> List[Dict[str, Any]]:
+        report = self.get_report(report_id) or {}
+        links = list(report.get("manager_links") or [])
+        manager_id = str(report.get("manager_id") or "").strip()
+        if manager_id and not any(str(item.get("manager_id") or "") == manager_id for item in links):
+            links.append({
+                "manager_id": manager_id,
+                "manager_name": report.get("manager_name") or manager_id,
+                "source": "legacy_research_reports.manager_id",
+            })
+        return links
+
+    def set_report_manager_link(
+        self,
+        report_id: str,
+        manager_id: str,
+        manager_name: str,
+        source: str = "research_memo_review",
+        confirmed_at: Optional[str] = None,
+    ) -> None:
+        from bson import ObjectId
+
+        link = {
+            "manager_id": manager_id,
+            "manager_name": manager_name,
+            "source": source,
+            "confirmed_at": confirmed_at,
+        }
+        self.db.research_reports.update_one(
+            {"_id": ObjectId(report_id)},
+            {"$pull": {"manager_links": {"manager_id": manager_id}}},
+        )
+        self.db.research_reports.update_one(
+            {"_id": ObjectId(report_id)},
+            {"$push": {"manager_links": link}},
+        )
+
+    def remove_report_manager_link(self, report_id: str, manager_id: str) -> None:
+        from bson import ObjectId
+
+        self.db.research_reports.update_one(
+            {"_id": ObjectId(report_id)},
+            {"$pull": {"manager_links": {"manager_id": manager_id}}},
+        )
+
     def list_pending_reviews(self, folder_id: Optional[str] = None) -> List[Dict[str, Any]]:
         query: Dict[str, Any] = {"review_proposals": {"$elemMatch": {"review_status": "pending"}}}
         if folder_id:
@@ -134,6 +222,9 @@ class LocalResearchFolderRepo:
                 pending.append({
                     "report_id": str(report["_id"]),
                     "report_title": report.get("title") or "无标题纪要",
+                    "report_date": report.get("report_date"),
+                    "report_date_source": report.get("report_date_source"),
+                    "report_date_precision": report.get("report_date_precision"),
                     **_serialize(proposal),
                 })
         return pending
@@ -143,8 +234,10 @@ class PostgresLocalResearchFolderRepo:
     """PostgreSQL-backed local memo index used by the main application."""
 
     REPORT_FIELDS = {
-        "manager_id", "manager_name", "fund_ids", "title", "report_date", "source",
-        "content", "summary", "key_points", "tags", "classifications", "style_labels",
+        "manager_id", "manager_name", "fund_ids", "title", "report_date",
+        "report_date_source", "report_date_precision", "source",
+        "content", "summary", "key_points", "tags", "viewpoint_topics", "research_domains",
+        "classifications", "style_labels",
         "review_proposals", "review_status", "local_folder_id", "local_relative_path",
         "local_source_path", "source_hash", "extraction_status", "extraction_provider",
         "extraction_model", "llm_extraction_status", "llm_extraction_error", "created_at",
@@ -168,6 +261,46 @@ class PostgresLocalResearchFolderRepo:
     @staticmethod
     def _row(row: Any) -> Optional[Dict[str, Any]]:
         return _serialize(dict(row._mapping)) if row else None
+
+    def _with_manager_links(self, report: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        if not report:
+            return report
+        links = self.list_report_manager_links(str(report.get("id") or ""))
+        return {
+            **report,
+            "manager_links": links,
+            "manager_ids": [str(item.get("manager_id") or "") for item in links],
+            "manager_names": [str(item.get("manager_name") or "") for item in links],
+        }
+
+    def _rows_with_manager_links(self, rows: List[Any]) -> List[Dict[str, Any]]:
+        reports = [self._row(row) or {} for row in rows]
+        if not reports:
+            return reports
+        from sqlalchemy import bindparam, text
+
+        report_ids = [str(report["id"]) for report in reports]
+        sql = text("""
+            SELECT link.report_id, link.manager_id, link.manager_name, link.source, link.confirmed_at,
+                   manager.company AS manager_company,
+                   manager.management_years AS manager_management_years
+            FROM research_report_managers link
+            LEFT JOIN managers manager ON manager.wind_code = link.manager_id
+            WHERE link.report_id IN :report_ids
+            ORDER BY link.confirmed_at, link.manager_name
+        """).bindparams(bindparam("report_ids", expanding=True))
+        with self.engine.connect() as conn:
+            links = conn.execute(sql, {"report_ids": report_ids}).fetchall()
+        links_by_report: Dict[str, List[Dict[str, Any]]] = {}
+        for row in links:
+            link = self._row(row) or {}
+            links_by_report.setdefault(str(link.pop("report_id")), []).append(link)
+        for report in reports:
+            manager_links = links_by_report.get(str(report.get("id")), [])
+            report["manager_links"] = manager_links
+            report["manager_ids"] = [str(item.get("manager_id") or "") for item in manager_links]
+            report["manager_names"] = [str(item.get("manager_name") or "") for item in manager_links]
+        return reports
 
     @classmethod
     def _params(cls, fields: Dict[str, Any]) -> Dict[str, Any]:
@@ -203,7 +336,7 @@ class PostgresLocalResearchFolderRepo:
         """
         with self.engine.begin() as conn:
             row = conn.execute(text(sql), self._params(fields)).fetchone()
-        return self._row(row) or {}
+        return self._with_manager_links(self._row(row)) or {}
 
     def list_folders(self) -> List[Dict[str, Any]]:
         from sqlalchemy import text
@@ -211,6 +344,124 @@ class PostgresLocalResearchFolderRepo:
         with self.engine.connect() as conn:
             rows = conn.execute(text("SELECT * FROM local_research_folders ORDER BY created_at DESC")).fetchall()
         return [self._row(row) or {} for row in rows]
+
+    def list_reports_for_manager_exact(self, manager_id: str, limit: int = 50) -> List[Dict[str, Any]]:
+        from sqlalchemy import text
+
+        with self.engine.connect() as conn:
+            rows = conn.execute(text("""
+                SELECT report.*
+                FROM research_reports report
+                WHERE EXISTS (
+                       SELECT 1
+                       FROM research_report_managers link
+                       WHERE link.report_id = report.id
+                         AND link.manager_id = :manager_id
+                   )
+                ORDER BY report.report_date DESC NULLS LAST, report.updated_at DESC
+                LIMIT :limit
+            """), {
+                "manager_id": str(manager_id or "").strip(),
+                "limit": max(1, min(int(limit), 200)),
+            }).fetchall()
+        return self._rows_with_manager_links(rows)
+
+    def list_confirmed_manager_ids(self, folder_id: Optional[str] = None) -> List[str]:
+        from sqlalchemy import text
+
+        where = ["1=1"]
+        params: Dict[str, Any] = {}
+        if folder_id:
+            where.append("report.local_folder_id = CAST(:folder_id AS UUID)")
+            params["folder_id"] = folder_id
+        with self.engine.connect() as conn:
+            rows = conn.execute(text(f"""
+                SELECT DISTINCT link.manager_id
+                FROM research_report_managers link
+                JOIN research_reports report ON report.id = link.report_id
+                WHERE {' AND '.join(where)}
+                ORDER BY link.manager_id
+            """), params).fetchall()
+        return [str(row.manager_id) for row in rows if str(row.manager_id or "").strip()]
+
+    def list_manager_review_reports(self, folder_id: Optional[str] = None) -> List[Dict[str, Any]]:
+        from sqlalchemy import text
+
+        where = ["""
+            EXISTS (
+                SELECT 1
+                FROM jsonb_array_elements(COALESCE(report.review_proposals, '[]'::jsonb)) proposal
+                WHERE proposal->>'kind' = 'manager'
+            )
+        """]
+        params: Dict[str, Any] = {}
+        if folder_id:
+            where.append("report.local_folder_id = CAST(:folder_id AS UUID)")
+            params["folder_id"] = folder_id
+        with self.engine.connect() as conn:
+            rows = conn.execute(text(f"""
+                SELECT report.*
+                FROM research_reports report
+                WHERE {' AND '.join(where)}
+                ORDER BY report.updated_at DESC
+            """), params).fetchall()
+        return self._rows_with_manager_links(rows)
+
+    def list_report_manager_links(self, report_id: str) -> List[Dict[str, Any]]:
+        from sqlalchemy import text
+
+        with self.engine.connect() as conn:
+            rows = conn.execute(text("""
+                SELECT link.manager_id, link.manager_name, link.source, link.confirmed_at,
+                       manager.company AS manager_company,
+                       manager.management_years AS manager_management_years
+                FROM research_report_managers link
+                LEFT JOIN managers manager ON manager.wind_code = link.manager_id
+                WHERE link.report_id = CAST(:report_id AS UUID)
+                ORDER BY link.confirmed_at, link.manager_name
+            """), {"report_id": report_id}).fetchall()
+        return [self._row(row) or {} for row in rows]
+
+    def set_report_manager_link(
+        self,
+        report_id: str,
+        manager_id: str,
+        manager_name: str,
+        source: str = "research_memo_review",
+        confirmed_at: Optional[str] = None,
+    ) -> None:
+        from sqlalchemy import text
+
+        with self.engine.begin() as conn:
+            conn.execute(text("""
+                INSERT INTO research_report_managers (
+                    report_id, manager_id, manager_name, source, confirmed_at, updated_at
+                ) VALUES (
+                    CAST(:report_id AS UUID), :manager_id, :manager_name, :source,
+                    COALESCE(CAST(:confirmed_at AS TIMESTAMPTZ), NOW()), NOW()
+                )
+                ON CONFLICT (report_id, manager_id) DO UPDATE SET
+                    manager_name = EXCLUDED.manager_name,
+                    source = EXCLUDED.source,
+                    confirmed_at = EXCLUDED.confirmed_at,
+                    updated_at = NOW()
+            """), {
+                "report_id": report_id,
+                "manager_id": manager_id,
+                "manager_name": manager_name,
+                "source": source,
+                "confirmed_at": confirmed_at,
+            })
+
+    def remove_report_manager_link(self, report_id: str, manager_id: str) -> None:
+        from sqlalchemy import text
+
+        with self.engine.begin() as conn:
+            conn.execute(text("""
+                DELETE FROM research_report_managers
+                WHERE report_id = CAST(:report_id AS UUID)
+                  AND manager_id = :manager_id
+            """), {"report_id": report_id, "manager_id": manager_id})
 
     def get_folder(self, folder_id: str) -> Optional[Dict[str, Any]]:
         from sqlalchemy import text
@@ -323,21 +574,24 @@ class PostgresLocalResearchFolderRepo:
         sql = f"UPDATE research_reports SET {self._assignments(allowed)} WHERE id = CAST(:id AS UUID) RETURNING *"
         with self.engine.begin() as conn:
             row = conn.execute(text(sql), {**self._params(allowed), "id": report_id}).fetchone()
-        return self._row(row)
+        return self._with_manager_links(self._row(row))
 
     def get_report(self, report_id: str) -> Optional[Dict[str, Any]]:
         from sqlalchemy import text
 
         with self.engine.connect() as conn:
             row = conn.execute(text("SELECT * FROM research_reports WHERE id = CAST(:id AS UUID)"), {"id": report_id}).fetchone()
-        return self._row(row)
+        return self._with_manager_links(self._row(row))
 
     def list_reports(
         self,
         manager_id: Optional[str] = None,
         fund_id: Optional[str] = None,
+        folder_id: Optional[str] = None,
         keyword: Optional[str] = None,
         tags: Optional[List[str]] = None,
+        viewpoint_topics: Optional[List[str]] = None,
+        research_domain: Optional[str] = None,
         source: Optional[str] = None,
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
@@ -351,17 +605,44 @@ class PostgresLocalResearchFolderRepo:
         where = ["1=1"]
         params: Dict[str, Any] = {}
         if manager_id:
-            where.append("(manager_id = :manager_id OR manager_name = :manager_id)")
+            where.append("""
+                (
+                    manager_id = :manager_id
+                    OR manager_name = :manager_id
+                    OR EXISTS (
+                        SELECT 1
+                        FROM research_report_managers link
+                        WHERE link.report_id = research_reports.id
+                          AND (link.manager_id = :manager_id OR link.manager_name = :manager_id)
+                    )
+                )
+            """)
             params["manager_id"] = manager_id
         if fund_id:
             where.append(":fund_id = ANY(COALESCE(fund_ids, ARRAY[]::TEXT[]))")
             params["fund_id"] = fund_id
+        if folder_id:
+            where.append("""
+                EXISTS (
+                    SELECT 1
+                    FROM local_research_documents document
+                    WHERE document.report_id = research_reports.id
+                      AND document.folder_id = CAST(:folder_id AS UUID)
+                )
+            """)
+            params["folder_id"] = folder_id
         if keyword:
             where.append("(title ILIKE :keyword OR summary ILIKE :keyword OR content ILIKE :keyword)")
             params["keyword"] = f"%{keyword}%"
         if tags:
             where.append("COALESCE(research_reports.tags, ARRAY[]::TEXT[]) && :tags")
             params["tags"] = tags
+        if viewpoint_topics:
+            where.append("COALESCE(research_reports.viewpoint_topics, ARRAY[]::TEXT[]) && :viewpoint_topics")
+            params["viewpoint_topics"] = viewpoint_topics
+        if research_domain:
+            where.append(":research_domain = ANY(COALESCE(research_reports.research_domains, ARRAY[]::TEXT[]))")
+            params["research_domain"] = research_domain
         if source:
             where.append("source ILIKE :source")
             params["source"] = f"%{source}%"
@@ -387,7 +668,7 @@ class PostgresLocalResearchFolderRepo:
                 ORDER BY {safe_sort} {direction} NULLS LAST, updated_at DESC
                 LIMIT :limit OFFSET :offset
             """), params).fetchall()
-        return {"total": total, "reports": [self._row(row) or {} for row in rows]}
+        return {"total": total, "reports": self._rows_with_manager_links(rows)}
 
     def list_reports_for_fund(self, wind_code: str) -> List[Dict[str, Any]]:
         from sqlalchemy import text
@@ -406,7 +687,14 @@ class PostgresLocalResearchFolderRepo:
         where = "review_proposals @> '[{\"review_status\":\"pending\"}]'::jsonb"
         params: Dict[str, Any] = {}
         if folder_id:
-            where += " AND local_folder_id = CAST(:folder_id AS UUID)"
+            where += """
+                AND EXISTS (
+                    SELECT 1
+                    FROM local_research_documents document
+                    WHERE document.report_id = research_reports.id
+                      AND document.folder_id = CAST(:folder_id AS UUID)
+                )
+            """
             params["folder_id"] = folder_id
         with self.engine.connect() as conn:
             rows = conn.execute(text(f"SELECT * FROM research_reports WHERE {where} ORDER BY updated_at DESC"), params).fetchall()
@@ -420,6 +708,9 @@ class PostgresLocalResearchFolderRepo:
                     pending.append({
                         "report_id": report.get("id"),
                         "report_title": report.get("title") or "无标题纪要",
+                        "report_date": report.get("report_date"),
+                        "report_date_source": report.get("report_date_source"),
+                        "report_date_precision": report.get("report_date_precision"),
                         **proposal,
                     })
         return pending

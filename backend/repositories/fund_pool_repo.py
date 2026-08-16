@@ -76,15 +76,98 @@ class FundPoolRepo:
             conn.commit()
         return _row_to_dict(row)
 
+    def ensure_default_watchlist(self) -> Dict[str, Any]:
+        from sqlalchemy import text
+        from database import init_database
+
+        init_database()
+        select_sql = """
+            SELECT * FROM fund_pools
+            WHERE name = '我的自选'
+              AND created_by IN ('system', 'watchlist-system')
+            ORDER BY created_at ASC
+            LIMIT 1
+        """
+        normalize_sql = """
+            UPDATE fund_pools
+            SET created_by = 'watchlist-system', updated_at = NOW()
+            WHERE id = CAST(:pool_id AS UUID)
+            RETURNING *
+        """
+        insert_sql = """
+            INSERT INTO fund_pools (name, description, created_by, is_default)
+            VALUES ('我的自选', '随手收藏、分组比较与持续跟踪的基金。', 'watchlist-system', TRUE)
+            RETURNING *
+        """
+        with self.engine.connect() as conn:
+            row = conn.execute(text(select_sql)).fetchone()
+            if row and row._mapping.get("created_by") != "watchlist-system":
+                row = conn.execute(text(normalize_sql), {"pool_id": row._mapping["id"]}).fetchone()
+                conn.commit()
+            elif not row:
+                row = conn.execute(text(insert_sql)).fetchone()
+                conn.commit()
+        return _row_to_dict(row)
+
+    def ensure_default_research_pool(self) -> Dict[str, Any]:
+        from sqlalchemy import text
+        from database import init_database
+
+        init_database()
+        select_sql = """
+            SELECT * FROM fund_pools
+            WHERE is_default = TRUE
+              AND COALESCE(created_by, '') NOT IN ('watchlist-ui', 'watchlist-system')
+              AND COALESCE(created_by, '') NOT IN ('smoke-test', 'portfolio-smoke')
+              AND name <> '我的自选'
+            ORDER BY created_at ASC
+            LIMIT 1
+        """
+        insert_sql = """
+            INSERT INTO fund_pools (name, description, created_by, is_default)
+            VALUES ('研究观察', '用于专业评价复核和持续跟踪的研究清单。', 'research-system', TRUE)
+            RETURNING *
+        """
+        with self.engine.connect() as conn:
+            row = conn.execute(text(select_sql)).fetchone()
+            if not row:
+                row = conn.execute(text(insert_sql)).fetchone()
+                conn.commit()
+        return _row_to_dict(row)
+
     def list_pools(self) -> List[Dict[str, Any]]:
         from sqlalchemy import text
 
         sql = """
-            SELECT * FROM fund_pools
-            WHERE COALESCE(created_by, '') NOT IN ('smoke-test', 'portfolio-smoke')
-              AND name NOT ILIKE '%组合%'
-              AND name NOT ILIKE '%治理%'
-            ORDER BY is_default DESC, updated_at DESC, created_at DESC
+            SELECT
+                fund_pools.*,
+                COUNT(pool_members.id)::int AS member_count
+            FROM fund_pools
+            LEFT JOIN pool_members ON pool_members.pool_id = fund_pools.id
+            WHERE COALESCE(fund_pools.created_by, '') NOT IN ('smoke-test', 'portfolio-smoke')
+              AND COALESCE(fund_pools.created_by, '') NOT IN ('watchlist-ui', 'watchlist-system')
+              AND fund_pools.name <> '我的自选'
+              AND fund_pools.name NOT ILIKE '%组合%'
+              AND fund_pools.name NOT ILIKE '%治理%'
+            GROUP BY fund_pools.id
+            ORDER BY fund_pools.is_default DESC, fund_pools.updated_at DESC, fund_pools.created_at DESC
+        """
+        with self.engine.connect() as conn:
+            rows = conn.execute(text(sql)).fetchall()
+        return [_row_to_dict(row) for row in rows]
+
+    def list_watchlists(self) -> List[Dict[str, Any]]:
+        from sqlalchemy import text
+
+        sql = """
+            SELECT
+                fund_pools.*,
+                COUNT(pool_members.id)::int AS member_count
+            FROM fund_pools
+            LEFT JOIN pool_members ON pool_members.pool_id = fund_pools.id
+            WHERE fund_pools.created_by IN ('watchlist-ui', 'watchlist-system')
+            GROUP BY fund_pools.id
+            ORDER BY fund_pools.is_default DESC, fund_pools.updated_at DESC, fund_pools.created_at DESC
         """
         with self.engine.connect() as conn:
             rows = conn.execute(text(sql)).fetchall()
@@ -172,7 +255,8 @@ class FundPoolRepo:
     def update_member_status(
         self,
         member_id: str,
-        status: str,
+        status: Optional[str] = None,
+        reason: Optional[str] = None,
         latest_conclusion: Optional[str] = None,
         updated_by: Optional[str] = None,
         next_review_date: Optional[date] = None,
@@ -183,7 +267,8 @@ class FundPoolRepo:
 
         sql = """
             UPDATE pool_members
-            SET status = :status,
+            SET status = COALESCE(:status, status),
+                reason = COALESCE(:reason, reason),
                 latest_conclusion = COALESCE(:latest_conclusion, latest_conclusion),
                 evidence = COALESCE(CAST(:evidence AS JSONB), evidence),
                 risk_notes = COALESCE(:risk_notes, risk_notes),
@@ -197,6 +282,7 @@ class FundPoolRepo:
             row = conn.execute(text(sql), {
                 "member_id": member_id,
                 "status": status,
+                "reason": reason,
                 "latest_conclusion": latest_conclusion,
                 "evidence": _json(evidence),
                 "risk_notes": risk_notes,
@@ -204,7 +290,20 @@ class FundPoolRepo:
                 "next_review_date": next_review_date,
             }).fetchone()
             conn.commit()
-        return _row_to_dict(row)
+        return _row_to_dict(row) if row else {}
+
+    def delete_member(self, member_id: str) -> Dict[str, Any]:
+        from sqlalchemy import text
+
+        sql = """
+            DELETE FROM pool_members
+            WHERE id = CAST(:member_id AS UUID)
+            RETURNING id, pool_id, fund_id
+        """
+        with self.engine.connect() as conn:
+            row = conn.execute(text(sql), {"member_id": member_id}).fetchone()
+            conn.commit()
+        return _row_to_dict(row) if row else {}
 
     def list_members(self, pool_id: str, status: Optional[str] = None) -> List[Dict[str, Any]]:
         from sqlalchemy import text
@@ -217,13 +316,19 @@ class FundPoolRepo:
         sql = f"""
             SELECT
                 pool_members.*,
+                funds.id AS fund_database_id,
                 funds.wind_code AS fund_wind_code,
                 funds.name AS fund_name,
                 funds.type AS fund_type,
+                funds.manager_ids AS fund_manager_ids,
                 funds.nav AS fund_nav,
                 funds.nav_date AS fund_nav_date,
                 funds.total_asset AS fund_total_asset,
-                funds.establishment_date AS fund_establishment_date
+                funds.establishment_date AS fund_establishment_date,
+                funds.performance_data AS fund_performance_data,
+                funds.risk_metrics AS fund_risk_metrics,
+                funds.raw_data AS fund_raw_data,
+                funds.updated_at AS fund_updated_at
             FROM pool_members
             LEFT JOIN funds
               ON pool_members.fund_id = funds.id::text

@@ -211,7 +211,7 @@ class ResearchProfileRepo:
         return {row.wind_code: _row_to_dict(row) for row in rows}
 
     def list_memo_style_suggestions(self, wind_codes: List[str]) -> Dict[str, List[Dict[str, Any]]]:
-        """读取 LLM 从纪要提取、但尚待人工确认的风格证据。"""
+        """读取已明确指向具体基金的纪要风格证据。"""
         from sqlalchemy import text
 
         normalized_codes = list(dict.fromkeys(str(code).strip().upper() for code in wind_codes if str(code).strip()))
@@ -230,9 +230,16 @@ class ResearchProfileRepo:
             CROSS JOIN LATERAL jsonb_array_elements(COALESCE(report.review_proposals, '[]')) style_proposal
             WHERE fund_proposal->>'kind' = 'fund'
               AND fund_proposal->>'value' = ANY(:wind_codes)
-              AND COALESCE(fund_proposal->>'review_status', 'pending') <> 'rejected'
+              AND fund_proposal->>'review_status' = 'confirmed'
               AND style_proposal->>'kind' = 'style_label'
               AND COALESCE(style_proposal->>'review_status', 'pending') <> 'rejected'
+              AND EXISTS (
+                SELECT 1
+                FROM jsonb_array_elements_text(
+                  COALESCE(style_proposal->'target_fund_ids', '[]'::jsonb)
+                ) target(code)
+                WHERE target.code = fund_proposal->>'value'
+              )
               AND (
                 style_proposal->>'review_status' = 'confirmed'
                 OR (

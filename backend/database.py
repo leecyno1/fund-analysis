@@ -27,7 +27,7 @@ def normalize_database_url(database_url: str) -> str:
     return database_url
 
 
-def get_database_url(default: str = "postgresql://lichengyin@localhost:5432/fund_analysis") -> str:
+def get_database_url(default: str = "postgresql://postgres@localhost:5432/fund_analysis") -> str:
     return normalize_database_url(os.environ.get("DATABASE_URL", default))
 
 
@@ -319,6 +319,22 @@ def init_database():
             created_at TIMESTAMP DEFAULT NOW(),
             updated_at TIMESTAMP DEFAULT NOW()
         )""",
+        # 基金经理完整任职关系：现任与历史产品统一留存
+        """CREATE TABLE IF NOT EXISTS manager_fund_tenures (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            manager_id VARCHAR(50) NOT NULL REFERENCES managers(wind_code) ON DELETE CASCADE,
+            fund_code VARCHAR(20) NOT NULL REFERENCES funds(wind_code) ON DELETE CASCADE,
+            fund_name VARCHAR(200),
+            start_date DATE NOT NULL,
+            end_date DATE,
+            is_current BOOLEAN NOT NULL DEFAULT FALSE,
+            performance_snapshot JSONB,
+            source VARCHAR(100) NOT NULL DEFAULT 'tushare.fund_manager',
+            raw_data JSONB,
+            created_at TIMESTAMP DEFAULT NOW(),
+            updated_at TIMESTAMP DEFAULT NOW(),
+            UNIQUE(manager_id, fund_code, start_date)
+        )""",
         # 基金净值表
         """CREATE TABLE IF NOT EXISTS fund_nav (
             id SERIAL PRIMARY KEY,
@@ -345,6 +361,30 @@ def init_database():
             scored_at TIMESTAMP DEFAULT NOW(),
             created_at TIMESTAMP DEFAULT NOW()
         )""",
+        # 用户主动保存的专业评价历史快照
+        """CREATE TABLE IF NOT EXISTS fund_evaluation_snapshots (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            wind_code VARCHAR(20) NOT NULL REFERENCES funds(wind_code) ON DELETE CASCADE,
+            evaluation_window VARCHAR(10) NOT NULL,
+            as_of_date DATE,
+            status VARCHAR(30) NOT NULL,
+            methodology_version VARCHAR(100) NOT NULL,
+            calculation_method VARCHAR(200),
+            peer_group_id TEXT,
+            peer_group_name TEXT,
+            overall_score DECIMAL(5, 2),
+            overall_grade VARCHAR(30),
+            peer_rank INTEGER,
+            peer_count INTEGER,
+            peer_percentile DECIMAL(8, 4),
+            dimension_scores JSONB NOT NULL DEFAULT '{}'::jsonb,
+            peer_metrics JSONB NOT NULL DEFAULT '{}'::jsonb,
+            data_quality JSONB NOT NULL DEFAULT '{}'::jsonb,
+            missing_items JSONB NOT NULL DEFAULT '[]'::jsonb,
+            source_snapshot_ids TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
+            snapshot JSONB NOT NULL,
+            created_at TIMESTAMP NOT NULL DEFAULT NOW()
+        )""",
         # 基金持仓表
         """CREATE TABLE IF NOT EXISTS holdings (
             id SERIAL PRIMARY KEY,
@@ -363,7 +403,122 @@ def init_database():
             revenue_growth DECIMAL(10, 4),
             dividend_yield DECIMAL(8, 4),
             market_cap_value DECIMAL(15, 2),
+            equity_portfolio_weight DECIMAL(8, 4),
+            weight_basis VARCHAR(30),
+            weight_validation_status VARCHAR(30),
+            source VARCHAR(100),
+            weight_source VARCHAR(100),
+            weight_source_url TEXT,
+            fund_net_asset DECIMAL(24, 4),
+            fund_net_asset_basis VARCHAR(100),
+            fund_net_asset_date DATE,
+            announcement_date DATE,
+            report_date DATE,
+            synced_at TIMESTAMP NOT NULL DEFAULT NOW(),
             UNIQUE(wind_code, quarter, stock_code)
+        )""",
+        # 基金定期报告资产配置历史
+        """CREATE TABLE IF NOT EXISTS fund_asset_allocations (
+            wind_code VARCHAR(20) NOT NULL REFERENCES funds(wind_code) ON DELETE CASCADE,
+            report_date DATE NOT NULL,
+            stock_ratio DECIMAL(10, 8),
+            bond_ratio DECIMAL(10, 8),
+            cash_ratio DECIMAL(10, 8),
+            net_asset_yi DECIMAL(15, 4),
+            source TEXT NOT NULL,
+            source_url TEXT,
+            fetched_at TIMESTAMP NOT NULL DEFAULT NOW(),
+            PRIMARY KEY (wind_code, report_date)
+        )""",
+        # 基金半年报、年报披露的持有人结构历史
+        """CREATE TABLE IF NOT EXISTS fund_holder_structures (
+            wind_code VARCHAR(20) NOT NULL REFERENCES funds(wind_code) ON DELETE CASCADE,
+            report_date DATE NOT NULL,
+            institution_ratio DECIMAL(10, 8),
+            individual_ratio DECIMAL(10, 8),
+            internal_ratio DECIMAL(10, 8),
+            total_shares_yi DECIMAL(15, 4),
+            source TEXT NOT NULL,
+            source_url TEXT,
+            fetched_at TIMESTAMP NOT NULL DEFAULT NOW(),
+            PRIMARY KEY (wind_code, report_date)
+        )""",
+        # 基金定期报告公开展示的重仓债券，不代表完整债券组合
+        """CREATE TABLE IF NOT EXISTS fund_bond_holdings (
+            wind_code VARCHAR(20) NOT NULL REFERENCES funds(wind_code) ON DELETE CASCADE,
+            report_date DATE NOT NULL,
+            sequence INTEGER NOT NULL,
+            bond_code VARCHAR(30) NOT NULL,
+            bond_name VARCHAR(200) NOT NULL,
+            bond_type VARCHAR(50) NOT NULL,
+            nav_ratio DECIMAL(10, 8),
+            market_value_wan DECIMAL(18, 2),
+            classification_basis TEXT,
+            issuer VARCHAR(300),
+            security_bond_type VARCHAR(100),
+            credit_rating VARCHAR(30),
+            rating_type VARCHAR(30),
+            maturity_date DATE,
+            coupon_rate DECIMAL(10, 8),
+            metadata_source TEXT,
+            metadata_url TEXT,
+            metadata_status VARCHAR(30) NOT NULL DEFAULT 'unavailable',
+            source TEXT NOT NULL,
+            source_url TEXT,
+            fetched_at TIMESTAMP NOT NULL DEFAULT NOW(),
+            PRIMARY KEY (wind_code, report_date, bond_code)
+        )""",
+        # FOF 定期报告公开展示的底层基金，不代表完整组合
+        """CREATE TABLE IF NOT EXISTS fund_underlying_holdings (
+            wind_code VARCHAR(20) NOT NULL REFERENCES funds(wind_code) ON DELETE CASCADE,
+            report_date DATE NOT NULL,
+            sequence INTEGER NOT NULL,
+            underlying_fund_code VARCHAR(20) NOT NULL,
+            underlying_fund_name VARCHAR(200) NOT NULL,
+            nav_ratio DECIMAL(10, 8),
+            daily_return DECIMAL(10, 8),
+            source TEXT NOT NULL,
+            source_url TEXT,
+            fetched_at TIMESTAMP NOT NULL DEFAULT NOW(),
+            PRIMARY KEY (wind_code, report_date, underlying_fund_code)
+        )""",
+        # 中债分期限指数序列；用于债基净值回归久期，不参与基金评分
+        """CREATE TABLE IF NOT EXISTS bond_index_series (
+            series_key VARCHAR(100) NOT NULL,
+            index_group VARCHAR(50) NOT NULL,
+            index_name VARCHAR(200) NOT NULL,
+            index_id VARCHAR(64) NOT NULL,
+            period_code VARCHAR(10) NOT NULL,
+            period_label VARCHAR(30) NOT NULL,
+            indicator VARCHAR(30) NOT NULL,
+            trade_date DATE NOT NULL,
+            value DECIMAL(18, 8) NOT NULL,
+            source TEXT NOT NULL,
+            source_url TEXT NOT NULL,
+            fetched_at TIMESTAMP NOT NULL DEFAULT NOW(),
+            PRIMARY KEY (series_key, indicator, trade_date)
+        )""",
+        # Sharpe 收益率风格回归得到的债基估算久期
+        """CREATE TABLE IF NOT EXISTS fund_bond_duration_estimates (
+            wind_code VARCHAR(20) NOT NULL REFERENCES funds(wind_code) ON DELETE CASCADE,
+            as_of_date DATE NOT NULL,
+            window_weeks INTEGER NOT NULL,
+            data_start DATE,
+            data_end DATE,
+            observations INTEGER NOT NULL DEFAULT 0,
+            estimated_duration DECIMAL(10, 6),
+            duration_bucket VARCHAR(50),
+            r_squared DECIMAL(10, 8),
+            tracking_error DECIMAL(10, 8),
+            selected_series JSONB NOT NULL DEFAULT '[]'::jsonb,
+            weights JSONB NOT NULL DEFAULT '[]'::jsonb,
+            group_diagnostics JSONB NOT NULL DEFAULT '[]'::jsonb,
+            methodology_version VARCHAR(80) NOT NULL,
+            status VARCHAR(30) NOT NULL,
+            source TEXT NOT NULL,
+            missing_items JSONB NOT NULL DEFAULT '[]'::jsonb,
+            calculated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+            PRIMARY KEY (wind_code, as_of_date, window_weeks)
         )""",
         # Barra 因子暴露表
         """CREATE TABLE IF NOT EXISTS factor_exposures (
@@ -375,6 +530,39 @@ def init_database():
             factor_return DECIMAL(10, 4),
             risk_contribution DECIMAL(8, 4),
             UNIQUE(wind_code, quarter, factor_name)
+        )""",
+        # 公开持仓风格描述子；与正式 Barra 因子暴露分表保存
+        """CREATE TABLE IF NOT EXISTS holding_style_snapshots (
+            wind_code VARCHAR(20) NOT NULL,
+            quarter VARCHAR(10) NOT NULL,
+            peer_group_id TEXT,
+            peer_group_key TEXT,
+            peer_group_name TEXT,
+            descriptors JSONB NOT NULL DEFAULT '[]'::jsonb,
+            peer_percentiles JSONB NOT NULL DEFAULT '[]'::jsonb,
+            style_labels TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
+            peer_sample_size INTEGER NOT NULL DEFAULT 0,
+            minimum_peer_count INTEGER NOT NULL DEFAULT 5,
+            holdings_disclosed_weight DECIMAL(8, 6),
+            source TEXT NOT NULL,
+            status VARCHAR(30) NOT NULL,
+            missing_items JSONB NOT NULL DEFAULT '[]'::jsonb,
+            calculated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+            PRIMARY KEY (wind_code, quarter)
+        )""",
+        # 市场指数成分的时点快照；历史归因只能使用区间开始日之前的快照
+        """CREATE TABLE IF NOT EXISTS market_index_constituent_snapshots (
+            index_code VARCHAR(30) NOT NULL,
+            as_of_date DATE NOT NULL,
+            constituent_code VARCHAR(20) NOT NULL,
+            constituent_name VARCHAR(200),
+            weight DECIMAL(12, 10),
+            industry VARCHAR(100),
+            source TEXT NOT NULL,
+            evidence_url TEXT,
+            metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+            created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+            PRIMARY KEY (index_code, as_of_date, constituent_code)
         )""",
         # Brinson 归因表
         """CREATE TABLE IF NOT EXISTS performance_attributions (
@@ -398,6 +586,9 @@ def init_database():
         """CREATE TABLE IF NOT EXISTS manager_profiles (
             id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
             manager_id VARCHAR(50) UNIQUE NOT NULL,
+            product_positioning TEXT,
+            investment_objective TEXT,
+            investment_method TEXT,
             core_philosophy TEXT,
             stock_selection_logic TEXT,
             risk_philosophy TEXT,
@@ -405,8 +596,10 @@ def init_database():
             competence_advantages TEXT,
             competence_boundaries TEXT,
             style_label VARCHAR(50),
-            concentration VARCHAR(20),
-            turnover VARCHAR(20),
+            concentration TEXT,
+            turnover TEXT,
+            excess_return_source TEXT,
+            holding_style TEXT,
             style_stability INTEGER,
             philosophy_score INTEGER,
             competence_score INTEGER,
@@ -420,6 +613,8 @@ def init_database():
             red_flags TEXT[],
             interviews_analyzed INTEGER DEFAULT 0,
             last_interview_date DATE,
+            evidence JSONB NOT NULL DEFAULT '{}'::jsonb,
+            updated_by VARCHAR(100),
             last_updated TIMESTAMP DEFAULT NOW()
         )""",
         # 本地调研纪要文件夹
@@ -441,11 +636,15 @@ def init_database():
             fund_ids TEXT[],
             title VARCHAR(500) NOT NULL,
             report_date DATE,
+            report_date_source VARCHAR(30),
+            report_date_precision VARCHAR(20),
             source VARCHAR(200),
             content TEXT,
             summary TEXT,
             key_points JSONB,
             tags TEXT[],
+            viewpoint_topics TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
+            research_domains TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
             classifications TEXT[],
             style_labels TEXT[],
             review_proposals JSONB NOT NULL DEFAULT '[]'::jsonb,
@@ -461,6 +660,18 @@ def init_database():
             llm_extraction_error TEXT,
             created_at TIMESTAMP DEFAULT NOW(),
             updated_at TIMESTAMP DEFAULT NOW()
+        )""",
+        # 一篇纪要可关联多位经理；旧 manager_id 字段仅保留单经理兼容。
+        """CREATE TABLE IF NOT EXISTS research_report_managers (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            report_id UUID NOT NULL REFERENCES research_reports(id) ON DELETE CASCADE,
+            manager_id VARCHAR(50) NOT NULL REFERENCES managers(wind_code) ON DELETE CASCADE,
+            manager_name VARCHAR(100) NOT NULL,
+            source VARCHAR(100) NOT NULL DEFAULT 'research_memo_review',
+            confirmed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            UNIQUE(report_id, manager_id)
         )""",
         """CREATE TABLE IF NOT EXISTS local_research_documents (
             id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -674,23 +885,43 @@ def init_database():
         "CREATE INDEX IF NOT EXISTS fund_sales_rules_wind_code_idx ON fund_sales_rules(wind_code)",
         "CREATE INDEX IF NOT EXISTS idx_nav_wind_code ON fund_nav(wind_code)",
         "CREATE INDEX IF NOT EXISTS idx_nav_date ON fund_nav(trade_date)",
+        "CREATE INDEX IF NOT EXISTS idx_nav_wind_code_trade_date ON fund_nav(wind_code, trade_date)",
         "CREATE INDEX IF NOT EXISTS idx_scores_target ON scores(target_type, target_id)",
         "CREATE INDEX IF NOT EXISTS idx_scores_dimension ON scores(dimension)",
+        "CREATE INDEX IF NOT EXISTS idx_fund_evaluation_history ON fund_evaluation_snapshots(wind_code, evaluation_window, created_at DESC)",
         "CREATE INDEX IF NOT EXISTS idx_holdings_wind_code ON holdings(wind_code)",
         "CREATE INDEX IF NOT EXISTS idx_holdings_quarter ON holdings(quarter)",
         "CREATE INDEX IF NOT EXISTS idx_holdings_industry ON holdings(industry)",
+        "CREATE INDEX IF NOT EXISTS idx_fund_asset_allocations_report_date ON fund_asset_allocations(report_date)",
+        "CREATE INDEX IF NOT EXISTS idx_fund_holder_structures_report_date ON fund_holder_structures(report_date)",
+        "CREATE INDEX IF NOT EXISTS idx_fund_bond_holdings_report_date ON fund_bond_holdings(report_date)",
+        "CREATE INDEX IF NOT EXISTS idx_fund_bond_holdings_code ON fund_bond_holdings(bond_code)",
+        "CREATE INDEX IF NOT EXISTS idx_fund_bond_holdings_type ON fund_bond_holdings(bond_type)",
+        "CREATE INDEX IF NOT EXISTS idx_fund_underlying_holdings_report_date ON fund_underlying_holdings(report_date)",
+        "CREATE INDEX IF NOT EXISTS idx_fund_underlying_holdings_code ON fund_underlying_holdings(underlying_fund_code)",
+        "CREATE INDEX IF NOT EXISTS idx_bond_index_series_group_date ON bond_index_series(index_group, trade_date)",
+        "CREATE INDEX IF NOT EXISTS idx_bond_index_series_indicator_date ON bond_index_series(indicator, trade_date)",
+        "CREATE INDEX IF NOT EXISTS idx_fund_bond_duration_latest ON fund_bond_duration_estimates(wind_code, as_of_date DESC)",
         "CREATE INDEX IF NOT EXISTS idx_exposures_wind_code ON factor_exposures(wind_code)",
         "CREATE INDEX IF NOT EXISTS idx_exposures_quarter ON factor_exposures(quarter)",
+        "CREATE INDEX IF NOT EXISTS idx_holding_style_snapshots_peer ON holding_style_snapshots(peer_group_id, quarter)",
         "CREATE INDEX IF NOT EXISTS idx_attributions_wind_code ON performance_attributions(wind_code)",
         "CREATE INDEX IF NOT EXISTS idx_managers_name ON managers(name)",
+        "CREATE INDEX IF NOT EXISTS idx_manager_fund_tenures_manager ON manager_fund_tenures(manager_id, is_current)",
+        "CREATE INDEX IF NOT EXISTS idx_manager_fund_tenures_fund ON manager_fund_tenures(fund_code)",
         "CREATE INDEX IF NOT EXISTS idx_reports_manager ON research_reports(manager_id)",
         "CREATE INDEX IF NOT EXISTS idx_reports_date ON research_reports(report_date)",
         "CREATE INDEX IF NOT EXISTS idx_reports_fund_ids ON research_reports USING GIN(fund_ids)",
+        "CREATE INDEX IF NOT EXISTS idx_reports_viewpoint_topics ON research_reports USING GIN(viewpoint_topics)",
+        "CREATE INDEX IF NOT EXISTS idx_reports_research_domains ON research_reports USING GIN(research_domains)",
         "CREATE INDEX IF NOT EXISTS idx_reports_local_folder ON research_reports(local_folder_id)",
+        "CREATE INDEX IF NOT EXISTS idx_report_managers_manager ON research_report_managers(manager_id, confirmed_at)",
+        "CREATE INDEX IF NOT EXISTS idx_report_managers_report ON research_report_managers(report_id)",
         "CREATE INDEX IF NOT EXISTS idx_local_research_documents_hash ON local_research_documents(content_hash)",
         "CREATE INDEX IF NOT EXISTS idx_local_research_documents_report ON local_research_documents(report_id)",
         "CREATE INDEX IF NOT EXISTS idx_report_chunks_report ON research_report_chunks(report_id)",
         "CREATE INDEX IF NOT EXISTS idx_report_chunks_embedding ON research_report_chunks(embedding_id)",
+        "CREATE INDEX IF NOT EXISTS idx_market_index_snapshot_date ON market_index_constituent_snapshots(index_code, as_of_date DESC)",
         "CREATE INDEX IF NOT EXISTS idx_data_snapshots_source ON data_source_snapshots(source)",
         "CREATE INDEX IF NOT EXISTS idx_data_snapshots_dataset ON data_source_snapshots(dataset)",
         "CREATE INDEX IF NOT EXISTS idx_data_snapshots_status ON data_source_snapshots(status)",
@@ -726,7 +957,27 @@ def init_database():
         "ALTER TABLE fund_nav ADD COLUMN IF NOT EXISTS benchmark_nav DECIMAL(10, 4)",
         "ALTER TABLE fund_nav ADD COLUMN IF NOT EXISTS discount_rate DECIMAL(12, 8)",
         "UPDATE fund_nav SET unit_nav = nav WHERE unit_nav IS NULL AND nav IS NOT NULL",
+        "ALTER TABLE holdings ADD COLUMN IF NOT EXISTS equity_portfolio_weight DECIMAL(8, 4)",
+        "ALTER TABLE holdings ADD COLUMN IF NOT EXISTS weight_basis VARCHAR(30)",
+        "ALTER TABLE holdings ADD COLUMN IF NOT EXISTS weight_validation_status VARCHAR(30)",
+        "ALTER TABLE holdings ADD COLUMN IF NOT EXISTS source VARCHAR(100)",
+        "ALTER TABLE holdings ADD COLUMN IF NOT EXISTS weight_source VARCHAR(100)",
+        "ALTER TABLE holdings ADD COLUMN IF NOT EXISTS weight_source_url TEXT",
+        "ALTER TABLE holdings ADD COLUMN IF NOT EXISTS fund_net_asset DECIMAL(24, 4)",
+        "ALTER TABLE holdings ADD COLUMN IF NOT EXISTS fund_net_asset_basis VARCHAR(100)",
+        "ALTER TABLE holdings ADD COLUMN IF NOT EXISTS fund_net_asset_date DATE",
+        "ALTER TABLE holdings ADD COLUMN IF NOT EXISTS announcement_date DATE",
+        "ALTER TABLE holdings ADD COLUMN IF NOT EXISTS report_date DATE",
+        "ALTER TABLE holdings ADD COLUMN IF NOT EXISTS synced_at TIMESTAMP NOT NULL DEFAULT NOW()",
+        "ALTER TABLE performance_attributions ADD COLUMN IF NOT EXISTS holding_quarter VARCHAR(10)",
+        "ALTER TABLE performance_attributions ADD COLUMN IF NOT EXISTS status VARCHAR(30)",
+        "ALTER TABLE performance_attributions ADD COLUMN IF NOT EXISTS evidence JSONB",
+        "ALTER TABLE performance_attributions ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW()",
         "ALTER TABLE research_reports ADD COLUMN IF NOT EXISTS manager_name VARCHAR(100)",
+        "ALTER TABLE research_reports ADD COLUMN IF NOT EXISTS report_date_source VARCHAR(30)",
+        "ALTER TABLE research_reports ADD COLUMN IF NOT EXISTS report_date_precision VARCHAR(20)",
+        "ALTER TABLE research_reports ADD COLUMN IF NOT EXISTS viewpoint_topics TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[]",
+        "ALTER TABLE research_reports ADD COLUMN IF NOT EXISTS research_domains TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[]",
         "ALTER TABLE research_reports ADD COLUMN IF NOT EXISTS classifications TEXT[]",
         "ALTER TABLE research_reports ADD COLUMN IF NOT EXISTS style_labels TEXT[]",
         "ALTER TABLE research_reports ADD COLUMN IF NOT EXISTS review_proposals JSONB NOT NULL DEFAULT '[]'::jsonb",
@@ -740,6 +991,38 @@ def init_database():
         "ALTER TABLE research_reports ADD COLUMN IF NOT EXISTS extraction_model TEXT",
         "ALTER TABLE research_reports ADD COLUMN IF NOT EXISTS llm_extraction_status TEXT",
         "ALTER TABLE research_reports ADD COLUMN IF NOT EXISTS llm_extraction_error TEXT",
+        "ALTER TABLE manager_profiles ADD COLUMN IF NOT EXISTS evidence JSONB NOT NULL DEFAULT '{}'::jsonb",
+        "ALTER TABLE manager_profiles ADD COLUMN IF NOT EXISTS updated_by VARCHAR(100)",
+        "ALTER TABLE manager_profiles ADD COLUMN IF NOT EXISTS excess_return_source TEXT",
+        "ALTER TABLE manager_profiles ADD COLUMN IF NOT EXISTS holding_style TEXT",
+        "ALTER TABLE manager_profiles ADD COLUMN IF NOT EXISTS product_positioning TEXT",
+        "ALTER TABLE manager_profiles ADD COLUMN IF NOT EXISTS investment_objective TEXT",
+        "ALTER TABLE manager_profiles ADD COLUMN IF NOT EXISTS investment_method TEXT",
+        "ALTER TABLE manager_profiles ALTER COLUMN concentration TYPE TEXT",
+        "ALTER TABLE manager_profiles ALTER COLUMN turnover TYPE TEXT",
+        "ALTER TABLE manager_fund_tenures ADD COLUMN IF NOT EXISTS performance_snapshot JSONB",
+        "ALTER TABLE fund_bond_holdings ADD COLUMN IF NOT EXISTS issuer VARCHAR(300)",
+        "ALTER TABLE fund_bond_holdings ADD COLUMN IF NOT EXISTS security_bond_type VARCHAR(100)",
+        "ALTER TABLE fund_bond_holdings ADD COLUMN IF NOT EXISTS credit_rating VARCHAR(30)",
+        "ALTER TABLE fund_bond_holdings ADD COLUMN IF NOT EXISTS rating_type VARCHAR(30)",
+        "ALTER TABLE fund_bond_holdings ADD COLUMN IF NOT EXISTS maturity_date DATE",
+        "ALTER TABLE fund_bond_holdings ADD COLUMN IF NOT EXISTS coupon_rate DECIMAL(10, 8)",
+        "ALTER TABLE fund_bond_holdings ADD COLUMN IF NOT EXISTS metadata_source TEXT",
+        "ALTER TABLE fund_bond_holdings ADD COLUMN IF NOT EXISTS metadata_url TEXT",
+        "ALTER TABLE fund_bond_holdings ADD COLUMN IF NOT EXISTS metadata_status VARCHAR(30) NOT NULL DEFAULT 'unavailable'",
+        """INSERT INTO research_report_managers (
+                report_id, manager_id, manager_name, source, confirmed_at
+            )
+            SELECT
+                report.id,
+                report.manager_id,
+                COALESCE(NULLIF(report.manager_name, ''), manager.name),
+                'legacy_research_reports.manager_id',
+                COALESCE(report.updated_at, report.created_at, NOW())
+            FROM research_reports report
+            JOIN managers manager ON manager.wind_code = report.manager_id
+            WHERE NULLIF(report.manager_id, '') IS NOT NULL
+            ON CONFLICT (report_id, manager_id) DO NOTHING""",
     ]
 
     try:

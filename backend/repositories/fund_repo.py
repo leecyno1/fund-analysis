@@ -10,6 +10,11 @@ from datetime import datetime, date
 import logging
 
 try:
+    from backend.lib.fund_status import active_fund_sql
+except ModuleNotFoundError:
+    from lib.fund_status import active_fund_sql
+
+try:
     from backend.database import get_database_url
 except ModuleNotFoundError:
     from database import get_database_url
@@ -191,6 +196,27 @@ class FundRepo:
             logger.error(f"get_fund error: {e}")
             return None
 
+    def update_product_profile(self, wind_code: str, profile: Dict[str, Any]) -> bool:
+        """将公开基金档案写入 raw_data，保留已有净值、分类和经理数据。"""
+        try:
+            from sqlalchemy import text
+
+            with self.engine.begin() as conn:
+                result = conn.execute(text("""
+                    UPDATE funds
+                    SET raw_data = COALESCE(raw_data, '{}'::jsonb)
+                        || jsonb_build_object('product_profile', CAST(:profile AS jsonb)),
+                        updated_at = NOW()
+                    WHERE wind_code = :wind_code
+                """), {
+                    "wind_code": wind_code,
+                    "profile": json.dumps(_clean_json_value(profile), ensure_ascii=False, default=_json_serializer),
+                })
+            return result.rowcount > 0
+        except Exception as e:
+            logger.error(f"update_product_profile error for {wind_code}: {e}")
+            return False
+
     def update_manager_assignments(
         self,
         wind_code: str,
@@ -248,9 +274,21 @@ class FundRepo:
         keyword: Optional[str] = None,
         page: int = 1,
         page_size: int = 30,
+        availability: str = "all",
     ) -> Tuple[List[Dict[str, Any]], int]:
         """基金浏览器只读取基金研究基础事实，不连接销售规则或投资处置表。"""
         from sqlalchemy import text
+
+        normalized_availability = str(availability or "all").strip().lower()
+        if normalized_availability not in {"evaluated", "classified", "all"}:
+            normalized_availability = "all"
+        if normalized_availability != "all":
+            return self._browse_standardized_funds(
+                keyword=keyword,
+                page=page,
+                page_size=page_size,
+                availability=normalized_availability,
+            )
 
         normalized_keyword = str(keyword or "").strip()
         params = {
@@ -260,10 +298,14 @@ class FundRepo:
             "offset": max(0, int(page) - 1) * max(1, min(int(page_size), 100)),
         }
         where_sql = """
-            :keyword = ''
-            OR name ILIKE :keyword_pattern
-            OR wind_code ILIKE :keyword_pattern
+            ({active_clause})
+            AND (
+                :keyword = ''
+                OR name ILIKE :keyword_pattern
+                OR wind_code ILIKE :keyword_pattern
+            )
         """
+        where_sql = where_sql.format(active_clause=active_fund_sql())
         data_sql = text(f"""
             SELECT
                 funds.id, funds.wind_code, funds.name, funds.type, funds.manager_ids,
@@ -298,6 +340,234 @@ class FundRepo:
             rows = conn.execute(data_sql, params).fetchall()
             total = int(conn.execute(count_sql, params).scalar() or 0)
         return [dict(row._mapping) for row in rows], total
+
+    def _browse_standardized_funds(
+        self,
+        keyword: Optional[str],
+        page: int,
+        page_size: int,
+        availability: str,
+    ) -> Tuple[List[Dict[str, Any]], int]:
+        """按基金实体展示已分类或真正可评价的代表份额。"""
+        from sqlalchemy import text
+
+        required_tables = (
+            "fund_entities",
+            "fund_share_classes",
+            "strategy_families",
+            "peer_groups",
+            "peer_group_members",
+            "benchmark_mappings",
+            "metric_snapshots",
+        )
+        with self.engine.connect() as conn:
+            if not all(_table_exists(conn, table_name) for table_name in required_tables):
+                return [], 0
+
+        normalized_keyword = str(keyword or "").strip()
+        limit = max(1, min(int(page_size), 100))
+        params = {
+            "keyword": normalized_keyword,
+            "keyword_pattern": f"%{normalized_keyword}%",
+            "availability": availability,
+            "limit": limit,
+            "offset": max(0, int(page) - 1) * limit,
+        }
+        number_pattern = "'^-?[0-9]+(\\.[0-9]+)?$'"
+
+        def numeric_json(expression: str) -> str:
+            return (
+                f"CASE WHEN NULLIF({expression}, '') ~ {number_pattern} "
+                f"THEN NULLIF({expression}, '')::numeric END"
+            )
+
+        return_fallback = numeric_json(
+            "COALESCE(fund.performance_data->>'annualized_return_1y', "
+            "fund.performance_data->>'return_1y', fund.performance_data->>'annual_return')"
+        )
+        drawdown_fallback = numeric_json(
+            "COALESCE(fund.risk_metrics->>'max_drawdown_1y', "
+            "fund.risk_metrics->>'max_drawdown', fund.performance_data->>'max_drawdown_1y', "
+            "fund.performance_data->>'max_drawdown')"
+        )
+        sharpe_fallback = numeric_json(
+            "COALESCE(fund.performance_data->>'sharpe_ratio', "
+            "fund.performance_data->>'sharpe', fund.risk_metrics->>'sharpe_ratio')"
+        )
+        tracking_error_fallback = numeric_json("fund.risk_metrics->>'tracking_error'")
+        tracking_difference_fallback = numeric_json(
+            "COALESCE(fund.performance_data->>'tracking_difference', "
+            "fund.performance_data->>'excess_return')"
+        )
+        seven_day_yield_fallback = numeric_json(
+            "COALESCE(fund.performance_data->>'seven_day_annualized_yield', "
+            "fund.performance_data->>'yield_7d', fund.performance_data->>'seven_day_yield')"
+        )
+        management_fee_raw = numeric_json(
+            "COALESCE(fund.raw_data#>>'{info,management_fee}', fund.raw_data#>>'{info,m_fee}', "
+            "fund.raw_data#>>'{universe,management_fee}', fund.raw_data#>>'{universe,m_fee}')"
+        )
+        custodian_fee_raw = numeric_json(
+            "COALESCE(fund.raw_data#>>'{info,custodian_fee}', fund.raw_data#>>'{info,c_fee}', "
+            "fund.raw_data#>>'{universe,custodian_fee}', fund.raw_data#>>'{universe,c_fee}')"
+        )
+        fee_fallback = f"""
+            CASE
+                WHEN ({management_fee_raw}) IS NOT NULL OR ({custodian_fee_raw}) IS NOT NULL
+                THEN
+                    COALESCE(CASE WHEN ABS({management_fee_raw}) >= 0.05 THEN ({management_fee_raw}) / 100 ELSE ({management_fee_raw}) END, 0)
+                    + COALESCE(CASE WHEN ABS({custodian_fee_raw}) >= 0.05 THEN ({custodian_fee_raw}) / 100 ELSE ({custodian_fee_raw}) END, 0)
+            END
+        """
+
+        common_sql = f"""
+            WITH candidate_funds AS (
+                SELECT
+                    fund.*,
+                    entity.id AS entity_id,
+                    entity.canonical_code,
+                    entity.canonical_name,
+                    share.is_primary,
+                    family.key AS strategy_family_key,
+                    family.name AS strategy_family_name,
+                    COALESCE(entity.asset_class, family.asset_class) AS asset_class,
+                    COALESCE(entity.active_passive, family.active_passive) AS active_passive,
+                    peer.peer_group_id AS standardized_peer_group_id,
+                    peer.peer_group_key AS standardized_peer_group_key,
+                    peer.peer_group_name AS standardized_peer_group_name,
+                    peer.minimum_peer_count,
+                    peer.benchmark_code,
+                    peer.benchmark_name,
+                    {return_fallback} AS annualized_return_input,
+                    {drawdown_fallback} AS max_drawdown_input,
+                    {sharpe_fallback} AS sharpe_ratio_input,
+                    {tracking_error_fallback} AS tracking_error_input,
+                    {tracking_difference_fallback} AS tracking_difference_input,
+                    {fee_fallback} AS expense_ratio_input,
+                    fund.total_asset AS aum_input,
+                    {seven_day_yield_fallback} AS seven_day_yield_input,
+                    CASE
+                        WHEN {return_fallback} IS NOT NULL THEN 1 ELSE 0
+                    END
+                    + CASE WHEN {drawdown_fallback} IS NOT NULL THEN 1 ELSE 0 END
+                    + CASE WHEN {sharpe_fallback} IS NOT NULL THEN 1 ELSE 0 END
+                    + CASE WHEN NULLIF(fund.risk_metrics->>'annualized_volatility_1y', '') ~ {number_pattern} THEN 1 ELSE 0 END
+                    AS quality_metric_count,
+                    CASE
+                        WHEN NULLIF(fund.performance_data->>'updated_at', '') ~ '^\\d{{4}}-\\d{{2}}-\\d{{2}}'
+                        THEN LEFT(fund.performance_data->>'updated_at', 10)::date
+                        ELSE fund.nav_date
+                    END AS latest_metric_date
+                FROM fund_entities entity
+                JOIN strategy_families family ON family.id = entity.strategy_family_id
+                JOIN fund_share_classes share ON share.entity_id = entity.id AND share.status = 'active'
+                JOIN funds fund ON fund.wind_code = share.wind_code
+                JOIN LATERAL (
+                    SELECT
+                        group_row.id AS peer_group_id,
+                        group_row.key AS peer_group_key,
+                        group_row.name AS peer_group_name,
+                        group_row.minimum_peer_count,
+                        group_row.benchmark_code,
+                        group_row.benchmark_name
+                    FROM peer_group_members membership
+                    JOIN peer_groups group_row ON group_row.id = membership.peer_group_id
+                    WHERE membership.entity_id = entity.id
+                      AND membership.role <> 'excluded'
+                    ORDER BY
+                        CASE membership.role WHEN 'primary' THEN 0 WHEN 'target' THEN 1 ELSE 2 END,
+                        membership.sample_as_of_date DESC NULLS LAST,
+                        membership.confidence DESC NULLS LAST,
+                        group_row.updated_at DESC NULLS LAST
+                    LIMIT 1
+                ) peer ON TRUE
+                JOIN LATERAL (
+                    SELECT 1
+                    FROM benchmark_mappings mapping
+                    WHERE mapping.entity_id = entity.id
+                      AND mapping.status = 'active'
+                      AND (mapping.effective_from IS NULL OR mapping.effective_from <= CURRENT_DATE)
+                      AND (mapping.effective_to IS NULL OR mapping.effective_to >= CURRENT_DATE)
+                    ORDER BY mapping.confidence DESC NULLS LAST, mapping.updated_at DESC NULLS LAST
+                    LIMIT 1
+                ) benchmark_gate ON TRUE
+                WHERE entity.lifecycle_stage = 'active'
+                  AND ({active_fund_sql('fund')})
+                  AND (
+                      :keyword = ''
+                      OR fund.name ILIKE :keyword_pattern
+                      OR fund.wind_code ILIKE :keyword_pattern
+                  )
+            ),
+            evaluated_candidates AS (
+                SELECT
+                    candidate_funds.*,
+                    CASE
+                        WHEN strategy_family_key IN (
+                            'active_equity_core', 'active_equity_sector',
+                            'fixed_income_general', 'fixed_income_credit', 'fixed_income_equity_allocation',
+                            'mixed_equity_allocation', 'mixed_balanced_allocation', 'mixed_bond_allocation'
+                        ) THEN
+                            annualized_return_input IS NOT NULL
+                            AND max_drawdown_input IS NOT NULL
+                            AND sharpe_ratio_input IS NOT NULL
+                        WHEN strategy_family_key IN ('index_broad', 'index_fixed_income') THEN
+                            tracking_error_input BETWEEN 0 AND 0.10
+                            AND ABS(tracking_difference_input) <= 0.25
+                            AND expense_ratio_input BETWEEN 0 AND 0.05
+                            AND aum_input > 0
+                        WHEN strategy_family_key = 'cash_management' THEN
+                            (CASE WHEN ABS(seven_day_yield_input) > 0.20 THEN seven_day_yield_input / 100 ELSE seven_day_yield_input END) BETWEEN 0 AND 0.20
+                            AND (CASE WHEN ABS(annualized_return_input) > 0.20 THEN annualized_return_input / 100 ELSE annualized_return_input END) BETWEEN -0.05 AND 0.20
+                            AND ABS(max_drawdown_input) <= 0.20
+                            AND aum_input > 0
+                        ELSE FALSE
+                    END AS evaluation_ready
+                FROM candidate_funds
+            ),
+            eligible_candidates AS (
+                SELECT *
+                FROM evaluated_candidates
+                WHERE :availability = 'classified' OR evaluation_ready
+            ),
+            representative_funds AS (
+                SELECT DISTINCT ON (entity_id) *
+                FROM eligible_candidates
+                ORDER BY
+                    entity_id,
+                    evaluation_ready DESC NULLS LAST,
+                    is_primary DESC,
+                    quality_metric_count DESC,
+                    latest_metric_date DESC NULLS LAST,
+                    nav_date DESC NULLS LAST,
+                    wind_code ASC
+            )
+        """
+        data_sql = text(common_sql + f"""
+            SELECT
+                id, wind_code, name, type, manager_ids, total_asset, nav, nav_date,
+                establishment_date, performance_data, risk_metrics, raw_data, updated_at,
+                strategy_family_key, strategy_family_name,
+                entity_id, canonical_code, canonical_name, asset_class, active_passive,
+                standardized_peer_group_id, standardized_peer_group_key,
+                standardized_peer_group_name, minimum_peer_count,
+                benchmark_code, benchmark_name,
+                evaluation_ready, quality_metric_count,
+                COUNT(*) OVER () AS full_count
+            FROM representative_funds
+            ORDER BY
+                evaluation_ready DESC,
+                quality_metric_count DESC,
+                latest_metric_date DESC NULLS LAST,
+                nav_date DESC NULLS LAST,
+                wind_code ASC
+            LIMIT :limit OFFSET :offset
+        """)
+        with self.engine.connect() as conn:
+            rows = conn.execute(data_sql, params).fetchall()
+        records = [dict(row._mapping) for row in rows]
+        total = int(records[0].pop("full_count", 0) if records else 0)
+        return records, total
 
     def list_funds(
         self,
@@ -376,14 +646,10 @@ class FundRepo:
                 where_clauses.append("establishment_date <= :established_to")
                 params["established_to"] = established_to
 
-            blocked_clause = """
-                (
-                    name ILIKE '%清算%'
-                    OR name ILIKE '%终止%'
-                    OR name ILIKE '%退市%'
-                    OR COALESCE(raw_data#>>'{info,status}', raw_data#>>'{universe,status}', raw_data->>'status', '') IN ('D', 'DELIST', 'TERMINATED', 'LIQUIDATED')
-                )
-            """
+            blocked_clause = f"NOT ({active_fund_sql()})"
+
+            # 普通基金浏览和筛选默认只展示真实存续基金。
+            where_clauses.append(active_fund_sql())
             purchase_start_expr = "NULLIF(COALESCE(raw_data#>>'{info,purchase_start_date}', raw_data#>>'{universe,purchase_start_date}'), '')"
             future_purchase_clause = f"""
                 COALESCE((

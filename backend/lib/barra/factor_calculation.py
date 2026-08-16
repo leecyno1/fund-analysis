@@ -15,4 +15,6 @@ BARRA_FACTORS = {
     "BHADGE": {"name": "价值因子", "description": "账面市值比"},
     "LEVERAGE": {"name": "杠杆因子", "description": "财务杠杆"},
     "STORIE": {"name": "成长因子", "description": "营收/利润增速"},
+    "BTOP": {"name": "价值因子", "description": "账面市值比"},
+    "GROWTH": {"name": "成长因子", "description": "收入与利润增长"},
 }

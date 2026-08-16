@@ -7,8 +7,10 @@ from typing import Any, Dict, List, Optional
 
 try:
     from backend.database import get_engine
+    from backend.lib.fund_status import active_fund_sql
 except ModuleNotFoundError:
     from database import get_engine
+    from lib.fund_status import active_fund_sql
 
 
 REQUIRED_TABLES = (
@@ -19,6 +21,8 @@ REQUIRED_TABLES = (
     "peer_groups",
     "benchmark_mappings",
 )
+FOF_LOOKTHROUGH_MIN_FUNDS = 5
+FOF_LOOKTHROUGH_MIN_NAV_RATIO = 20.0
 
 
 def _serialize(value: Any) -> Any:
@@ -69,7 +73,7 @@ class FundClassificationRepo:
         from sqlalchemy import text
 
         evaluation_date = as_of_date or date.today()
-        sql = """
+        sql = f"""
             WITH selected_share AS (
                 SELECT
                     fsc.wind_code AS fund_code,
@@ -85,8 +89,11 @@ class FundClassificationRepo:
                     fe.source_updated_at AS entity_source_updated_at
                 FROM fund_share_classes fsc
                 JOIN fund_entities fe ON fe.id = fsc.entity_id
+                JOIN funds fund_status ON fund_status.wind_code = fsc.wind_code
                 WHERE (fsc.wind_code = :fund_code OR fe.canonical_code = :fund_code)
                   AND fsc.status = 'active'
+                  AND fe.lifecycle_stage = 'active'
+                  AND ({active_fund_sql('fund_status')})
                 ORDER BY
                     CASE WHEN fsc.wind_code = :fund_code THEN 0 ELSE 1 END,
                     fsc.is_primary DESC,
@@ -145,10 +152,22 @@ class FundClassificationRepo:
                     pgm.confidence AS membership_confidence,
                     pgm.source AS membership_source,
                     (
-                        SELECT COUNT(*)
+                        SELECT COUNT(DISTINCT group_member.entity_id)
                         FROM peer_group_members group_member
+                        JOIN fund_entities member_entity
+                          ON member_entity.id = group_member.entity_id
                         WHERE group_member.peer_group_id = pg.id
                           AND group_member.role <> 'excluded'
+                          AND member_entity.lifecycle_stage = 'active'
+                          AND EXISTS (
+                            SELECT 1
+                            FROM fund_share_classes member_share
+                            JOIN funds member_fund
+                              ON member_fund.wind_code = member_share.wind_code
+                            WHERE member_share.entity_id = member_entity.id
+                              AND member_share.status = 'active'
+                              AND ({active_fund_sql('member_fund')})
+                          )
                     ) AS peer_group_membership_count
                 FROM peer_group_members pgm
                 JOIN peer_groups pg ON pg.id = pgm.peer_group_id
@@ -207,31 +226,89 @@ class FundClassificationRepo:
 
         from sqlalchemy import text
 
-        sql = """
+        sql = f"""
             WITH selected_entity AS (
                 SELECT selected.entity_id
                 FROM fund_share_classes selected
                 JOIN fund_entities entity ON entity.id = selected.entity_id
+                JOIN funds selected_fund ON selected_fund.wind_code = selected.wind_code
                 WHERE (selected.wind_code = :fund_code OR entity.canonical_code = :fund_code)
                   AND selected.status = 'active'
+                  AND entity.lifecycle_stage = 'active'
+                  AND ({active_fund_sql('selected_fund')})
                 ORDER BY selected.is_primary DESC, selected.wind_code ASC
                 LIMIT 1
             )
             SELECT shares.wind_code
             FROM selected_entity entity
             JOIN fund_share_classes shares ON shares.entity_id = entity.entity_id
+            JOIN funds share_fund ON share_fund.wind_code = shares.wind_code
             WHERE shares.status = 'active'
+              AND ({active_fund_sql('share_fund')})
             ORDER BY shares.is_primary DESC, shares.wind_code ASC
         """
         with self.engine.connect() as conn:
             rows = conn.execute(text(sql), {"fund_code": normalized_code}).fetchall()
         return [str(row.wind_code) for row in rows]
 
+    def list_entity_share_classes(self, fund_code: str) -> List[Dict[str, Any]]:
+        """Return active share classes and their local fund facts for one fund entity."""
+        normalized_code = str(fund_code or "").strip().upper()
+        if not normalized_code or not self._schema_ready():
+            return []
+
+        from sqlalchemy import text
+
+        sql = f"""
+            WITH selected_entity AS (
+                SELECT selected.entity_id
+                FROM fund_share_classes selected
+                JOIN fund_entities entity ON entity.id = selected.entity_id
+                JOIN funds selected_fund ON selected_fund.wind_code = selected.wind_code
+                WHERE (selected.wind_code = :fund_code OR entity.canonical_code = :fund_code)
+                  AND selected.status = 'active'
+                  AND entity.lifecycle_stage = 'active'
+                  AND ({active_fund_sql('selected_fund')})
+                ORDER BY selected.is_primary DESC, selected.wind_code ASC
+                LIMIT 1
+            )
+            SELECT
+                entity.id AS entity_id,
+                entity.canonical_code,
+                entity.canonical_name,
+                shares.wind_code,
+                shares.share_class,
+                shares.fee_class,
+                shares.currency,
+                shares.is_primary,
+                shares.source AS share_source,
+                shares.source_updated_at,
+                fund.id AS fund_id,
+                fund.name,
+                fund.type,
+                fund.nav,
+                fund.nav_date,
+                fund.total_asset,
+                fund.establishment_date,
+                fund.raw_data,
+                fund.updated_at
+            FROM selected_entity selected
+            JOIN fund_entities entity ON entity.id = selected.entity_id
+            JOIN fund_share_classes shares ON shares.entity_id = entity.id
+            JOIN funds fund ON fund.wind_code = shares.wind_code
+            WHERE shares.status = 'active'
+              AND ({active_fund_sql('fund')})
+            ORDER BY shares.is_primary DESC, shares.share_class NULLS LAST, shares.wind_code ASC
+        """
+        with self.engine.connect() as conn:
+            rows = conn.execute(text(sql), {"fund_code": normalized_code}).fetchall()
+        return [_row_to_dict(row) for row in rows]
+
     def list_peer_funds(
         self,
         peer_group_id: str,
         target_wind_code: Optional[str] = None,
-        limit: int = 2000,
+        limit: int = 10000,
     ) -> List[Dict[str, Any]]:
         """按显式同类组成员关系返回每个基金实体的代表份额。"""
         normalized_group = str(peer_group_id or "").strip()
@@ -240,7 +317,7 @@ class FundClassificationRepo:
 
         from sqlalchemy import text
 
-        sql = """
+        sql = f"""
             SELECT *
             FROM (
                 SELECT DISTINCT ON (fe.id)
@@ -248,6 +325,7 @@ class FundClassificationRepo:
                     COALESCE(f.name, fe.canonical_name) AS name,
                     COALESCE(f.type, fe.asset_class) AS type,
                     f.total_asset,
+                    f.establishment_date,
                     f.performance_data,
                     f.risk_metrics,
                     f.raw_data,
@@ -258,10 +336,11 @@ class FundClassificationRepo:
                 JOIN peer_groups pg ON pg.id = pgm.peer_group_id
                 JOIN fund_entities fe ON fe.id = pgm.entity_id
                 JOIN fund_share_classes fsc ON fsc.entity_id = fe.id AND fsc.status = 'active'
-                LEFT JOIN funds f ON f.wind_code = fsc.wind_code
+                JOIN funds f ON f.wind_code = fsc.wind_code
                 WHERE pgm.peer_group_id = :peer_group_id
                   AND pgm.role <> 'excluded'
                   AND fe.lifecycle_stage = 'active'
+                  AND ({active_fund_sql('f')})
                 ORDER BY
                     fe.id,
                     CASE WHEN fsc.wind_code = :target_wind_code THEN 0 ELSE 1 END,
@@ -277,30 +356,492 @@ class FundClassificationRepo:
                 {
                     "peer_group_id": normalized_group,
                     "target_wind_code": str(target_wind_code or "").strip(),
-                    "limit": max(1, min(int(limit), 5000)),
+                    "limit": max(1, min(int(limit), 10000)),
                 },
             ).fetchall()
         return [_row_to_dict(row) for row in rows]
 
+    def list_peer_period_nav_summaries(
+        self,
+        peer_group_id: str,
+        start_date: Any,
+        end_date: Any,
+    ) -> List[Dict[str, Any]]:
+        """返回同类基金实体在指定区间内净值覆盖最完整的代表份额。"""
+        normalized_group = str(peer_group_id or "").strip()
+        if not normalized_group or not start_date or not end_date or not self._schema_ready():
+            return []
+
+        from sqlalchemy import text
+
+        sql = f"""
+            WITH eligible_shares AS (
+                SELECT
+                    fe.id AS entity_id,
+                    fsc.wind_code,
+                    fsc.is_primary
+                FROM peer_group_members pgm
+                JOIN fund_entities fe ON fe.id = pgm.entity_id
+                JOIN fund_share_classes fsc
+                  ON fsc.entity_id = fe.id
+                 AND fsc.status = 'active'
+                JOIN funds fund_status ON fund_status.wind_code = fsc.wind_code
+                WHERE pgm.peer_group_id = :peer_group_id
+                  AND pgm.role <> 'excluded'
+                  AND fe.lifecycle_stage = 'active'
+                  AND ({active_fund_sql('fund_status')})
+            ),
+            share_nav AS (
+                SELECT
+                    share.entity_id,
+                    share.wind_code,
+                    share.is_primary,
+                    nav.trade_date,
+                    COALESCE(nav.accum_nav, nav.unit_nav, nav.nav) AS nav_value
+                FROM eligible_shares share
+                JOIN fund_nav nav ON nav.wind_code = share.wind_code
+                WHERE nav.trade_date BETWEEN :start_date AND :end_date
+                  AND COALESCE(nav.accum_nav, nav.unit_nav, nav.nav) > 0
+            ),
+            share_path AS (
+                SELECT
+                    share_nav.*,
+                    LAG(nav_value) OVER (
+                        PARTITION BY entity_id, wind_code
+                        ORDER BY trade_date
+                    ) AS previous_nav,
+                    MAX(nav_value) OVER (
+                        PARTITION BY entity_id, wind_code
+                        ORDER BY trade_date
+                        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+                    ) AS running_peak,
+                    MAX(nav_value) OVER (
+                        PARTITION BY entity_id, wind_code
+                        ORDER BY trade_date
+                        ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
+                    ) AS previous_peak
+                FROM share_nav
+            ),
+            share_period AS (
+                SELECT
+                    entity_id,
+                    wind_code,
+                    is_primary,
+                    MIN(trade_date) AS first_date,
+                    MAX(trade_date) AS last_date,
+                    COUNT(*)::int AS observations,
+                    (ARRAY_AGG(nav_value ORDER BY trade_date ASC))[1] AS first_nav,
+                    (ARRAY_AGG(nav_value ORDER BY trade_date DESC))[1] AS last_nav,
+                    AVG(
+                        CASE WHEN previous_peak IS NULL OR nav_value > previous_peak THEN 1.0 ELSE 0.0 END
+                    ) AS record_breaking_days_ratio,
+                    MIN(nav_value / NULLIF(running_peak, 0) - 1) AS max_drawdown,
+                    STDDEV_SAMP(
+                        CASE WHEN previous_nav > 0 THEN nav_value / previous_nav - 1 END
+                    ) * SQRT(252.0) AS annualized_volatility,
+                    CASE
+                        WHEN STDDEV_SAMP(
+                            CASE WHEN previous_nav > 0 THEN nav_value / previous_nav - 1 END
+                        ) > 0
+                        THEN (
+                            AVG(CASE WHEN previous_nav > 0 THEN nav_value / previous_nav - 1 END) * 252.0 - 0.02
+                        ) / (
+                            STDDEV_SAMP(CASE WHEN previous_nav > 0 THEN nav_value / previous_nav - 1 END) * SQRT(252.0)
+                        )
+                    END AS sharpe_ratio
+                FROM share_path
+                GROUP BY entity_id, wind_code, is_primary
+            ),
+            ranked_share AS (
+                SELECT
+                    share_period.*,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY entity_id
+                        ORDER BY
+                            (last_date - first_date) DESC,
+                            observations DESC,
+                            is_primary DESC,
+                            wind_code ASC
+                    ) AS share_rank
+                FROM share_period
+            )
+            SELECT
+                entity_id,
+                wind_code,
+                first_date,
+                last_date,
+                observations,
+                first_nav,
+                last_nav,
+                record_breaking_days_ratio,
+                max_drawdown,
+                annualized_volatility,
+                sharpe_ratio
+            FROM ranked_share
+            WHERE share_rank = 1
+            ORDER BY wind_code ASC
+        """
+        with self.engine.connect() as conn:
+            rows = conn.execute(text(sql), {
+                "peer_group_id": normalized_group,
+                "start_date": start_date,
+                "end_date": end_date,
+            }).fetchall()
+        return [_row_to_dict(row) for row in rows]
+
+    def list_peer_calendar_period_summaries(
+        self,
+        peer_group_id: str,
+        start_date: Any,
+        end_date: Any,
+        baseline_start_date: Any,
+    ) -> List[Dict[str, Any]]:
+        """返回同类基金自然年度区间的期初、期末净值和覆盖证据。"""
+        normalized_group = str(peer_group_id or "").strip()
+        if (
+            not normalized_group
+            or not start_date
+            or not end_date
+            or not baseline_start_date
+            or not self._schema_ready()
+        ):
+            return []
+
+        from sqlalchemy import text
+
+        sql = f"""
+            WITH eligible_shares AS (
+                SELECT
+                    fe.id AS entity_id,
+                    fsc.wind_code,
+                    fsc.is_primary
+                FROM peer_group_members pgm
+                JOIN fund_entities fe ON fe.id = pgm.entity_id
+                JOIN fund_share_classes fsc
+                  ON fsc.entity_id = fe.id
+                 AND fsc.status = 'active'
+                JOIN funds fund_status ON fund_status.wind_code = fsc.wind_code
+                WHERE pgm.peer_group_id = :peer_group_id
+                  AND pgm.role <> 'excluded'
+                  AND fe.lifecycle_stage = 'active'
+                  AND ({active_fund_sql('fund_status')})
+            ),
+            share_coverage AS (
+                SELECT
+                    share.entity_id,
+                    share.wind_code,
+                    share.is_primary,
+                    COUNT(*) FILTER (
+                        WHERE nav.trade_date BETWEEN :start_date AND :end_date
+                    )::int AS period_observations,
+                    COUNT(*)::int AS total_observations,
+                    COUNT(nav.accum_nav)::int AS accum_observations
+                FROM eligible_shares share
+                JOIN fund_nav nav ON nav.wind_code = share.wind_code
+                WHERE nav.trade_date BETWEEN :baseline_start_date AND :end_date
+                  AND COALESCE(nav.accum_nav, nav.unit_nav, nav.nav) > 0
+                GROUP BY share.entity_id, share.wind_code, share.is_primary
+                HAVING COUNT(*) FILTER (
+                    WHERE nav.trade_date BETWEEN :start_date AND :end_date
+                ) >= 2
+            ),
+            selected_shares AS (
+                SELECT
+                    entity_id,
+                    wind_code,
+                    CASE
+                        WHEN accum_observations >= GREATEST(2, CEIL(total_observations * 0.9))
+                        THEN 'accum_nav'
+                        ELSE 'unit_nav'
+                    END AS nav_basis
+                FROM (
+                    SELECT
+                        share_coverage.*,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY entity_id
+                            ORDER BY
+                                period_observations DESC,
+                                total_observations DESC,
+                                is_primary DESC,
+                                wind_code ASC
+                        ) AS share_rank
+                    FROM share_coverage
+                ) ranked
+                WHERE share_rank = 1
+            ),
+            nav_points AS (
+                SELECT
+                    selected.entity_id,
+                    selected.wind_code,
+                    selected.nav_basis,
+                    nav.trade_date,
+                    CASE
+                        WHEN selected.nav_basis = 'accum_nav' THEN nav.accum_nav
+                        ELSE COALESCE(nav.unit_nav, nav.nav)
+                    END AS nav_value
+                FROM selected_shares selected
+                JOIN fund_nav nav ON nav.wind_code = selected.wind_code
+                WHERE nav.trade_date BETWEEN :baseline_start_date AND :end_date
+            )
+            SELECT
+                entity_id,
+                wind_code,
+                nav_basis,
+                (ARRAY_AGG(trade_date ORDER BY trade_date DESC)
+                    FILTER (WHERE trade_date < :start_date AND nav_value > 0))[1] AS baseline_date,
+                (ARRAY_AGG(nav_value ORDER BY trade_date DESC)
+                    FILTER (WHERE trade_date < :start_date AND nav_value > 0))[1] AS baseline_nav,
+                (ARRAY_AGG(trade_date ORDER BY trade_date ASC)
+                    FILTER (WHERE trade_date BETWEEN :start_date AND :end_date AND nav_value > 0))[1] AS first_date,
+                (ARRAY_AGG(nav_value ORDER BY trade_date ASC)
+                    FILTER (WHERE trade_date BETWEEN :start_date AND :end_date AND nav_value > 0))[1] AS first_nav,
+                (ARRAY_AGG(trade_date ORDER BY trade_date DESC)
+                    FILTER (WHERE trade_date BETWEEN :start_date AND :end_date AND nav_value > 0))[1] AS last_date,
+                (ARRAY_AGG(nav_value ORDER BY trade_date DESC)
+                    FILTER (WHERE trade_date BETWEEN :start_date AND :end_date AND nav_value > 0))[1] AS last_nav,
+                COUNT(*) FILTER (
+                    WHERE trade_date BETWEEN :start_date AND :end_date AND nav_value > 0
+                )::int AS observations
+            FROM nav_points
+            GROUP BY entity_id, wind_code, nav_basis
+            ORDER BY wind_code ASC
+        """
+        with self.engine.connect() as conn:
+            rows = conn.execute(text(sql), {
+                "peer_group_id": normalized_group,
+                "start_date": start_date,
+                "end_date": end_date,
+                "baseline_start_date": baseline_start_date,
+            }).fetchall()
+        return [_row_to_dict(row) for row in rows]
+
+    def list_peer_nav_series(
+        self,
+        peer_group_id: str,
+        start_date: Any,
+        end_date: Any,
+    ) -> List[Dict[str, Any]]:
+        """返回同类组每个基金实体净值覆盖最完整的代表份额日序列。"""
+        normalized_group = str(peer_group_id or "").strip()
+        if not normalized_group or not start_date or not end_date or not self._schema_ready():
+            return []
+
+        from sqlalchemy import text
+
+        sql = f"""
+            WITH eligible_shares AS (
+                SELECT
+                    fe.id AS entity_id,
+                    fsc.wind_code,
+                    fsc.is_primary
+                FROM peer_group_members pgm
+                JOIN fund_entities fe ON fe.id = pgm.entity_id
+                JOIN fund_share_classes fsc
+                  ON fsc.entity_id = fe.id
+                 AND fsc.status = 'active'
+                JOIN funds fund_status ON fund_status.wind_code = fsc.wind_code
+                WHERE pgm.peer_group_id = :peer_group_id
+                  AND pgm.role <> 'excluded'
+                  AND fe.lifecycle_stage = 'active'
+                  AND ({active_fund_sql('fund_status')})
+            ),
+            share_coverage AS (
+                SELECT
+                    share.entity_id,
+                    share.wind_code,
+                    share.is_primary,
+                    COUNT(nav.*)::int AS observations,
+                    MIN(nav.trade_date) AS first_date,
+                    MAX(nav.trade_date) AS last_date
+                FROM eligible_shares share
+                JOIN fund_nav nav ON nav.wind_code = share.wind_code
+                WHERE nav.trade_date BETWEEN :start_date AND :end_date
+                  AND COALESCE(nav.accum_nav, nav.unit_nav, nav.nav) > 0
+                GROUP BY share.entity_id, share.wind_code, share.is_primary
+            ),
+            selected_shares AS (
+                SELECT entity_id, wind_code
+                FROM (
+                    SELECT
+                        share_coverage.*,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY entity_id
+                            ORDER BY observations DESC, is_primary DESC, wind_code ASC
+                        ) AS share_rank
+                    FROM share_coverage
+                ) ranked
+                WHERE share_rank = 1
+            )
+            SELECT
+                selected.entity_id,
+                selected.wind_code,
+                nav.trade_date,
+                nav.unit_nav,
+                nav.nav,
+                nav.accum_nav
+            FROM selected_shares selected
+            JOIN fund_nav nav ON nav.wind_code = selected.wind_code
+            WHERE nav.trade_date BETWEEN :start_date AND :end_date
+              AND COALESCE(nav.accum_nav, nav.unit_nav, nav.nav) > 0
+            ORDER BY selected.wind_code, nav.trade_date
+        """
+        with self.engine.connect() as conn:
+            rows = conn.execute(text(sql), {
+                "peer_group_id": normalized_group,
+                "start_date": start_date,
+                "end_date": end_date,
+            }).fetchall()
+        return [_row_to_dict(row) for row in rows]
+
     def list_peer_group_inventory(self, limit: int = 100) -> List[Dict[str, Any]]:
-        """返回标准化同类组清单，供分类内评价和推荐入口使用。"""
+        """返回标准化同类组及可评价覆盖，供普通用户选择类别。"""
         if not self._schema_ready():
             return []
 
         from sqlalchemy import text
 
-        sql = """
+        evaluation_ready_sql = self._recommendation_evaluation_ready_sql(
+            "f",
+            "sf.key",
+            "evaluation_metrics",
+        )
+        sql = f"""
+            WITH latest_metric_values AS (
+                SELECT DISTINCT ON (target_id, metric_window, metric_name)
+                    target_id,
+                    metric_window,
+                    metric_name,
+                    metric_value,
+                    as_of_date
+                FROM metric_snapshots
+                WHERE target_type = 'fund'
+                ORDER BY
+                    target_id,
+                    metric_window,
+                    metric_name,
+                    as_of_date DESC,
+                    updated_at DESC
+            ),
+            evaluation_metrics AS (
+                SELECT
+                    target_id,
+                    MAX(metric_value) FILTER (
+                        WHERE metric_window = '1y' AND metric_name = 'annualized_return'
+                    ) AS annualized_return_1y,
+                    MAX(metric_value) FILTER (
+                        WHERE metric_window = '1y' AND metric_name = 'max_drawdown'
+                    ) AS max_drawdown_1y,
+                    MAX(metric_value) FILTER (
+                        WHERE metric_window = '1y' AND metric_name = 'sharpe_ratio'
+                    ) AS sharpe_ratio_1y,
+                    MAX(metric_value) FILTER (
+                        WHERE metric_window = '1y' AND metric_name = 'tracking_error'
+                    ) AS tracking_error_1y,
+                    MAX(metric_value) FILTER (
+                        WHERE metric_window = '1y' AND metric_name = 'tracking_difference'
+                    ) AS tracking_difference_1y,
+                    MAX(metric_value) FILTER (
+                        WHERE metric_window = '1y' AND metric_name = 'excess_return'
+                    ) AS excess_return_1y,
+                    MAX(metric_value) FILTER (
+                        WHERE metric_window = '1y' AND metric_name = 'information_ratio'
+                    ) AS information_ratio_1y,
+                    MAX(metric_value) FILTER (
+                        WHERE metric_window = 'latest' AND metric_name = 'expense_ratio'
+                    ) AS expense_ratio,
+                    MAX(metric_value) FILTER (
+                        WHERE metric_window = 'latest' AND metric_name = 'aum'
+                    ) AS aum,
+                    MAX(metric_value) FILTER (
+                        WHERE metric_window = 'latest' AND metric_name = 'seven_day_annualized_yield'
+                    ) AS seven_day_annualized_yield,
+                    MAX(as_of_date) AS evaluation_as_of_date
+                FROM latest_metric_values
+                GROUP BY target_id
+            ),
+            candidate_funds AS (
+                SELECT
+                    pg.id AS peer_group_id,
+                    pg.key AS peer_group_key,
+                    pg.name AS peer_group_name,
+                    pg.asset_class,
+                    pg.active_passive,
+                    pg.benchmark_code,
+                    pg.benchmark_name,
+                    pg.inclusion_rules,
+                    pg.minimum_peer_count,
+                    sf.key AS strategy_family_key,
+                    sf.name AS strategy_family_name,
+                    fe.id AS entity_id,
+                    f.wind_code,
+                    fsc.is_primary,
+                    f.nav_date,
+                    COALESCE(evaluation_metrics.evaluation_as_of_date, f.nav_date) AS evaluation_as_of_date,
+                    ({evaluation_ready_sql}) AS evaluation_ready
+                FROM peer_groups pg
+                JOIN peer_group_members pgm
+                  ON pgm.peer_group_id = pg.id
+                 AND pgm.role <> 'excluded'
+                JOIN fund_entities fe
+                  ON fe.id = pgm.entity_id
+                 AND fe.lifecycle_stage = 'active'
+                LEFT JOIN strategy_families sf ON sf.id = fe.strategy_family_id
+                JOIN fund_share_classes fsc
+                  ON fsc.entity_id = fe.id
+                 AND fsc.status = 'active'
+                JOIN funds f ON f.wind_code = fsc.wind_code
+                LEFT JOIN evaluation_metrics ON evaluation_metrics.target_id = f.wind_code
+                WHERE {active_fund_sql('f')}
+            ),
+            representative_funds AS (
+                SELECT DISTINCT ON (peer_group_id, entity_id)
+                    *
+                FROM candidate_funds
+                ORDER BY
+                    peer_group_id,
+                    entity_id,
+                    evaluation_ready DESC NULLS LAST,
+                    is_primary DESC,
+                    evaluation_as_of_date DESC NULLS LAST,
+                    nav_date DESC NULLS LAST,
+                    wind_code ASC
+            )
             SELECT
-                pg.id,
-                pg.key,
-                pg.name,
-                pg.minimum_peer_count,
-                COUNT(DISTINCT pgm.entity_id) FILTER (WHERE pgm.role <> 'excluded')::int AS fund_count
-            FROM peer_groups pg
-            LEFT JOIN peer_group_members pgm ON pgm.peer_group_id = pg.id
-            GROUP BY pg.id, pg.key, pg.name, pg.minimum_peer_count
-            HAVING COUNT(DISTINCT pgm.entity_id) FILTER (WHERE pgm.role <> 'excluded') >= pg.minimum_peer_count
-            ORDER BY fund_count DESC, pg.name ASC
+                peer_group_id AS id,
+                peer_group_key AS key,
+                peer_group_name AS name,
+                asset_class,
+                active_passive,
+                benchmark_code,
+                benchmark_name,
+                inclusion_rules,
+                inclusion_rules -> 'contractDimensions' AS contract_dimensions,
+                strategy_family_key,
+                strategy_family_name,
+                minimum_peer_count,
+                COUNT(*)::int AS fund_count,
+                COUNT(*) FILTER (WHERE evaluation_ready)::int AS evaluated_fund_count,
+                COUNT(*) FILTER (WHERE evaluation_ready IS NOT TRUE)::int AS evaluation_pending_count,
+                ROUND(
+                    COUNT(*) FILTER (WHERE evaluation_ready)::numeric / NULLIF(COUNT(*), 0),
+                    4
+                ) AS evaluation_coverage,
+                MAX(evaluation_as_of_date) FILTER (WHERE evaluation_ready) AS evaluation_as_of_date
+            FROM representative_funds
+            GROUP BY
+                peer_group_id,
+                peer_group_key,
+                peer_group_name,
+                asset_class,
+                active_passive,
+                benchmark_code,
+                benchmark_name,
+                inclusion_rules,
+                strategy_family_key,
+                strategy_family_name,
+                minimum_peer_count
+            HAVING COUNT(*) >= minimum_peer_count
+            ORDER BY fund_count DESC, peer_group_name ASC
             LIMIT :limit
         """
         with self.engine.connect() as conn:
@@ -314,20 +855,25 @@ class FundClassificationRepo:
 
         from sqlalchemy import text
 
-        sql = """
+        sql = f"""
             SELECT
                 pg.id,
                 pg.key,
                 pg.name,
                 pg.minimum_peer_count,
-                COUNT(DISTINCT pgm.entity_id) FILTER (
+                COUNT(DISTINCT fe.id) FILTER (
                     WHERE pgm.role <> 'excluded'
+                      AND fe.lifecycle_stage = 'active'
+                      AND fsc.status = 'active'
+                      AND f.wind_code IS NOT NULL
+                      AND ({active_fund_sql('f')})
                 )::int AS classified_count,
                 COUNT(DISTINCT fe.id) FILTER (
                     WHERE pgm.role <> 'excluded'
                       AND fe.lifecycle_stage = 'active'
                       AND fsc.status = 'active'
                       AND f.wind_code IS NOT NULL
+                      AND ({active_fund_sql('f')})
                 )::int AS database_fund_count
             FROM peer_groups pg
             LEFT JOIN peer_group_members pgm ON pgm.peer_group_id = pg.id
@@ -336,6 +882,145 @@ class FundClassificationRepo:
             LEFT JOIN funds f ON f.wind_code = fsc.wind_code
             GROUP BY pg.id, pg.key, pg.name, pg.minimum_peer_count
             ORDER BY classified_count DESC, pg.name ASC
+            LIMIT :limit
+        """
+        with self.engine.connect() as conn:
+            rows = conn.execute(text(sql), {"limit": max(1, min(int(limit), 200))}).fetchall()
+        return [_row_to_dict(row) for row in rows]
+
+    def list_recommendation_coverage_summary(self, limit: int = 100) -> List[Dict[str, Any]]:
+        """一次聚合同类组评价与真实持仓风格覆盖，供首页和覆盖审计使用。"""
+        if not self._schema_ready():
+            return []
+
+        from sqlalchemy import text
+
+        evaluation_ready_sql = self._recommendation_evaluation_ready_sql(
+            "f",
+            "sf.key",
+            "evaluation_metrics",
+        )
+        sql = f"""
+            WITH latest_metric_values AS (
+                SELECT DISTINCT ON (target_id, metric_window, metric_name)
+                    target_id, metric_window, metric_name, metric_value, as_of_date
+                FROM metric_snapshots
+                WHERE target_type = 'fund'
+                ORDER BY target_id, metric_window, metric_name, as_of_date DESC, updated_at DESC
+            ),
+            evaluation_metrics AS (
+                SELECT
+                    target_id,
+                    MAX(metric_value) FILTER (WHERE metric_window = '1y' AND metric_name = 'annualized_return') AS annualized_return_1y,
+                    MAX(metric_value) FILTER (WHERE metric_window = '1y' AND metric_name = 'max_drawdown') AS max_drawdown_1y,
+                    MAX(metric_value) FILTER (WHERE metric_window = '1y' AND metric_name = 'sharpe_ratio') AS sharpe_ratio_1y,
+                    MAX(metric_value) FILTER (WHERE metric_window = '1y' AND metric_name = 'tracking_error') AS tracking_error_1y,
+                    MAX(metric_value) FILTER (WHERE metric_window = '1y' AND metric_name = 'tracking_difference') AS tracking_difference_1y,
+                    MAX(metric_value) FILTER (WHERE metric_window = '1y' AND metric_name = 'excess_return') AS excess_return_1y,
+                    MAX(metric_value) FILTER (WHERE metric_window = '1y' AND metric_name = 'information_ratio') AS information_ratio_1y,
+                    MAX(metric_value) FILTER (WHERE metric_window = 'latest' AND metric_name = 'expense_ratio') AS expense_ratio,
+                    MAX(metric_value) FILTER (WHERE metric_window = 'latest' AND metric_name = 'aum') AS aum,
+                    MAX(metric_value) FILTER (WHERE metric_window = 'latest' AND metric_name = 'seven_day_annualized_yield') AS seven_day_annualized_yield
+                FROM latest_metric_values
+                GROUP BY target_id
+            ),
+            holding_style_entities AS (
+                SELECT DISTINCT fsc.entity_id
+                FROM holding_style_snapshots snapshot
+                JOIN fund_share_classes fsc ON fsc.wind_code = snapshot.wind_code
+                WHERE fsc.status = 'active'
+                  AND snapshot.status = 'peer_percentile_ready'
+                  AND COALESCE(cardinality(snapshot.style_labels), 0) > 0
+            ),
+            bond_style_funds AS (
+                SELECT wind_code
+                FROM fund_bond_holdings
+                GROUP BY wind_code
+                HAVING COUNT(DISTINCT report_date) >= 4
+                   AND COALESCE(
+                        SUM(nav_ratio) FILTER (WHERE bond_type <> 'other')
+                        / NULLIF(SUM(nav_ratio), 0),
+                        0
+                   ) >= 0.8
+            ),
+            fof_latest_period AS (
+                SELECT DISTINCT ON (wind_code)
+                    wind_code, report_date
+                FROM fund_underlying_holdings
+                ORDER BY wind_code, report_date DESC
+            ),
+            fof_style_funds AS (
+                SELECT holding.wind_code
+                FROM fund_underlying_holdings holding
+                JOIN fof_latest_period latest
+                  ON latest.wind_code = holding.wind_code
+                 AND latest.report_date = holding.report_date
+                GROUP BY holding.wind_code
+                HAVING COUNT(*) >= 5 AND COALESCE(SUM(holding.nav_ratio), 0) >= 20
+            ),
+            style_ready_entities AS (
+                SELECT entity_id FROM holding_style_entities
+                UNION
+                SELECT fsc.entity_id
+                FROM fund_share_classes fsc
+                JOIN bond_style_funds bond ON bond.wind_code = fsc.wind_code
+                WHERE fsc.status = 'active'
+                UNION
+                SELECT fsc.entity_id
+                FROM fund_share_classes fsc
+                JOIN fof_style_funds fof ON fof.wind_code = fsc.wind_code
+                WHERE fsc.status = 'active'
+            ),
+            candidate_funds AS (
+                SELECT
+                    pg.id AS peer_group_id,
+                    pg.key AS peer_group_key,
+                    pg.name AS peer_group_name,
+                    pg.minimum_peer_count,
+                    fe.id AS entity_id,
+                    f.wind_code,
+                    fsc.is_primary,
+                    f.nav_date,
+                    ({evaluation_ready_sql}) AS evaluation_ready,
+                    (holding_style.entity_id IS NOT NULL) AS style_ready
+                FROM peer_groups pg
+                JOIN peer_group_members pgm
+                  ON pgm.peer_group_id = pg.id
+                 AND pgm.role <> 'excluded'
+                JOIN fund_entities fe
+                  ON fe.id = pgm.entity_id
+                 AND fe.lifecycle_stage = 'active'
+                LEFT JOIN strategy_families sf ON sf.id = fe.strategy_family_id
+                JOIN fund_share_classes fsc
+                  ON fsc.entity_id = fe.id
+                 AND fsc.status = 'active'
+                JOIN funds f ON f.wind_code = fsc.wind_code
+                LEFT JOIN evaluation_metrics ON evaluation_metrics.target_id = f.wind_code
+                LEFT JOIN style_ready_entities holding_style ON holding_style.entity_id = fe.id
+                WHERE {active_fund_sql('f')}
+            ),
+            representative_funds AS (
+                SELECT DISTINCT ON (peer_group_id, entity_id) *
+                FROM candidate_funds
+                ORDER BY
+                    peer_group_id,
+                    entity_id,
+                    evaluation_ready DESC NULLS LAST,
+                    is_primary DESC,
+                    nav_date DESC NULLS LAST,
+                    wind_code ASC
+            )
+            SELECT
+                peer_group_id AS id,
+                peer_group_key AS key,
+                peer_group_name AS name,
+                minimum_peer_count,
+                COUNT(*)::int AS database_fund_count,
+                COUNT(*) FILTER (WHERE evaluation_ready)::int AS evaluated_fund_count,
+                COUNT(*) FILTER (WHERE style_ready)::int AS style_ready_count
+            FROM representative_funds
+            GROUP BY peer_group_id, peer_group_key, peer_group_name, minimum_peer_count
+            ORDER BY database_fund_count DESC, peer_group_name ASC
             LIMIT :limit
         """
         with self.engine.connect() as conn:
@@ -352,8 +1037,12 @@ class FundClassificationRepo:
 
         from sqlalchemy import text
 
-        sql = """
-            SELECT DISTINCT ON (fsc.wind_code)
+        sql = f"""
+            WITH requested_codes AS (
+                SELECT UNNEST(CAST(:wind_codes AS TEXT[])) AS requested_code
+            )
+            SELECT DISTINCT ON (requested.requested_code)
+                requested.requested_code AS lookup_code,
                 fsc.wind_code,
                 pg.id AS peer_group_id,
                 pg.key AS peer_group_key,
@@ -361,17 +1050,29 @@ class FundClassificationRepo:
                 pg.minimum_peer_count,
                 pgm.confidence,
                 pgm.source,
-                pgm.sample_as_of_date
-            FROM fund_share_classes fsc
+                pgm.sample_as_of_date,
+                sf.key AS strategy_family_key,
+                sf.name AS strategy_family_name,
+                COALESCE(fe.asset_class, sf.asset_class) AS asset_class,
+                COALESCE(fe.active_passive, sf.active_passive) AS active_passive
+            FROM requested_codes requested
+            JOIN fund_share_classes fsc
+              ON fsc.wind_code = requested.requested_code
+              OR SPLIT_PART(fsc.wind_code, '.', 1) = SPLIT_PART(requested.requested_code, '.', 1)
             JOIN fund_entities fe ON fe.id = fsc.entity_id
+            JOIN funds fund_status ON fund_status.wind_code = fsc.wind_code
+            LEFT JOIN strategy_families sf ON sf.id = fe.strategy_family_id
             LEFT JOIN peer_group_members pgm
               ON pgm.entity_id = fe.id
              AND pgm.role <> 'excluded'
             LEFT JOIN peer_groups pg ON pg.id = pgm.peer_group_id
             WHERE fsc.status = 'active'
-              AND fsc.wind_code = ANY(:wind_codes)
+              AND fe.lifecycle_stage = 'active'
+              AND ({active_fund_sql('fund_status')})
             ORDER BY
-                fsc.wind_code,
+                requested.requested_code,
+                CASE WHEN fsc.wind_code = requested.requested_code THEN 0 ELSE 1 END,
+                fsc.is_primary DESC,
                 CASE pgm.role WHEN 'primary' THEN 0 WHEN 'target' THEN 1 ELSE 2 END,
                 pgm.sample_as_of_date DESC NULLS LAST,
                 pgm.confidence DESC NULLS LAST,
@@ -380,9 +1081,75 @@ class FundClassificationRepo:
         with self.engine.connect() as conn:
             rows = conn.execute(text(sql), {"wind_codes": normalized_codes}).fetchall()
         return {
-            row["wind_code"]: row
+            row["lookup_code"]: row
             for item in rows
-            if (row := _row_to_dict(item)).get("wind_code") and row.get("peer_group_id")
+            if (row := _row_to_dict(item)).get("lookup_code") and row.get("peer_group_id")
+        }
+
+    def list_fund_identity_map(self, wind_codes: List[str]) -> Dict[str, Dict[str, Any]]:
+        """按完整代码或六位代码返回基金登记类型，兼容交易所基金代码后缀。"""
+        normalized_codes = list(dict.fromkeys(
+            str(code or "").strip().upper()
+            for code in wind_codes
+            if str(code or "").strip()
+        ))
+        if not normalized_codes:
+            return {}
+
+        from sqlalchemy import text
+
+        sql = """
+            WITH requested_codes AS (
+                SELECT UNNEST(CAST(:wind_codes AS TEXT[])) AS requested_code
+            )
+            SELECT
+                requested.requested_code AS lookup_code,
+                matched.wind_code,
+                matched.fund_name,
+                matched.registered_fund_type,
+                matched.contract_type,
+                matched.invest_type,
+                matched.raw_fund_type,
+                matched.identity_source
+            FROM requested_codes requested
+            JOIN LATERAL (
+                SELECT
+                    fund.wind_code,
+                    fund.name AS fund_name,
+                    fund.type AS registered_fund_type,
+                    COALESCE(
+                        NULLIF(fund.raw_data #>> '{universe,contract_type}', ''),
+                        NULLIF(fund.raw_data #>> '{info,contract_type}', ''),
+                        NULLIF(fund.raw_data ->> 'contract_type', '')
+                    ) AS contract_type,
+                    COALESCE(
+                        NULLIF(fund.raw_data #>> '{universe,invest_type}', ''),
+                        NULLIF(fund.raw_data #>> '{info,invest_type}', ''),
+                        NULLIF(fund.raw_data ->> 'invest_type', '')
+                    ) AS invest_type,
+                    COALESCE(
+                        NULLIF(fund.raw_data #>> '{universe,fund_type_raw}', ''),
+                        NULLIF(fund.raw_data #>> '{info,fund_type_raw}', ''),
+                        NULLIF(fund.raw_data ->> 'fund_type_raw', '')
+                    ) AS raw_fund_type,
+                    COALESCE(NULLIF(fund.raw_data ->> 'source', ''), 'funds') AS identity_source
+                FROM funds fund
+                WHERE UPPER(fund.wind_code) = requested.requested_code
+                   OR SPLIT_PART(UPPER(fund.wind_code), '.', 1)
+                      = SPLIT_PART(requested.requested_code, '.', 1)
+                ORDER BY
+                    CASE WHEN UPPER(fund.wind_code) = requested.requested_code THEN 0 ELSE 1 END,
+                    fund.updated_at DESC NULLS LAST,
+                    fund.wind_code ASC
+                LIMIT 1
+            ) matched ON TRUE
+        """
+        with self.engine.connect() as conn:
+            rows = conn.execute(text(sql), {"wind_codes": normalized_codes}).fetchall()
+        return {
+            row["lookup_code"]: row
+            for item in rows
+            if (row := _row_to_dict(item)).get("lookup_code")
         }
 
     def list_recommendation_funds(
@@ -390,6 +1157,19 @@ class FundClassificationRepo:
         peer_group: str,
         limit: int = 50,
         keyword: Optional[str] = None,
+        offset: int = 0,
+        asset_min: Optional[float] = None,
+        min_age_years: Optional[int] = None,
+        min_manager_years: Optional[float] = None,
+        return_6m_min: Optional[float] = None,
+        return_1y_min: Optional[float] = None,
+        return_3y_min: Optional[float] = None,
+        max_drawdown_1y_max: Optional[float] = None,
+        sharpe_1y_min: Optional[float] = None,
+        style_tags: Optional[List[str]] = None,
+        style_match: str = "any",
+        sort_by: str = "quality",
+        availability: str = "classified",
     ) -> List[Dict[str, Any]]:
         """按标准化同类组返回每个基金实体的代表份额及完整基础数据。"""
         normalized_group = str(peer_group or "").strip()
@@ -398,9 +1178,25 @@ class FundClassificationRepo:
 
         from sqlalchemy import text
 
-        sql = """
-            SELECT *
-            FROM (
+        filter_sql, filter_params = self._recommendation_filter_sql(
+            keyword=keyword,
+            asset_min=asset_min,
+            min_age_years=min_age_years,
+            min_manager_years=min_manager_years,
+            return_6m_min=return_6m_min,
+            return_1y_min=return_1y_min,
+            return_3y_min=return_3y_min,
+            max_drawdown_1y_max=max_drawdown_1y_max,
+            sharpe_1y_min=sharpe_1y_min,
+            style_tags=style_tags,
+            style_match=style_match,
+            availability=availability,
+        )
+        sort_sql = self._recommendation_sort_sql(sort_by)
+        ranked_metrics = self._recommendation_metric_expressions("representative_funds")
+        evaluation_ready_sql = self._recommendation_evaluation_ready_sql("f", "sf.key", "evaluation_metrics")
+        sql = f"""
+            WITH representative_funds AS (
                 SELECT DISTINCT ON (fe.id)
                     f.*,
                     fe.id AS entity_id,
@@ -415,57 +1211,108 @@ class FundClassificationRepo:
                     pg.name AS standardized_peer_group_name,
                     pg.minimum_peer_count,
                     pg.benchmark_code,
-                    pg.benchmark_name
+                    pg.benchmark_name,
+                    sf.style_tags AS classification_style_tags,
+                    {self._memo_style_tags_sql()} AS memo_style_tags,
+                    {self._holding_style_tags_sql()} AS holding_style_tags,
+                    {self._verified_style_tags_sql()} AS verified_style_tags,
+                    research_profile.updated_at AS memo_style_as_of,
+                    holding_style.quarter AS holding_style_as_of,
+                    holding_style.source AS holding_style_source,
+                    ({evaluation_ready_sql}) AS evaluation_ready
                 FROM peer_groups pg
                 JOIN peer_group_members pgm ON pgm.peer_group_id = pg.id
                 JOIN fund_entities fe ON fe.id = pgm.entity_id
                 LEFT JOIN strategy_families sf ON sf.id = fe.strategy_family_id
                 JOIN fund_share_classes fsc ON fsc.entity_id = fe.id AND fsc.status = 'active'
                 JOIN funds f ON f.wind_code = fsc.wind_code
+                {self._style_evidence_join_sql()}
+                LEFT JOIN LATERAL (
+                    SELECT
+                        MAX(metric_value) FILTER (WHERE metric_window = '1y' AND metric_name = 'annualized_return') AS annualized_return_1y,
+                        MAX(metric_value) FILTER (WHERE metric_window = '1y' AND metric_name = 'max_drawdown') AS max_drawdown_1y,
+                        MAX(metric_value) FILTER (WHERE metric_window = '1y' AND metric_name = 'sharpe_ratio') AS sharpe_ratio_1y,
+                        MAX(metric_value) FILTER (WHERE metric_window = '1y' AND metric_name = 'tracking_error') AS tracking_error_1y,
+                        MAX(metric_value) FILTER (WHERE metric_window = '1y' AND metric_name = 'tracking_difference') AS tracking_difference_1y,
+                        MAX(metric_value) FILTER (WHERE metric_window = '1y' AND metric_name = 'excess_return') AS excess_return_1y,
+                        MAX(metric_value) FILTER (WHERE metric_window = '1y' AND metric_name = 'information_ratio') AS information_ratio_1y,
+                        MAX(metric_value) FILTER (WHERE metric_window = 'latest' AND metric_name = 'expense_ratio') AS expense_ratio,
+                        MAX(metric_value) FILTER (WHERE metric_window = 'latest' AND metric_name = 'aum') AS aum,
+                        MAX(metric_value) FILTER (WHERE metric_window = 'latest' AND metric_name = 'seven_day_annualized_yield') AS seven_day_annualized_yield
+                    FROM (
+                        SELECT DISTINCT ON (metric_window, metric_name)
+                            metric_window, metric_name, metric_value
+                        FROM metric_snapshots
+                        WHERE target_type = 'fund'
+                          AND target_id = f.wind_code
+                        ORDER BY metric_window, metric_name, as_of_date DESC, updated_at DESC
+                    ) latest_metrics
+                ) evaluation_metrics ON TRUE
                 WHERE (pg.name = :peer_group OR pg.key = :peer_group)
                   AND pgm.role <> 'excluded'
                   AND fe.lifecycle_stage = 'active'
-                  AND (
-                    :keyword = ''
-                    OR f.name ILIKE :keyword_pattern
-                    OR f.wind_code ILIKE :keyword_pattern
-                  )
+                  AND ({active_fund_sql('f')})
                 ORDER BY
                     fe.id,
+                    evaluation_ready DESC NULLS LAST,
                     fsc.is_primary DESC,
-                    CASE WHEN f.performance_data IS NULL OR f.performance_data = '{}'::jsonb THEN 1 ELSE 0 END,
-                    CASE WHEN f.risk_metrics IS NULL OR f.risk_metrics = '{}'::jsonb THEN 1 ELSE 0 END,
+                    CASE WHEN f.performance_data IS NULL OR f.performance_data = '{{}}'::jsonb THEN 1 ELSE 0 END,
+                    CASE WHEN f.risk_metrics IS NULL OR f.risk_metrics = '{{}}'::jsonb THEN 1 ELSE 0 END,
                     f.nav_date DESC NULLS LAST,
                     fsc.wind_code ASC
-            ) peer_funds
+            ),
+            metric_funds AS (
+                SELECT
+                    representative_funds.*,
+                    {ranked_metrics['return_6m']} AS return_6m_metric,
+                    {ranked_metrics['return_1y']} AS return_1y_metric,
+                    {ranked_metrics['return_3y']} AS return_3y_metric
+                FROM representative_funds
+            ),
+            ranked_funds AS (
+                SELECT
+                    metric_funds.*,
+                    {self._peer_return_rank_sql('return_6m_metric', '6m')},
+                    {self._peer_return_rank_sql('return_1y_metric', '1y')},
+                    {self._peer_return_rank_sql('return_3y_metric', '3y')}
+                FROM metric_funds
+            )
+            SELECT *
+            FROM ranked_funds peer_funds
+            WHERE {filter_sql}
             ORDER BY
-                (
-                    SELECT COUNT(DISTINCT ms.metric_name)
-                    FROM metric_snapshots ms
-                    WHERE ms.target_type = 'fund'
-                      AND ms.target_id = peer_funds.wind_code
-                      AND ms.metric_window = '1y'
-                      AND ms.metric_name IN ('annualized_return', 'max_drawdown', 'sharpe_ratio', 'annualized_volatility')
-                ) DESC,
-                CASE WHEN performance_data IS NULL OR performance_data = '{}'::jsonb THEN 1 ELSE 0 END,
-                CASE WHEN risk_metrics IS NULL OR risk_metrics = '{}'::jsonb THEN 1 ELSE 0 END,
-                nav_date DESC NULLS LAST,
-                wind_code ASC
-            LIMIT :limit
+                {sort_sql},
+                peer_funds.wind_code ASC
+            LIMIT :limit OFFSET :offset
         """
         with self.engine.connect() as conn:
             rows = conn.execute(
                 text(sql),
                 {
                     "peer_group": normalized_group,
-                    "keyword": str(keyword or "").strip(),
-                    "keyword_pattern": f"%{str(keyword or '').strip()}%",
-                    "limit": max(1, min(int(limit), 2000)),
+                    "limit": max(1, min(int(limit), 10000)),
+                    "offset": max(0, int(offset)),
+                    **filter_params,
                 },
             ).fetchall()
         return [_row_to_dict(row) for row in rows]
 
-    def count_recommendation_funds(self, peer_group: str, keyword: Optional[str] = None) -> int:
+    def count_recommendation_funds(
+        self,
+        peer_group: str,
+        keyword: Optional[str] = None,
+        asset_min: Optional[float] = None,
+        min_age_years: Optional[int] = None,
+        min_manager_years: Optional[float] = None,
+        return_6m_min: Optional[float] = None,
+        return_1y_min: Optional[float] = None,
+        return_3y_min: Optional[float] = None,
+        max_drawdown_1y_max: Optional[float] = None,
+        sharpe_1y_min: Optional[float] = None,
+        style_tags: Optional[List[str]] = None,
+        style_match: str = "any",
+        availability: str = "classified",
+    ) -> int:
         """统计同类组可浏览的基金实体数，与候选列表使用相同过滤口径。"""
         normalized_group = str(peer_group or "").strip()
         if not normalized_group or not self._schema_ready():
@@ -473,30 +1320,596 @@ class FundClassificationRepo:
 
         from sqlalchemy import text
 
-        sql = """
-            SELECT COUNT(DISTINCT fe.id)::int AS fund_count
-            FROM peer_groups pg
-            JOIN peer_group_members pgm ON pgm.peer_group_id = pg.id
-            JOIN fund_entities fe ON fe.id = pgm.entity_id
-            JOIN fund_share_classes fsc ON fsc.entity_id = fe.id AND fsc.status = 'active'
-            JOIN funds f ON f.wind_code = fsc.wind_code
-            WHERE (pg.name = :peer_group OR pg.key = :peer_group)
-              AND pgm.role <> 'excluded'
-              AND fe.lifecycle_stage = 'active'
-              AND (
-                :keyword = ''
-                OR f.name ILIKE :keyword_pattern
-                OR f.wind_code ILIKE :keyword_pattern
-              )
+        filter_sql, filter_params = self._recommendation_filter_sql(
+            keyword=keyword,
+            asset_min=asset_min,
+            min_age_years=min_age_years,
+            min_manager_years=min_manager_years,
+            return_6m_min=return_6m_min,
+            return_1y_min=return_1y_min,
+            return_3y_min=return_3y_min,
+            max_drawdown_1y_max=max_drawdown_1y_max,
+            sharpe_1y_min=sharpe_1y_min,
+            style_tags=style_tags,
+            style_match=style_match,
+            availability=availability,
+        )
+        evaluation_ready_sql = self._recommendation_evaluation_ready_sql("f", "sf.key", "evaluation_metrics")
+        sql = f"""
+            WITH representative_funds AS (
+                SELECT DISTINCT ON (fe.id)
+                    f.*,
+                    sf.key AS strategy_family_key,
+                    {self._verified_style_tags_sql()} AS verified_style_tags,
+                    ({evaluation_ready_sql}) AS evaluation_ready
+                FROM peer_groups pg
+                JOIN peer_group_members pgm ON pgm.peer_group_id = pg.id
+                JOIN fund_entities fe ON fe.id = pgm.entity_id
+                LEFT JOIN strategy_families sf ON sf.id = fe.strategy_family_id
+                JOIN fund_share_classes fsc ON fsc.entity_id = fe.id AND fsc.status = 'active'
+                JOIN funds f ON f.wind_code = fsc.wind_code
+                {self._style_evidence_join_sql()}
+                LEFT JOIN LATERAL (
+                    SELECT
+                        MAX(metric_value) FILTER (WHERE metric_window = '1y' AND metric_name = 'annualized_return') AS annualized_return_1y,
+                        MAX(metric_value) FILTER (WHERE metric_window = '1y' AND metric_name = 'max_drawdown') AS max_drawdown_1y,
+                        MAX(metric_value) FILTER (WHERE metric_window = '1y' AND metric_name = 'sharpe_ratio') AS sharpe_ratio_1y,
+                        MAX(metric_value) FILTER (WHERE metric_window = '1y' AND metric_name = 'tracking_error') AS tracking_error_1y,
+                        MAX(metric_value) FILTER (WHERE metric_window = '1y' AND metric_name = 'tracking_difference') AS tracking_difference_1y,
+                        MAX(metric_value) FILTER (WHERE metric_window = '1y' AND metric_name = 'excess_return') AS excess_return_1y,
+                        MAX(metric_value) FILTER (WHERE metric_window = '1y' AND metric_name = 'information_ratio') AS information_ratio_1y,
+                        MAX(metric_value) FILTER (WHERE metric_window = 'latest' AND metric_name = 'expense_ratio') AS expense_ratio,
+                        MAX(metric_value) FILTER (WHERE metric_window = 'latest' AND metric_name = 'aum') AS aum,
+                        MAX(metric_value) FILTER (WHERE metric_window = 'latest' AND metric_name = 'seven_day_annualized_yield') AS seven_day_annualized_yield
+                    FROM (
+                        SELECT DISTINCT ON (metric_window, metric_name)
+                            metric_window, metric_name, metric_value
+                        FROM metric_snapshots
+                        WHERE target_type = 'fund'
+                          AND target_id = f.wind_code
+                        ORDER BY metric_window, metric_name, as_of_date DESC, updated_at DESC
+                    ) latest_metrics
+                ) evaluation_metrics ON TRUE
+                WHERE (pg.name = :peer_group OR pg.key = :peer_group)
+                  AND pgm.role <> 'excluded'
+                  AND fe.lifecycle_stage = 'active'
+                  AND ({active_fund_sql('f')})
+                ORDER BY
+                    fe.id,
+                    evaluation_ready DESC NULLS LAST,
+                    fsc.is_primary DESC,
+                    CASE WHEN f.performance_data IS NULL OR f.performance_data = '{{}}'::jsonb THEN 1 ELSE 0 END,
+                    CASE WHEN f.risk_metrics IS NULL OR f.risk_metrics = '{{}}'::jsonb THEN 1 ELSE 0 END,
+                    f.nav_date DESC NULLS LAST,
+                    fsc.wind_code ASC
+            )
+            SELECT COUNT(*)::int AS fund_count
+            FROM representative_funds peer_funds
+            WHERE {filter_sql}
         """
-        normalized_keyword = str(keyword or "").strip()
         with self.engine.connect() as conn:
             value = conn.execute(text(sql), {
                 "peer_group": normalized_group,
-                "keyword": normalized_keyword,
-                "keyword_pattern": f"%{normalized_keyword}%",
+                **filter_params,
             }).scalar()
         return int(value or 0)
+
+    def get_style_tag_catalog(
+        self,
+        peer_group: str,
+        availability: str = "classified",
+    ) -> Dict[str, Any]:
+        """返回同类组内可筛选标签、基金数量和证据来源覆盖。"""
+        normalized_group = str(peer_group or "").strip()
+        if not normalized_group or not self._schema_ready():
+            return self.empty_style_tag_catalog(normalized_group)
+
+        from sqlalchemy import text
+
+        normalized_availability = str(availability or "classified").strip().lower()
+        if normalized_availability not in {"evaluated", "classified", "all"}:
+            normalized_availability = "classified"
+        evaluation_ready_sql = self._recommendation_evaluation_ready_sql("f", "sf.key", "evaluation_metrics")
+        sql = f"""
+            WITH representative_funds AS (
+                SELECT DISTINCT ON (fe.id)
+                    fe.id AS entity_id,
+                    f.wind_code,
+                    COALESCE(sf.style_tags, ARRAY[]::TEXT[]) AS classification_style_tags,
+                    {self._memo_style_tags_sql()} AS memo_style_tags,
+                    {self._holding_style_tags_sql()} AS holding_style_tags,
+                    ({evaluation_ready_sql}) AS evaluation_ready
+                FROM peer_groups pg
+                JOIN peer_group_members pgm ON pgm.peer_group_id = pg.id
+                JOIN fund_entities fe ON fe.id = pgm.entity_id
+                LEFT JOIN strategy_families sf ON sf.id = fe.strategy_family_id
+                JOIN fund_share_classes fsc ON fsc.entity_id = fe.id AND fsc.status = 'active'
+                JOIN funds f ON f.wind_code = fsc.wind_code
+                {self._style_evidence_join_sql()}
+                LEFT JOIN LATERAL (
+                    SELECT
+                        MAX(metric_value) FILTER (WHERE metric_window = '1y' AND metric_name = 'annualized_return') AS annualized_return_1y,
+                        MAX(metric_value) FILTER (WHERE metric_window = '1y' AND metric_name = 'max_drawdown') AS max_drawdown_1y,
+                        MAX(metric_value) FILTER (WHERE metric_window = '1y' AND metric_name = 'sharpe_ratio') AS sharpe_ratio_1y,
+                        MAX(metric_value) FILTER (WHERE metric_window = '1y' AND metric_name = 'tracking_error') AS tracking_error_1y,
+                        MAX(metric_value) FILTER (WHERE metric_window = '1y' AND metric_name = 'tracking_difference') AS tracking_difference_1y,
+                        MAX(metric_value) FILTER (WHERE metric_window = '1y' AND metric_name = 'excess_return') AS excess_return_1y,
+                        MAX(metric_value) FILTER (WHERE metric_window = '1y' AND metric_name = 'information_ratio') AS information_ratio_1y,
+                        MAX(metric_value) FILTER (WHERE metric_window = 'latest' AND metric_name = 'expense_ratio') AS expense_ratio,
+                        MAX(metric_value) FILTER (WHERE metric_window = 'latest' AND metric_name = 'aum') AS aum,
+                        MAX(metric_value) FILTER (WHERE metric_window = 'latest' AND metric_name = 'seven_day_annualized_yield') AS seven_day_annualized_yield
+                    FROM (
+                        SELECT DISTINCT ON (metric_window, metric_name)
+                            metric_window, metric_name, metric_value
+                        FROM metric_snapshots
+                        WHERE target_type = 'fund'
+                          AND target_id = f.wind_code
+                        ORDER BY metric_window, metric_name, as_of_date DESC, updated_at DESC
+                    ) latest_metrics
+                ) evaluation_metrics ON TRUE
+                WHERE (pg.name = :peer_group OR pg.key = :peer_group)
+                  AND pgm.role <> 'excluded'
+                  AND fe.lifecycle_stage = 'active'
+                  AND ({active_fund_sql('f')})
+                ORDER BY
+                    fe.id,
+                    evaluation_ready DESC NULLS LAST,
+                    fsc.is_primary DESC,
+                    f.nav_date DESC NULLS LAST,
+                    fsc.wind_code ASC
+            )
+            SELECT entity_id, wind_code, classification_style_tags, memo_style_tags, holding_style_tags
+            FROM representative_funds
+            WHERE :availability <> 'evaluated' OR evaluation_ready
+        """
+        with self.engine.connect() as conn:
+            rows = [
+                _row_to_dict(row)
+                for row in conn.execute(text(sql), {
+                    "peer_group": normalized_group,
+                    "availability": normalized_availability,
+                }).fetchall()
+            ]
+        return self._build_style_tag_catalog(normalized_group, normalized_availability, rows)
+
+    @staticmethod
+    def empty_style_tag_catalog(peer_group: str) -> Dict[str, Any]:
+        return {
+            "peer_group": peer_group or None,
+            "availability": "classified",
+            "tags": [],
+            "coverage": {
+                "fund_count": 0,
+                "tagged_fund_count": 0,
+                "coverage_rate": 0.0,
+                "holding_quantitative_fund_count": 0,
+                "memo_confirmed_fund_count": 0,
+                "product_positioning_fund_count": 0,
+            },
+            "match_modes": ["any", "all"],
+        }
+
+    @classmethod
+    def _build_style_tag_catalog(
+        cls,
+        peer_group: str,
+        availability: str,
+        rows: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        source_meta = {
+            "holding": ("公开持仓同类分位", "strong"),
+            "memo": ("产品纪要人工确认", "context"),
+            "positioning": ("标准分类产品定位", "classification"),
+        }
+        tag_funds: Dict[str, set[str]] = {}
+        tag_sources: Dict[str, Dict[str, set[str]]] = {}
+        source_funds: Dict[str, set[str]] = {key: set() for key in source_meta}
+        tagged_funds: set[str] = set()
+
+        for row in rows:
+            fund_id = str(row.get("entity_id") or row.get("wind_code") or "")
+            source_values = {
+                "holding": row.get("holding_style_tags") or [],
+                "memo": row.get("memo_style_tags") or [],
+                "positioning": row.get("classification_style_tags") or [],
+            }
+            for source, values in source_values.items():
+                tags = list(dict.fromkeys(
+                    str(value or "").strip() for value in values if str(value or "").strip()
+                ))
+                if tags:
+                    source_funds[source].add(fund_id)
+                    tagged_funds.add(fund_id)
+                for tag in tags:
+                    tag_funds.setdefault(tag, set()).add(fund_id)
+                    tag_sources.setdefault(tag, {}).setdefault(source, set()).add(fund_id)
+
+        tags = []
+        for value, fund_ids in tag_funds.items():
+            sources = [
+                {
+                    "key": source,
+                    "label": source_meta[source][0],
+                    "evidence_level": source_meta[source][1],
+                    "fund_count": len(source_ids),
+                }
+                for source, source_ids in tag_sources.get(value, {}).items()
+            ]
+            evidence_level = (
+                "strong" if "holding" in tag_sources.get(value, {})
+                else "context" if "memo" in tag_sources.get(value, {})
+                else "classification"
+            )
+            tags.append({
+                "value": value,
+                "fund_count": len(fund_ids),
+                "evidence_level": evidence_level,
+                "sources": sources,
+            })
+        tags.sort(key=lambda item: (
+            {"strong": 0, "context": 1, "classification": 2}.get(item["evidence_level"], 9),
+            -item["fund_count"],
+            item["value"],
+        ))
+        fund_count = len(rows)
+        return {
+            "peer_group": peer_group,
+            "availability": availability,
+            "tags": tags,
+            "coverage": {
+                "fund_count": fund_count,
+                "tagged_fund_count": len(tagged_funds),
+                "coverage_rate": round(len(tagged_funds) / fund_count, 4) if fund_count else 0.0,
+                "holding_quantitative_fund_count": len(source_funds["holding"]),
+                "memo_confirmed_fund_count": len(source_funds["memo"]),
+                "product_positioning_fund_count": len(source_funds["positioning"]),
+            },
+            "match_modes": ["any", "all"],
+            "boundary": "只使用公开持仓同类分位、明确指向该产品且人工确认的纪要标签、标准分类产品定位；经理层纪要不会直接变成基金持仓标签。",
+        }
+
+    @staticmethod
+    def _recommendation_metric_expressions(alias: str = "peer_funds") -> Dict[str, str]:
+        number_pattern = "'^-?[0-9]+(\\.[0-9]+)?$'"
+        return_6m_raw = f"NULLIF({alias}.performance_data->>'return_6m', '')"
+        return_1y_raw = f"NULLIF(COALESCE({alias}.performance_data->>'return_1y', {alias}.performance_data->>'total_return'), '')"
+        return_3y_raw = f"NULLIF({alias}.performance_data->>'return_3y', '')"
+        drawdown_raw = f"NULLIF(COALESCE({alias}.risk_metrics->>'max_drawdown_1y', {alias}.risk_metrics->>'max_drawdown', {alias}.performance_data->>'max_drawdown'), '')"
+        sharpe_raw = f"NULLIF(COALESCE({alias}.performance_data->>'sharpe_ratio', {alias}.risk_metrics->>'sharpe_ratio'), '')"
+        return {
+            "return_6m": f"CASE WHEN {return_6m_raw} ~ {number_pattern} THEN {return_6m_raw}::numeric END",
+            "return_1y": f"CASE WHEN {return_1y_raw} ~ {number_pattern} THEN {return_1y_raw}::numeric END",
+            "return_3y": f"CASE WHEN {return_3y_raw} ~ {number_pattern} THEN {return_3y_raw}::numeric END",
+            "drawdown": f"CASE WHEN {drawdown_raw} ~ {number_pattern} THEN {drawdown_raw}::numeric END",
+            "sharpe": f"CASE WHEN {sharpe_raw} ~ {number_pattern} THEN {sharpe_raw}::numeric END",
+        }
+
+    @staticmethod
+    def _peer_return_rank_sql(metric_column: str, window: str) -> str:
+        count_sql = f"COUNT({metric_column}) OVER ()"
+        rank_sql = f"RANK() OVER (PARTITION BY ({metric_column} IS NULL) ORDER BY {metric_column} DESC)"
+        return f"""
+            CASE WHEN {metric_column} IS NULL THEN NULL ELSE ({rank_sql})::int END AS return_{window}_peer_rank,
+            ({count_sql})::int AS return_{window}_peer_count,
+            CASE
+                WHEN {metric_column} IS NULL THEN NULL
+                WHEN {count_sql} <= 1 THEN 100::numeric
+                ELSE ROUND((({count_sql} - {rank_sql})::numeric / ({count_sql} - 1)) * 100, 2)
+            END AS return_{window}_peer_percentile
+        """.strip()
+
+    @classmethod
+    def _recommendation_filter_sql(
+        cls,
+        keyword: Optional[str],
+        asset_min: Optional[float],
+        min_age_years: Optional[int],
+        min_manager_years: Optional[float],
+        return_6m_min: Optional[float],
+        return_1y_min: Optional[float],
+        return_3y_min: Optional[float],
+        max_drawdown_1y_max: Optional[float],
+        sharpe_1y_min: Optional[float],
+        style_tags: Optional[List[str]] = None,
+        style_match: str = "any",
+        availability: str = "classified",
+    ) -> tuple[str, Dict[str, Any]]:
+        metrics = cls._recommendation_metric_expressions()
+        clauses: List[str] = ["TRUE"]
+        params: Dict[str, Any] = {}
+        if str(availability or "classified").strip().lower() == "evaluated":
+            clauses.append("peer_funds.evaluation_ready")
+        normalized_keyword = str(keyword or "").strip()
+        if normalized_keyword:
+            clauses.append("(peer_funds.name ILIKE :keyword_pattern OR peer_funds.wind_code ILIKE :keyword_pattern)")
+            params["keyword_pattern"] = f"%{normalized_keyword}%"
+        if asset_min is not None:
+            clauses.append("peer_funds.total_asset >= :asset_min")
+            params["asset_min"] = max(0.0, float(asset_min))
+        if min_age_years is not None:
+            clauses.append("peer_funds.establishment_date <= CURRENT_DATE - (:min_age_years * INTERVAL '1 year')")
+            params["min_age_years"] = max(0, int(min_age_years))
+        if min_manager_years is not None:
+            clauses.append("""
+                EXISTS (
+                    SELECT 1
+                    FROM managers manager
+                    WHERE (
+                        manager.wind_code = ANY(COALESCE(peer_funds.manager_ids, ARRAY[]::TEXT[]))
+                        OR manager.name = ANY(COALESCE(peer_funds.manager_ids, ARRAY[]::TEXT[]))
+                    )
+                      AND COALESCE(manager.management_years, 0) >= :min_manager_years
+                )
+            """)
+            params["min_manager_years"] = max(0.0, float(min_manager_years))
+        if return_6m_min is not None:
+            clauses.append(f"({metrics['return_6m']}) >= :return_6m_min")
+            params["return_6m_min"] = float(return_6m_min)
+        if return_1y_min is not None:
+            clauses.append(f"({metrics['return_1y']}) >= :return_1y_min")
+            params["return_1y_min"] = float(return_1y_min)
+        if return_3y_min is not None:
+            clauses.append(f"({metrics['return_3y']}) >= :return_3y_min")
+            params["return_3y_min"] = float(return_3y_min)
+        if max_drawdown_1y_max is not None:
+            clauses.append(f"ABS({metrics['drawdown']}) <= :max_drawdown_1y_max")
+            params["max_drawdown_1y_max"] = max(0.0, float(max_drawdown_1y_max))
+        if sharpe_1y_min is not None:
+            clauses.append(f"({metrics['sharpe']}) >= :sharpe_1y_min")
+            params["sharpe_1y_min"] = float(sharpe_1y_min)
+        normalized_style_tags = list(dict.fromkeys(
+            str(tag or "").strip() for tag in (style_tags or []) if str(tag or "").strip()
+        ))
+        if normalized_style_tags:
+            normalized_style_match = "all" if str(style_match or "any").strip().lower() == "all" else "any"
+            operator = "<@" if normalized_style_match == "all" else "&&"
+            clauses.append(
+                f"CAST(:style_tags AS TEXT[]) {operator} COALESCE(peer_funds.verified_style_tags, ARRAY[]::TEXT[])"
+            )
+            params["style_tags"] = normalized_style_tags
+        return " AND ".join(f"({clause.strip()})" for clause in clauses), params
+
+    @staticmethod
+    def _memo_style_tags_sql() -> str:
+        return """
+            CASE
+                WHEN COALESCE(research_profile.updated_by, '') = 'research_memo_profile_projection'
+                THEN array_remove(
+                    ARRAY[NULLIF(research_profile.style_label, '')]::TEXT[]
+                    || COALESCE(research_profile.strategy_tags, ARRAY[]::TEXT[]),
+                    NULL
+                )
+                ELSE ARRAY[]::TEXT[]
+            END
+        """.strip()
+
+    @staticmethod
+    def _holding_style_tags_sql() -> str:
+        return """
+            CASE
+                WHEN holding_style.status = 'peer_percentile_ready'
+                THEN COALESCE(holding_style.style_labels, ARRAY[]::TEXT[])
+                ELSE ARRAY[]::TEXT[]
+            END
+        """.strip()
+
+    @classmethod
+    def _verified_style_tags_sql(cls) -> str:
+        return f"""
+            ARRAY(
+                SELECT DISTINCT tag
+                FROM unnest(
+                    COALESCE(sf.style_tags, ARRAY[]::TEXT[])
+                    || ({cls._memo_style_tags_sql()})
+                    || ({cls._holding_style_tags_sql()})
+                ) tag
+                WHERE COALESCE(tag, '') <> ''
+                ORDER BY tag
+            )
+        """.strip()
+
+    @staticmethod
+    def _style_evidence_join_sql() -> str:
+        return """
+            LEFT JOIN LATERAL (
+                SELECT profile.*
+                FROM fund_research_profiles profile
+                WHERE profile.wind_code = fe.canonical_code
+                   OR EXISTS (
+                        SELECT 1
+                        FROM fund_share_classes profile_share
+                        WHERE profile_share.entity_id = fe.id
+                          AND profile_share.wind_code = profile.wind_code
+                   )
+                ORDER BY
+                    CASE WHEN profile.updated_by = 'research_memo_profile_projection' THEN 0 ELSE 1 END,
+                    CASE WHEN profile.wind_code = fe.canonical_code THEN 0 ELSE 1 END,
+                    profile.updated_at DESC
+                LIMIT 1
+            ) research_profile ON TRUE
+            LEFT JOIN LATERAL (
+                SELECT snapshot.*
+                FROM holding_style_snapshots snapshot
+                JOIN fund_share_classes style_share
+                  ON style_share.wind_code = snapshot.wind_code
+                 AND style_share.entity_id = fe.id
+                WHERE style_share.status = 'active'
+                ORDER BY
+                    snapshot.quarter DESC,
+                    CASE WHEN snapshot.status = 'peer_percentile_ready' THEN 0 ELSE 1 END,
+                    snapshot.calculated_at DESC
+                LIMIT 1
+            ) holding_style ON TRUE
+        """.strip()
+
+    @staticmethod
+    def _recommendation_evaluation_ready_sql(
+        fund_alias: str,
+        family_expression: str,
+        metric_alias: Optional[str] = None,
+    ) -> str:
+        """与类别评分方法一致的轻量门禁，用于列表分页前筛选。"""
+        number_pattern = "'^-?[0-9]+(\\.[0-9]+)?$'"
+
+        def numeric(expression: str) -> str:
+            return (
+                f"CASE WHEN NULLIF({expression}, '') ~ {number_pattern} "
+                f"THEN NULLIF({expression}, '')::numeric END"
+            )
+
+        annualized_return_fallback = numeric(
+            f"COALESCE({fund_alias}.performance_data->>'annualized_return_1y', "
+            f"{fund_alias}.performance_data->>'return_1y', {fund_alias}.performance_data->>'annual_return')"
+        )
+        drawdown_fallback = numeric(
+            f"COALESCE({fund_alias}.risk_metrics->>'max_drawdown_1y', "
+            f"{fund_alias}.risk_metrics->>'max_drawdown', {fund_alias}.performance_data->>'max_drawdown')"
+        )
+        sharpe_fallback = numeric(
+            f"COALESCE({fund_alias}.performance_data->>'sharpe_ratio', "
+            f"{fund_alias}.performance_data->>'sharpe', {fund_alias}.risk_metrics->>'sharpe_ratio')"
+        )
+        tracking_error_fallback = numeric(f"{fund_alias}.risk_metrics->>'tracking_error'")
+        tracking_difference_fallback = numeric(
+            f"COALESCE({fund_alias}.performance_data->>'tracking_difference', "
+            f"{fund_alias}.performance_data->>'excess_return')"
+        )
+        information_ratio_fallback = numeric(f"{fund_alias}.risk_metrics->>'information_ratio'")
+        seven_day_yield_fallback = numeric(
+            f"COALESCE({fund_alias}.performance_data->>'seven_day_annualized_yield', "
+            f"{fund_alias}.performance_data->>'yield_7d', {fund_alias}.performance_data->>'seven_day_yield')"
+        )
+        management_fee = numeric(
+            f"COALESCE({fund_alias}.raw_data#>>'{{info,management_fee}}', {fund_alias}.raw_data#>>'{{info,m_fee}}', "
+            f"{fund_alias}.raw_data#>>'{{universe,management_fee}}', {fund_alias}.raw_data#>>'{{universe,m_fee}}')"
+        )
+        custodian_fee = numeric(
+            f"COALESCE({fund_alias}.raw_data#>>'{{info,custodian_fee}}', {fund_alias}.raw_data#>>'{{info,c_fee}}', "
+            f"{fund_alias}.raw_data#>>'{{universe,custodian_fee}}', {fund_alias}.raw_data#>>'{{universe,c_fee}}')"
+        )
+        expense_ratio_fallback = f"""
+            CASE
+                WHEN ({management_fee}) IS NOT NULL OR ({custodian_fee}) IS NOT NULL
+                THEN
+                    COALESCE(CASE WHEN ABS({management_fee}) >= 0.05 THEN ({management_fee}) / 100 ELSE ({management_fee}) END, 0)
+                    + COALESCE(CASE WHEN ABS({custodian_fee}) >= 0.05 THEN ({custodian_fee}) / 100 ELSE ({custodian_fee}) END, 0)
+            END
+        """
+        annualized_return = f"COALESCE({metric_alias}.annualized_return_1y, {annualized_return_fallback})" if metric_alias else annualized_return_fallback
+        drawdown = f"COALESCE({metric_alias}.max_drawdown_1y, {drawdown_fallback})" if metric_alias else drawdown_fallback
+        sharpe = f"COALESCE({metric_alias}.sharpe_ratio_1y, {sharpe_fallback})" if metric_alias else sharpe_fallback
+        tracking_error = f"COALESCE({metric_alias}.tracking_error_1y, {tracking_error_fallback})" if metric_alias else tracking_error_fallback
+        tracking_difference = (
+            f"COALESCE({metric_alias}.tracking_difference_1y, {metric_alias}.excess_return_1y, {tracking_difference_fallback})"
+            if metric_alias else tracking_difference_fallback
+        )
+        information_ratio = (
+            f"COALESCE({metric_alias}.information_ratio_1y, {information_ratio_fallback})"
+            if metric_alias else information_ratio_fallback
+        )
+        expense_ratio = f"COALESCE({metric_alias}.expense_ratio, {expense_ratio_fallback})" if metric_alias else expense_ratio_fallback
+        aum = f"COALESCE({metric_alias}.aum, {fund_alias}.total_asset)" if metric_alias else f"{fund_alias}.total_asset"
+        seven_day_yield = f"COALESCE({metric_alias}.seven_day_annualized_yield, {seven_day_yield_fallback})" if metric_alias else seven_day_yield_fallback
+        normalized_yield = f"CASE WHEN ABS({seven_day_yield}) > 0.20 THEN ({seven_day_yield}) / 100 ELSE ({seven_day_yield}) END"
+        normalized_return = f"CASE WHEN ABS({annualized_return}) > 0.20 THEN ({annualized_return}) / 100 ELSE ({annualized_return}) END"
+        fof_lookthrough_ready = f"""
+            EXISTS (
+                SELECT 1
+                FROM fund_underlying_holdings fof_holding
+                WHERE fof_holding.wind_code = {fund_alias}.wind_code
+                  AND fof_holding.report_date = (
+                      SELECT MAX(latest_fof_holding.report_date)
+                      FROM fund_underlying_holdings latest_fof_holding
+                      WHERE latest_fof_holding.wind_code = {fund_alias}.wind_code
+                  )
+                GROUP BY fof_holding.wind_code, fof_holding.report_date
+                HAVING COUNT(*) >= {FOF_LOOKTHROUGH_MIN_FUNDS}
+                   AND COALESCE(SUM(fof_holding.nav_ratio), 0) >= {FOF_LOOKTHROUGH_MIN_NAV_RATIO}
+            )
+        """
+        return f"""
+            (
+            {fund_alias}.establishment_date IS NULL
+            OR {fund_alias}.establishment_date <= CURRENT_DATE - INTERVAL '365 days'
+            )
+            AND CASE
+                WHEN {family_expression} IN (
+                    'active_equity_core', 'active_equity_sector', 'active_equity_cross_market',
+                    'fixed_income_general', 'fixed_income_credit', 'fixed_income_equity_allocation',
+                    'mixed_equity_allocation', 'mixed_balanced_allocation', 'mixed_bond_allocation',
+                    'qdii_equity', 'qdii_bond', 'qdii_multi_asset'
+                ) THEN ({annualized_return}) IS NOT NULL AND ({drawdown}) IS NOT NULL AND ({sharpe}) IS NOT NULL
+                WHEN {family_expression} IN (
+                    'fof_equity_allocation', 'fof_balanced_allocation', 'fof_bond_allocation'
+                ) THEN
+                    ({annualized_return}) IS NOT NULL
+                    AND ({drawdown}) IS NOT NULL
+                    AND ({sharpe}) IS NOT NULL
+                    AND ({fof_lookthrough_ready})
+                WHEN {family_expression} IN ('index_broad', 'index_sector', 'index_fixed_income') THEN
+                    ({tracking_error}) BETWEEN 0 AND 0.10
+                    AND ABS({tracking_difference}) <= 0.25
+                    AND ({expense_ratio}) BETWEEN 0 AND 0.05
+                    AND ({aum}) > 0
+                WHEN {family_expression} = 'qdii_index' THEN
+                    ({tracking_error}) BETWEEN 0 AND 0.15
+                    AND ABS({tracking_difference}) <= 0.25
+                    AND ({expense_ratio}) BETWEEN 0 AND 0.05
+                    AND ({aum}) > 0
+                WHEN {family_expression} = 'index_enhanced' THEN
+                    ({tracking_difference}) BETWEEN -0.50 AND 0.50
+                    AND ({information_ratio}) BETWEEN -10 AND 10
+                    AND ({tracking_error}) BETWEEN 0 AND 0.35
+                    AND ({drawdown}) BETWEEN -0.80 AND 0.01
+                    AND ({expense_ratio}) BETWEEN 0 AND 0.05
+                    AND ({aum}) > 0
+                WHEN {family_expression} = 'cash_management' THEN
+                    ({normalized_yield}) BETWEEN 0 AND 0.20
+                    AND ({normalized_return}) BETWEEN -0.05 AND 0.20
+                    AND ABS({drawdown}) <= 0.20
+                    AND ({aum}) > 0
+                ELSE FALSE
+            END
+        """
+
+    @classmethod
+    def _recommendation_sort_sql(cls, sort_by: str) -> str:
+        metrics = cls._recommendation_metric_expressions()
+        quality = """
+            (
+                SELECT COUNT(DISTINCT ms.metric_name)
+                FROM metric_snapshots ms
+                WHERE ms.target_type = 'fund'
+                  AND ms.target_id = peer_funds.wind_code
+                  AND ms.metric_window = '1y'
+                  AND ms.metric_name IN ('annualized_return', 'max_drawdown', 'sharpe_ratio', 'annualized_volatility')
+            ) DESC,
+            CASE WHEN peer_funds.performance_data IS NULL OR peer_funds.performance_data = '{}'::jsonb THEN 1 ELSE 0 END,
+            CASE WHEN peer_funds.risk_metrics IS NULL OR peer_funds.risk_metrics = '{}'::jsonb THEN 1 ELSE 0 END,
+            peer_funds.nav_date DESC NULLS LAST
+        """.strip()
+        return {
+            "return": f"({metrics['return_1y']}) DESC NULLS LAST",
+            "return_6m": f"({metrics['return_6m']}) DESC NULLS LAST",
+            "return_1y": f"({metrics['return_1y']}) DESC NULLS LAST",
+            "return_3y": f"({metrics['return_3y']}) DESC NULLS LAST",
+            "multi_period": """
+                (
+                    (CASE WHEN peer_funds.return_6m_peer_percentile IS NOT NULL THEN 1 ELSE 0 END) +
+                    (CASE WHEN peer_funds.return_1y_peer_percentile IS NOT NULL THEN 1 ELSE 0 END) +
+                    (CASE WHEN peer_funds.return_3y_peer_percentile IS NOT NULL THEN 1 ELSE 0 END)
+                ) DESC,
+                (
+                    COALESCE(peer_funds.return_6m_peer_percentile, 0) +
+                    COALESCE(peer_funds.return_1y_peer_percentile, 0) +
+                    COALESCE(peer_funds.return_3y_peer_percentile, 0)
+                ) DESC
+            """.strip(),
+            "drawdown": f"ABS({metrics['drawdown']}) ASC NULLS LAST",
+            "sharpe": f"({metrics['sharpe']}) DESC NULLS LAST",
+            "asset": "peer_funds.total_asset DESC NULLS LAST",
+            "history": "peer_funds.establishment_date ASC NULLS LAST",
+        }.get(str(sort_by or "").strip().lower(), quality)
 
     def ensure_catalog(
         self,
@@ -674,7 +2087,10 @@ class FundClassificationRepo:
                             raise ValueError("strategy_family_asset_class_conflict")
                         if strategy_row.get("active_passive") != group.get("active_passive"):
                             raise ValueError("strategy_family_active_passive_conflict")
-                        if peer_row.get("benchmark_code") != group.get("benchmark_code"):
+                        peer_group_benchmark_code = (
+                            group.get("peer_group_benchmark_code") or group.get("benchmark_code")
+                        )
+                        if peer_row.get("benchmark_code") != peer_group_benchmark_code:
                             raise ValueError("peer_group_benchmark_conflict")
 
                         share_codes = [str(share.get("wind_code")) for share in group.get("shares") or []]
@@ -709,7 +2125,24 @@ class FundClassificationRepo:
 
                         entity_id = str(existing.id) if existing else str(group.get("entity_id"))
                         if existing and existing.strategy_family_id not in {None, strategy_row["id"]}:
-                            raise ValueError("existing_entity_strategy_family_conflict")
+                            curated_classification = conn.execute(text("""
+                                SELECT 1
+                                FROM peer_group_members
+                                WHERE entity_id = :entity_id
+                                  AND source <> :source
+                                UNION ALL
+                                SELECT 1
+                                FROM benchmark_mappings
+                                WHERE entity_id = :entity_id
+                                  AND status = 'active'
+                                  AND source <> :source
+                                LIMIT 1
+                            """), {
+                                "entity_id": str(existing.id),
+                                "source": source,
+                            }).fetchone()
+                            if existing.source != source or curated_classification:
+                                raise ValueError("existing_entity_strategy_family_conflict")
                         entity_created = not bool(existing)
 
                         entity_payload = {
@@ -854,7 +2287,8 @@ class FundClassificationRepo:
                             ).hexdigest()[:20]
                             matched_rules = {
                                 "strategyFamily": group.get("strategy_family_key"),
-                                "benchmarkCode": group.get("benchmark_code"),
+                                "peerGroupBenchmarkCode": peer_group_benchmark_code,
+                                "contractBenchmarkCode": group.get("benchmark_code"),
                                 "normalization": "high_confidence_ingestion",
                                 "shareCodes": share_codes,
                             }

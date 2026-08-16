@@ -2,6 +2,9 @@
 from typing import Any, Dict, List
 
 
+MIN_PORTFOLIO_COVERAGE = 0.20
+
+
 class BrinsonAttributor:
     """Brinson 业绩归因计算器"""
 
@@ -28,12 +31,27 @@ class BrinsonAttributor:
                 benchmark_return,
                 ["基准行业权重缺失，不能计算 Brinson 配置效应"],
             )
+        if portfolio_coverage < MIN_PORTFOLIO_COVERAGE:
+            return self._unavailable_attribution(
+                fund_return,
+                benchmark_return,
+                [
+                    f"基金持仓披露覆盖率仅 {portfolio_coverage:.1%}，"
+                    f"低于 {MIN_PORTFOLIO_COVERAGE:.0%} 最低门槛，不输出行业配置与选择效应。"
+                ],
+                coverage={
+                    "portfolio_holdings": round(portfolio_coverage, 6),
+                    "benchmark_constituents": round(benchmark_coverage, 6),
+                    "holding_returns": round(return_coverage, 6),
+                },
+            )
 
         allocation_effect = 0.0
         selection_effect = 0.0
         interaction_effect = 0.0
         industry_details = []
         missing_items = []
+        skipped_portfolio_weight = 0.0
 
         for industry in sorted(set(portfolio_industries) | set(benchmark_industries)):
             portfolio = portfolio_industries.get(industry) or {}
@@ -47,9 +65,11 @@ class BrinsonAttributor:
                 benchmark_industry_return = benchmark_return
             if benchmark_industry_return is None:
                 missing_items.append(f"{industry} 缺少基准行业收益")
+                skipped_portfolio_weight += portfolio_weight
                 continue
             if portfolio_weight > 0 and portfolio_industry_return is None:
                 missing_items.append(f"{industry} 缺少基金持仓区间收益")
+                skipped_portfolio_weight += portfolio_weight
                 continue
             if portfolio_industry_return is None:
                 portfolio_industry_return = benchmark_industry_return
@@ -79,7 +99,7 @@ class BrinsonAttributor:
                 "interaction_contrib": round(interaction, 6),
             })
 
-        if missing_items:
+        if not industry_details:
             return self._unavailable_attribution(fund_return, benchmark_return, missing_items)
 
         active_return = fund_return - benchmark_return
@@ -91,6 +111,8 @@ class BrinsonAttributor:
             missing_items.append(f"基准成分收益覆盖率仅 {benchmark_coverage:.1%}")
         if return_coverage < 0.95:
             missing_items.append(f"基金持仓收益覆盖率仅 {return_coverage:.1%}")
+        if skipped_portfolio_weight > 0:
+            missing_items.append(f"约 {skipped_portfolio_weight:.2%} 的已披露持仓因行情或行业收益缺失未进入效应分解")
 
         industry_details.sort(
             key=lambda item: abs(item["allocation_contrib"] + item["selection_contrib"] + item["interaction_contrib"]),
@@ -110,11 +132,18 @@ class BrinsonAttributor:
                 "portfolio_holdings": round(portfolio_coverage, 6),
                 "benchmark_constituents": round(benchmark_coverage, 6),
                 "holding_returns": round(return_coverage, 6),
+                "skipped_portfolio_weight": round(skipped_portfolio_weight, 6),
             },
             "missing_items": missing_items,
         }
 
-    def _unavailable_attribution(self, fund_return: float, benchmark_return: float, missing_items: List[str]) -> Dict[str, Any]:
+    def _unavailable_attribution(
+        self,
+        fund_return: float,
+        benchmark_return: float,
+        missing_items: List[str],
+        coverage: Dict[str, float] | None = None,
+    ) -> Dict[str, Any]:
         """证据不足时显式返回不可用，禁止用随机/估算数据冒充归因。"""
         active = fund_return - benchmark_return
         return {
@@ -127,5 +156,6 @@ class BrinsonAttributor:
             "residual": None,
             "explained_return": None,
             "industry_details": [],
+            "coverage": coverage or {},
             "missing_items": missing_items,
         }
