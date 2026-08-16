@@ -265,6 +265,32 @@ class FundNavDataEnrichmentService:
         context = self._classification_context(wind_code)
         benchmark_mapping = context.get("benchmark_mapping") or {}
         benchmark_code = str(benchmark_mapping.get("benchmark_code") or "").strip() or None
+        evidence_refs = benchmark_mapping.get("evidence_refs") or {}
+        benchmark_components = (
+            evidence_refs.get("benchmarkComponents")
+            if isinstance(evidence_refs, dict)
+            else None
+        )
+        performance_benchmark_type = None
+        performance_benchmark_components = None
+        if benchmark_mapping.get("benchmark_type") == "contract_composite_benchmark":
+            performance_benchmark_type = "contract_composite_benchmark"
+            performance_benchmark_components = benchmark_components
+        elif benchmark_mapping.get("benchmark_type") == "declared_allocation_bucket":
+            declared_benchmark = (
+                evidence_refs.get("declaredBenchmark")
+                if isinstance(evidence_refs, dict)
+                else None
+            )
+            if not benchmark_components and declared_benchmark:
+                from services.fund_classification_ingestion_service import FundClassificationIngestionService
+
+                benchmark_components = FundClassificationIngestionService.resolve_contract_benchmark_components(
+                    declared_benchmark
+                )
+            if benchmark_components:
+                performance_benchmark_type = "contract_composite_benchmark"
+                performance_benchmark_components = benchmark_components
         enriched_series = list(nav_series)
         nav_validation = self.evidence_service.validate_nav_series(enriched_series, fund_type=fund_type)
         if nav_validation.get("status") != "valid":
@@ -279,6 +305,8 @@ class FundNavDataEnrichmentService:
                 "benchmark_nav_observations": 0,
                 "benchmark_rate_observations": 0,
                 "benchmark_source": None,
+                "performance_benchmark_type": performance_benchmark_type,
+                "performance_benchmark_components": performance_benchmark_components,
                 "money_market_metric_status": "invalid_nav",
                 "nav_data_status": "invalid",
                 "nav_validation": nav_validation,
@@ -303,14 +331,21 @@ class FundNavDataEnrichmentService:
 
         if benchmark_code:
             benchmark_status = "data_unavailable"
-            try:
-                benchmark_series = self.market_data_adapter.get_benchmark_nav(
-                    benchmark_code,
+            if performance_benchmark_type == "contract_composite_benchmark":
+                benchmark_series = self._contract_composite_series(
+                    performance_benchmark_components or [],
                     start_date=start_date,
                     end_date=end_date,
                 )
-            except Exception:
-                benchmark_series = []
+            else:
+                try:
+                    benchmark_series = self.market_data_adapter.get_benchmark_nav(
+                        benchmark_code,
+                        start_date=start_date,
+                        end_date=end_date,
+                    )
+                except Exception:
+                    benchmark_series = []
             enriched_series, benchmark_points = self.evidence_service.attach_benchmark_nav(
                 nav_series,
                 benchmark_series,
@@ -318,7 +353,11 @@ class FundNavDataEnrichmentService:
             if benchmark_points >= 2:
                 benchmark_status = "available"
                 benchmark_data_kind = "nav"
-                benchmark_source = "tushare.index_daily"
+                benchmark_source = (
+                    benchmark_series[0].get("source")
+                    if benchmark_series
+                    else None
+                )
             elif hasattr(self.market_data_adapter, "get_benchmark_rate"):
                 try:
                     rate_series = self.market_data_adapter.get_benchmark_rate(
@@ -360,10 +399,85 @@ class FundNavDataEnrichmentService:
             "benchmark_nav_observations": benchmark_points,
             "benchmark_rate_observations": benchmark_rate_points,
             "benchmark_source": benchmark_source,
+            "performance_benchmark_type": performance_benchmark_type,
+            "performance_benchmark_components": performance_benchmark_components,
+            "performance_benchmark_source": benchmark_source if performance_benchmark_type else None,
             "money_market_metric_status": "available" if performance_facts else "not_available",
             "nav_data_status": "valid",
             "nav_validation": nav_validation,
         }
+
+    def _contract_composite_series(
+        self,
+        components: List[Dict[str, Any]],
+        start_date: str,
+        end_date: str,
+    ) -> List[Dict[str, Any]]:
+        """按合同固定权重构建日频再平衡复合基准，只使用所有成分共同交易日。"""
+        if len(components) < 2:
+            return []
+        weights = [self.evidence_service._number(item.get("weight")) for item in components]
+        if any(weight is None or weight <= 0 for weight in weights):
+            return []
+        if abs(sum(weights) - 100) > 0.001:
+            return []
+
+        component_maps = []
+        for component in components:
+            code = str(component.get("code") or "").strip().upper()
+            if not code:
+                return []
+            try:
+                series = self.market_data_adapter.get_benchmark_nav(
+                    code,
+                    start_date=start_date,
+                    end_date=end_date,
+                )
+            except Exception:
+                return []
+            values = {
+                item_date: value
+                for item in series
+                if (item_date := self.evidence_service._date_text(item.get("date") or item.get("trade_date")))
+                if (value := self.evidence_service._positive_number(item.get("nav") or item.get("close"))) is not None
+            }
+            if len(values) < 2:
+                return []
+            component_maps.append(values)
+
+        common_dates = sorted(set.intersection(*(set(values) for values in component_maps)))
+        if len(common_dates) < 2:
+            return []
+        composite_nav = 1.0
+        result = [{
+            "date": common_dates[0],
+            "nav": composite_nav,
+            "source": "derived:tushare.contract_composite.daily_rebalanced_v1",
+        }]
+        previous_date = common_dates[0]
+        for item_date in common_dates[1:]:
+            composite_return = sum(
+                (weight / 100.0) * (values[item_date] / values[previous_date] - 1.0)
+                for weight, values in zip(weights, component_maps)
+            )
+            if composite_return <= -1:
+                return []
+            composite_nav *= 1.0 + composite_return
+            result.append({
+                "date": item_date,
+                "nav": composite_nav,
+                "source": "derived:tushare.contract_composite.daily_rebalanced_v1",
+            })
+            previous_date = item_date
+        return result
+
+    def build_contract_composite_series(
+        self,
+        components: List[Dict[str, Any]],
+        start_date: str,
+        end_date: str,
+    ) -> List[Dict[str, Any]]:
+        return self._contract_composite_series(components, start_date, end_date)
 
     def _classification_context(self, wind_code: str) -> Dict[str, Any]:
         try:

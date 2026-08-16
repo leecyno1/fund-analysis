@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional
 class FundClassificationCatalog:
     """标准分类定义的唯一来源。"""
 
-    VERSION = "fund_classification_catalog_v5"
+    VERSION = "fund_classification_catalog_v14"
 
     STRATEGY_FAMILIES: List[Dict[str, Any]] = [
         {
@@ -31,6 +31,16 @@ class FundClassificationCatalog:
             "evaluation_profile_key": "active_equity",
             "compatible_fund_types": ["stock", "股票型", "普通股票型", "hybrid", "偏股混合型", "偏股混合"],
             "style_tags": ["主动权益", "行业", "主题"],
+        },
+        {
+            "id": "strategy-family-active-equity-cross-market",
+            "key": "active_equity_cross_market",
+            "name": "主动权益-沪港深",
+            "asset_class": "equity",
+            "active_passive": "active",
+            "evaluation_profile_key": "active_equity",
+            "compatible_fund_types": ["stock", "股票型", "普通股票型"],
+            "style_tags": ["主动权益", "沪港深", "跨市场"],
         },
         {
             "id": "strategy-family-fixed-income-credit",
@@ -73,6 +83,16 @@ class FundClassificationCatalog:
             "style_tags": ["指数", "宽基", "被动"],
         },
         {
+            "id": "strategy-family-index-sector",
+            "key": "index_sector",
+            "name": "指数-行业/主题",
+            "asset_class": "index",
+            "active_passive": "passive",
+            "evaluation_profile_key": "index_fund",
+            "compatible_fund_types": ["index", "指数型", "被动指数型", "ETF", "ETF联接"],
+            "style_tags": ["指数", "行业", "主题", "被动"],
+        },
+        {
             "id": "strategy-family-index-fixed-income",
             "key": "index_fixed_income",
             "name": "指数-固定收益",
@@ -93,14 +113,44 @@ class FundClassificationCatalog:
             "style_tags": ["指数", "增强", "主动"],
         },
         {
-            "id": "strategy-family-qdii-global-theme",
-            "key": "qdii_global_theme",
-            "name": "QDII-全球/区域主题",
+            "id": "strategy-family-qdii-equity",
+            "key": "qdii_equity",
+            "name": "QDII-主动权益",
             "asset_class": "global",
             "active_passive": "active",
-            "evaluation_profile_key": "qdii",
+            "evaluation_profile_key": "qdii_equity",
             "compatible_fund_types": ["qdii", "QDII", "国际(QDII)", "海外基金"],
-            "style_tags": ["QDII", "全球", "区域", "汇率"],
+            "style_tags": ["QDII", "海外权益", "主动管理", "汇率"],
+        },
+        {
+            "id": "strategy-family-qdii-bond",
+            "key": "qdii_bond",
+            "name": "QDII-债券",
+            "asset_class": "global",
+            "active_passive": "active",
+            "evaluation_profile_key": "qdii_bond",
+            "compatible_fund_types": ["qdii", "QDII", "国际(QDII)", "海外基金"],
+            "style_tags": ["QDII", "海外债券", "主动管理", "汇率"],
+        },
+        {
+            "id": "strategy-family-qdii-multi-asset",
+            "key": "qdii_multi_asset",
+            "name": "QDII-多资产",
+            "asset_class": "global",
+            "active_passive": "active",
+            "evaluation_profile_key": "qdii_multi_asset",
+            "compatible_fund_types": ["qdii", "QDII", "国际(QDII)", "海外基金"],
+            "style_tags": ["QDII", "海外多资产", "配置", "汇率"],
+        },
+        {
+            "id": "strategy-family-qdii-index",
+            "key": "qdii_index",
+            "name": "QDII-被动指数",
+            "asset_class": "global",
+            "active_passive": "passive",
+            "evaluation_profile_key": "qdii_index",
+            "compatible_fund_types": ["qdii", "QDII", "国际(QDII)", "海外基金"],
+            "style_tags": ["QDII", "海外指数", "被动", "人民币计价", "汇率"],
         },
         {
             "id": "strategy-family-cash-management",
@@ -151,6 +201,36 @@ class FundClassificationCatalog:
             "evaluation_profile_key": "multi_asset_bond",
             "compatible_fund_types": ["hybrid", "混合型", "灵活配置型", "偏债混合型"],
             "style_tags": ["混合型", "偏债", "稳健配置"],
+        },
+        {
+            "id": "strategy-family-fof-equity-allocation",
+            "key": "fof_equity_allocation",
+            "name": "FOF-偏股配置",
+            "asset_class": "fof",
+            "active_passive": "active",
+            "evaluation_profile_key": "fof_equity",
+            "compatible_fund_types": ["FOF", "基金中基金", "混合型"],
+            "style_tags": ["FOF", "偏股配置", "底层基金穿透"],
+        },
+        {
+            "id": "strategy-family-fof-balanced-allocation",
+            "key": "fof_balanced_allocation",
+            "name": "FOF-平衡配置",
+            "asset_class": "fof",
+            "active_passive": "active",
+            "evaluation_profile_key": "fof_balanced",
+            "compatible_fund_types": ["FOF", "基金中基金", "混合型"],
+            "style_tags": ["FOF", "平衡配置", "底层基金穿透"],
+        },
+        {
+            "id": "strategy-family-fof-bond-allocation",
+            "key": "fof_bond_allocation",
+            "name": "FOF-偏债配置",
+            "asset_class": "fof",
+            "active_passive": "active",
+            "evaluation_profile_key": "fof_bond",
+            "compatible_fund_types": ["FOF", "基金中基金", "混合型"],
+            "style_tags": ["FOF", "偏债配置", "底层基金穿透"],
         },
     ]
 
@@ -244,6 +324,206 @@ class FundClassificationCatalog:
             "asset_class": "index",
         },
         {
+            "aliases": ["沪深300医药卫生指数", "300医药指数"],
+            "benchmark_code": "000913.SH",
+            "benchmark_name": "沪深300医药卫生",
+            "peer_group_key": "peer-index-hs300-health-care",
+            "strategy_family_key": "index_sector",
+            "asset_class": "index",
+        },
+        {
+            "aliases": ["中证环保产业指数"],
+            "benchmark_code": "000827.SH",
+            "benchmark_name": "中证环保产业",
+            "peer_group_key": "peer-index-csi-environmental-protection",
+            "strategy_family_key": "index_sector",
+            "asset_class": "index",
+        },
+        {
+            "aliases": ["中证医药卫生指数"],
+            "benchmark_code": "000933.SH",
+            "benchmark_name": "中证医药卫生",
+            "peer_group_key": "peer-index-csi-health-care",
+            "strategy_family_key": "index_sector",
+            "asset_class": "index",
+        },
+        {
+            "aliases": ["中证新能源汽车指数"],
+            "benchmark_code": "399976.SZ",
+            "benchmark_name": "中证新能源汽车",
+            "peer_group_key": "peer-index-csi-new-energy-vehicle",
+            "strategy_family_key": "index_sector",
+            "asset_class": "index",
+        },
+        {
+            "aliases": ["中证新兴产业指数"],
+            "benchmark_code": "000964.CSI",
+            "benchmark_name": "中证新兴产业",
+            "peer_group_key": "peer-index-csi-emerging-industry",
+            "strategy_family_key": "index_sector",
+            "asset_class": "index",
+        },
+        {
+            "aliases": ["中证服务业指数"],
+            "benchmark_code": "H30074.CSI",
+            "benchmark_name": "中证服务业",
+            "peer_group_key": "peer-index-csi-service-industry",
+            "strategy_family_key": "index_sector",
+            "asset_class": "index",
+        },
+        {
+            "aliases": ["沪深300金融地产指数"],
+            "benchmark_code": "000914.SH",
+            "benchmark_name": "沪深300金融地产",
+            "peer_group_key": "peer-index-hs300-financial-real-estate",
+            "strategy_family_key": "index_sector",
+            "asset_class": "index",
+        },
+        {
+            "aliases": ["中国战略新兴产业成份指数"],
+            "benchmark_code": "000171.CSI",
+            "benchmark_name": "中国战略新兴产业成份",
+            "peer_group_key": "peer-index-china-strategic-emerging",
+            "strategy_family_key": "index_sector",
+            "asset_class": "index",
+        },
+        {
+            "aliases": ["中证全指信息技术指数"],
+            "benchmark_code": "000993.SH",
+            "benchmark_name": "中证全指信息技术",
+            "peer_group_key": "peer-index-csi-all-share-information-technology",
+            "strategy_family_key": "index_sector",
+            "asset_class": "index",
+        },
+        {
+            "aliases": ["中证TMT产业主题指数"],
+            "benchmark_code": "000998.CSI",
+            "benchmark_name": "中证TMT产业主题",
+            "peer_group_key": "peer-index-csi-tmt-industry",
+            "strategy_family_key": "index_sector",
+            "asset_class": "index",
+        },
+        {
+            "aliases": ["上证高端装备制造60指数"],
+            "benchmark_code": "000097.SH",
+            "benchmark_name": "上证高端装备制造60",
+            "peer_group_key": "peer-index-sse-high-end-equipment",
+            "strategy_family_key": "index_sector",
+            "asset_class": "index",
+        },
+        {
+            "aliases": ["国证航天军工指数"],
+            "benchmark_code": "399368.SZ",
+            "benchmark_name": "国证航天军工",
+            "peer_group_key": "peer-index-cninfo-aerospace-defense",
+            "strategy_family_key": "index_sector",
+            "asset_class": "index",
+        },
+        {
+            "aliases": ["中证国有企业改革指数"],
+            "benchmark_code": "399974.SZ",
+            "benchmark_name": "中证国有企业改革",
+            "peer_group_key": "peer-index-csi-soe-reform",
+            "strategy_family_key": "index_sector",
+            "asset_class": "index",
+        },
+        {
+            "aliases": ["中证800成长指数"],
+            "benchmark_code": "H30355.CSI",
+            "benchmark_name": "中证800成长",
+            "peer_group_key": "peer-index-csi800-growth",
+            "strategy_family_key": "index_sector",
+            "asset_class": "index",
+        },
+        {
+            "aliases": ["中证内地消费主题指数"],
+            "benchmark_code": "000942.CSI",
+            "benchmark_name": "中证内地消费主题",
+            "peer_group_key": "peer-index-csi-mainland-consumption",
+            "strategy_family_key": "index_sector",
+            "asset_class": "index",
+        },
+        {
+            "aliases": ["中证可选消费指数"],
+            "benchmark_code": "000931.CSI",
+            "benchmark_name": "中证可选消费",
+            "peer_group_key": "peer-index-csi-consumer-discretionary",
+            "strategy_family_key": "index_sector",
+            "asset_class": "index",
+        },
+        {
+            "aliases": ["中证主要消费指数"],
+            "benchmark_code": "000932.SH",
+            "benchmark_name": "中证主要消费",
+            "peer_group_key": "peer-index-csi-consumer-staples",
+            "strategy_family_key": "index_sector",
+            "asset_class": "index",
+        },
+        {
+            "aliases": ["中证移动互联网指数"],
+            "benchmark_code": "399970.SZ",
+            "benchmark_name": "中证移动互联网",
+            "peer_group_key": "peer-index-csi-mobile-internet",
+            "strategy_family_key": "index_sector",
+            "asset_class": "index",
+        },
+        {
+            "aliases": ["中证周期100指数"],
+            "benchmark_code": "931355.CSI",
+            "benchmark_name": "中证周期100",
+            "peer_group_key": "peer-index-csi-cyclical-100",
+            "strategy_family_key": "index_sector",
+            "asset_class": "index",
+        },
+        {
+            "aliases": ["中证科技100指数"],
+            "benchmark_code": "931187.CSI",
+            "benchmark_name": "中证科技100",
+            "peer_group_key": "peer-index-csi-technology-100",
+            "strategy_family_key": "index_sector",
+            "asset_class": "index",
+        },
+        {
+            "aliases": ["中证沪港深高股息精选指数"],
+            "benchmark_code": "930836.CSI",
+            "benchmark_name": "中证沪港深高股息精选",
+            "peer_group_key": "peer-index-csi-shs-high-dividend",
+            "strategy_family_key": "index_sector",
+            "asset_class": "index",
+        },
+        {
+            "aliases": ["中证港股通综合指数"],
+            "benchmark_code": "930930.CSI",
+            "benchmark_name": "中证港股通综合",
+            "peer_group_key": "peer-index-csi-hk-connect-composite",
+            "strategy_family_key": "index_sector",
+            "asset_class": "index",
+        },
+        {
+            "aliases": ["中证国有企业综合指数"],
+            "benchmark_code": "000955.CSI",
+            "benchmark_name": "中证国有企业综合",
+            "peer_group_key": "peer-index-csi-state-owned-enterprises",
+            "strategy_family_key": "index_sector",
+            "asset_class": "index",
+        },
+        {
+            "aliases": ["中证国新央企综合指数"],
+            "benchmark_code": "932004.CSI",
+            "benchmark_name": "中证国新央企综合",
+            "peer_group_key": "peer-index-csi-central-enterprises",
+            "strategy_family_key": "index_sector",
+            "asset_class": "index",
+        },
+        {
+            "aliases": ["中证上游资源产业指数"],
+            "benchmark_code": "000961.CSI",
+            "benchmark_name": "中证上游资源产业",
+            "peer_group_key": "peer-index-csi-upstream-resources",
+            "strategy_family_key": "index_sector",
+            "asset_class": "index",
+        },
+        {
             "aliases": ["中证同业存单AAA指数"],
             "benchmark_code": "931059.CSI",
             "benchmark_name": "中证同业存单AAA",
@@ -252,6 +532,42 @@ class FundClassificationCatalog:
             "asset_class": "fixed_income",
             "required_contract_term": "债券",
         },
+    ]
+
+    QDII_INDEX_RULES: List[Dict[str, Any]] = [
+        {
+            "aliases": ["纳斯达克100指数"],
+            "benchmark_code": "NDX.CNY",
+            "benchmark_name": "人民币计价纳斯达克100指数",
+            "peer_group_key": "peer-qdii-index-ndx-cny",
+            "strategy_family_key": "qdii_index",
+            "asset_class": "global",
+            "required_weight": 100.0,
+            "currency_basis_terms": ["汇率调整", "汇率折算", "人民币计价"],
+        },
+    ]
+
+    ENHANCED_INDEX_RULES: List[Dict[str, Any]] = [
+        {
+            "aliases": list(rule["aliases"]),
+            "benchmark_code": rule["benchmark_code"],
+            "benchmark_name": rule["benchmark_name"],
+            "peer_group_key": f"peer-index-enhanced-{rule['peer_group_key'].removeprefix('peer-index-')}",
+        }
+        for rule in TRACKED_INDEX_RULES
+        if rule.get("strategy_family_key") == "index_broad"
+        and rule["benchmark_code"] in {
+            "000300.SH",
+            "000905.SH",
+            "000510.SH",
+            "000852.SH",
+            "000906.SH",
+            "932000.CSI",
+            "930050.CSI",
+            "399006.SZ",
+            "000688.SH",
+            "000016.SH",
+        }
     ]
 
     ACTIVE_EQUITY_REFERENCE_RULES: List[Dict[str, Any]] = [
@@ -308,6 +624,102 @@ class FundClassificationCatalog:
         },
     ]
 
+    CHINABOND_CONTRACT_BASES: Dict[str, str] = {
+        "composite": "中债综合指数",
+        "new_composite": "中债新综合指数",
+        "total": "中债总指数",
+    }
+    CHINABOND_CONTRACT_PRICE_RETURNS: Dict[str, str] = {
+        "full_price": "全价",
+        "wealth": "财富",
+        "total_wealth": "总财富合同写法",
+        "unspecified": "价格口径未注明",
+    }
+    CHINABOND_CONTRACT_TENORS: Dict[str, str] = {
+        "all": "全期限",
+        "under_1y": "1年以下",
+        "1_3y": "1—3年",
+        "0_3y": "0—3年",
+        "0_5y": "0—5年",
+        "3_5y": "3—5年",
+        "1_5y": "1—5年",
+        "3_7y": "3—7年",
+        "5_10y": "5—10年",
+        "7_10y": "7—10年",
+        "over_10y": "10年以上",
+    }
+    CHINABOND_CONTRACT_BUCKETS = (
+        ("composite", "full_price", "all"),
+        ("composite", "unspecified", "all"),
+        ("composite", "wealth", "all"),
+        ("composite", "total_wealth", "all"),
+        ("composite", "full_price", "under_1y"),
+        ("composite", "wealth", "under_1y"),
+        ("composite", "unspecified", "under_1y"),
+        ("composite", "full_price", "1_3y"),
+        ("composite", "wealth", "1_3y"),
+        ("composite", "wealth", "0_3y"),
+        ("composite", "wealth", "0_5y"),
+        ("composite", "wealth", "1_5y"),
+        ("composite", "full_price", "3_5y"),
+        ("composite", "wealth", "3_5y"),
+        ("new_composite", "full_price", "all"),
+        ("new_composite", "wealth", "all"),
+        ("new_composite", "unspecified", "all"),
+        ("new_composite", "full_price", "under_1y"),
+        ("new_composite", "full_price", "1_3y"),
+        ("new_composite", "wealth", "1_3y"),
+        ("new_composite", "wealth", "3_5y"),
+        ("total", "full_price", "all"),
+        ("total", "wealth", "all"),
+        ("total", "unspecified", "all"),
+        ("total", "full_price", "1_3y"),
+        ("total", "wealth", "1_3y"),
+        ("total", "unspecified", "1_3y"),
+    )
+
+    @classmethod
+    def _chinabond_contract_rule(
+        cls,
+        base_key: str,
+        price_return_key: str,
+        tenor_key: str,
+    ) -> Dict[str, Any]:
+        legacy_bucket = (base_key, price_return_key, tenor_key) == (
+            "composite",
+            "full_price",
+            "all",
+        )
+        slug = f"{base_key.replace('_', '-')}-{price_return_key.replace('_', '-')}-{tenor_key.replace('_', '-')}"
+        benchmark_code = (
+            "CONTRACT-CBA-COMPOSITE-FULL-PRICE"
+            if legacy_bucket
+            else f"CONTRACT-CBA-{slug.upper()}"
+        )
+        peer_group_key = (
+            "peer-fixed-income-chinabond-composite-full-price"
+            if legacy_bucket
+            else f"peer-fixed-income-chinabond-{slug}"
+        )
+        benchmark_name = "·".join((
+            cls.CHINABOND_CONTRACT_BASES[base_key],
+            cls.CHINABOND_CONTRACT_PRICE_RETURNS[price_return_key],
+            cls.CHINABOND_CONTRACT_TENORS[tenor_key],
+        ))
+        return {
+            "benchmark_code": benchmark_code,
+            "benchmark_name": benchmark_name,
+            "benchmark_type": "contract_benchmark_bucket",
+            "peer_group_key": peer_group_key,
+            "contract_dimensions": {
+                "base_index": base_key,
+                "price_return": price_return_key,
+                "tenor": tenor_key,
+            },
+        }
+
+    CHINABOND_CONTRACT_REFERENCE_RULES: List[Dict[str, Any]] = []
+
     ACTIVE_FIXED_INCOME_REFERENCE_RULES: List[Dict[str, Any]] = [
         {
             "aliases": ["中证全债指数"],
@@ -325,7 +737,7 @@ class FundClassificationCatalog:
 
     @classmethod
     def resolve_declared_equity_benchmark(cls, declared_benchmark: str) -> Optional[Dict[str, Any]]:
-        """从合同复合基准中提取唯一可核验的权益指数成分，供行业归因使用。"""
+        """从合同复合基准中提取可核验的权益指数成分，供行业归因使用。"""
         text = str(declared_benchmark or "").strip()
         if not text:
             return None
@@ -338,7 +750,7 @@ class FundClassificationCatalog:
             if not matched_alias:
                 continue
             weight_match = re.search(
-                rf"{re.escape(matched_alias)}(?:收益率)?\s*[×xX*]\s*(\d+(?:\.\d+)?)\s*%",
+                rf"{re.escape(matched_alias)}(?:[（(][^）)]*[）)])?(?:收益率)?\s*[×xX*]\s*(\d+(?:\.\d+)?)\s*%",
                 text,
             )
             matches.append({
@@ -349,7 +761,26 @@ class FundClassificationCatalog:
             })
 
         unique = {item["benchmark_code"]: item for item in matches}
-        return next(iter(unique.values())) if len(unique) == 1 else None
+        if len(unique) == 1:
+            return next(iter(unique.values()))
+        if len(unique) > 1 and all(item.get("declared_weight") is not None for item in unique.values()):
+            components = list(unique.values())
+            return {
+                "benchmark_code": components[0]["benchmark_code"],
+                "benchmark_name": "合同权益指数复合参照",
+                "declared_weight": round(sum(float(item["declared_weight"]) for item in components), 6),
+                "declared_benchmark": text,
+                "benchmark_basis": "contract_equity_composite",
+                "equity_components": [
+                    {
+                        "code": item["benchmark_code"],
+                        "name": item["benchmark_name"],
+                        "weight": item["declared_weight"],
+                    }
+                    for item in components
+                ],
+            }
+        return None
 
     @classmethod
     def family_meta(cls) -> Dict[str, Dict[str, Any]]:
@@ -381,6 +812,105 @@ class FundClassificationCatalog:
             }
         ]
         groups.extend([
+            {
+                "id": "peer-qdii-equity",
+                "key": "peer-qdii-equity",
+                "name": "QDII-主动权益",
+                "strategy_family_key": "qdii_equity",
+                "asset_class": "global",
+                "active_passive": "active",
+                "benchmark_code": "QDII-ACTIVE-EQUITY",
+                "benchmark_name": "QDII 主动权益同类组",
+                "inclusion_rules": {
+                    "legalType": "QDII",
+                    "investmentType": "股票型",
+                    "contractType": "股票型",
+                    "declaredBenchmarkRequired": True,
+                },
+                "exclusion_rules": {"exclude": ["被动指数型", "增强指数型", "其他型", "合同基准缺失"]},
+                "minimum_peer_count": 5,
+            },
+            {
+                "id": "peer-qdii-bond",
+                "key": "peer-qdii-bond",
+                "name": "QDII-债券",
+                "strategy_family_key": "qdii_bond",
+                "asset_class": "global",
+                "active_passive": "active",
+                "benchmark_code": "QDII-ACTIVE-BOND",
+                "benchmark_name": "QDII 债券同类组",
+                "inclusion_rules": {
+                    "legalType": "QDII",
+                    "investmentType": "债券型",
+                    "contractType": "债券型",
+                    "declaredBenchmarkRequired": True,
+                },
+                "exclusion_rules": {"exclude": ["股票型", "混合型", "其他型", "合同基准缺失"]},
+                "minimum_peer_count": 5,
+            },
+            {
+                "id": "peer-qdii-multi-asset",
+                "key": "peer-qdii-multi-asset",
+                "name": "QDII-多资产",
+                "strategy_family_key": "qdii_multi_asset",
+                "asset_class": "global",
+                "active_passive": "active",
+                "benchmark_code": "QDII-ACTIVE-MULTI-ASSET",
+                "benchmark_name": "QDII 多资产同类组",
+                "inclusion_rules": {
+                    "legalType": "QDII",
+                    "investmentType": ["混合型", "灵活配置型"],
+                    "contractType": "混合型",
+                    "declaredBenchmarkRequired": True,
+                },
+                "exclusion_rules": {"exclude": ["股票型", "债券型", "其他型", "合同基准缺失"]},
+                "minimum_peer_count": 5,
+            },
+            {
+                "id": "peer-qdii-index-ndx-cny",
+                "key": "peer-qdii-index-ndx-cny",
+                "name": "QDII-人民币计价纳斯达克100指数",
+                "strategy_family_key": "qdii_index",
+                "asset_class": "global",
+                "active_passive": "passive",
+                "benchmark_code": "NDX.CNY",
+                "benchmark_name": "人民币计价纳斯达克100指数",
+                "inclusion_rules": {
+                    "legalType": "QDII",
+                    "investmentType": "被动指数型",
+                    "contractType": "股票型",
+                    "trackedIndex": "纳斯达克100指数",
+                    "trackedIndexWeight": 100,
+                    "currencyBasis": "CNY",
+                    "declaredBenchmarkRequired": True,
+                },
+                "exclusion_rules": {
+                    "exclude": ["指数权重不是100%", "汇率口径未声明", "指数增强", "非纳斯达克100"],
+                },
+                "minimum_peer_count": 5,
+            },
+            {
+                "id": "peer-active-equity-cross-market-cn-hk",
+                "key": "peer-active-equity-cross-market-cn-hk",
+                "name": "主动权益-沪港深",
+                "strategy_family_key": "active_equity_cross_market",
+                "asset_class": "equity",
+                "active_passive": "active",
+                "benchmark_code": "CONTRACT-CN-HK-EQUITY",
+                "benchmark_name": "合同沪港深复合基准",
+                "inclusion_rules": {
+                    "legalType": "股票型",
+                    "minimumMainlandEquityWeight": 20,
+                    "minimumHongKongEquityWeight": 20,
+                    "minimumTotalEquityWeight": 80,
+                    "maximumDefensiveWeight": 20,
+                    "declaredBenchmarkRequired": True,
+                },
+                "exclusion_rules": {
+                    "exclude": ["单一市场基准", "权益权重不足", "合同权重不完整", "未登记指数成分"],
+                },
+                "minimum_peer_count": 5,
+            },
             {
                 "id": "peer-fixed-income-equity-allocation",
                 "key": "peer-fixed-income-equity-allocation",
@@ -433,6 +963,45 @@ class FundClassificationCatalog:
                 "exclusion_rules": {"exclude": ["权重不完整", "无法识别资产类别"]},
                 "minimum_peer_count": 5,
             },
+            {
+                "id": "peer-fof-equity-allocation",
+                "key": "peer-fof-equity-allocation",
+                "name": "FOF-偏股配置",
+                "strategy_family_key": "fof_equity_allocation",
+                "asset_class": "fof",
+                "active_passive": "active",
+                "benchmark_code": "FOF-EQUITY-60",
+                "benchmark_name": "FOF 合同基准权益权重≥60%",
+                "inclusion_rules": {"productType": "FOF", "minimumEquityBenchmarkWeight": 60, "declaredBenchmarkRequired": True},
+                "exclusion_rules": {"exclude": ["非FOF", "权重不完整", "无法识别资产类别"]},
+                "minimum_peer_count": 5,
+            },
+            {
+                "id": "peer-fof-balanced-allocation",
+                "key": "peer-fof-balanced-allocation",
+                "name": "FOF-平衡配置",
+                "strategy_family_key": "fof_balanced_allocation",
+                "asset_class": "fof",
+                "active_passive": "active",
+                "benchmark_code": "FOF-BALANCED-30-60",
+                "benchmark_name": "FOF 合同基准权益权重>30%且<60%",
+                "inclusion_rules": {"productType": "FOF", "equityBenchmarkWeightRange": [30, 60], "declaredBenchmarkRequired": True},
+                "exclusion_rules": {"exclude": ["非FOF", "权重不完整", "无法识别资产类别"]},
+                "minimum_peer_count": 5,
+            },
+            {
+                "id": "peer-fof-bond-allocation",
+                "key": "peer-fof-bond-allocation",
+                "name": "FOF-偏债配置",
+                "strategy_family_key": "fof_bond_allocation",
+                "asset_class": "fof",
+                "active_passive": "active",
+                "benchmark_code": "FOF-BOND-30",
+                "benchmark_name": "FOF 合同基准权益权重≤30%",
+                "inclusion_rules": {"productType": "FOF", "maximumEquityBenchmarkWeight": 30, "declaredBenchmarkRequired": True},
+                "exclusion_rules": {"exclude": ["非FOF", "权重不完整", "无法识别资产类别"]},
+                "minimum_peer_count": 5,
+            },
         ])
         for rule in cls.TRACKED_INDEX_RULES:
             groups.append({
@@ -450,6 +1019,28 @@ class FundClassificationCatalog:
                     "declaredBenchmarkRequired": True,
                 },
                 "exclusion_rules": {"exclude": ["指数增强", "非同指数"]},
+                "minimum_peer_count": 5,
+            })
+        for rule in cls.ENHANCED_INDEX_RULES:
+            groups.append({
+                "id": rule["peer_group_key"],
+                "key": rule["peer_group_key"],
+                "name": f"指数增强-{rule['benchmark_name']}",
+                "strategy_family_key": "index_enhanced",
+                "asset_class": "index",
+                "active_passive": "active",
+                "benchmark_code": rule["benchmark_code"],
+                "benchmark_name": rule["benchmark_name"],
+                "inclusion_rules": {
+                    "investmentType": "增强指数型",
+                    "contractType": "股票型",
+                    "primaryIndex": rule["benchmark_code"],
+                    "minimumPrimaryWeight": 90,
+                    "declaredBenchmarkRequired": True,
+                },
+                "exclusion_rules": {
+                    "exclude": ["被动指数", "低于90%指数权重", "多指数基准", "主题指数未登记"],
+                },
                 "minimum_peer_count": 5,
             })
         for rule in cls.ACTIVE_EQUITY_REFERENCE_RULES:
@@ -500,12 +1091,31 @@ class FundClassificationCatalog:
                 "inclusion_rules": {
                     "legalType": "债券型",
                     "bondReference": rule["benchmark_code"],
-                    "requiredWeight": 100,
+                    "minimumPrimaryWeight": rule.get("minimum_primary_weight", 100),
+                    "allowedSecondaryReferences": rule.get("allowed_secondary_references", []),
                     "declaredBenchmarkRequired": True,
+                    **(
+                        {"contractDimensions": rule["contract_dimensions"]}
+                        if rule.get("contract_dimensions")
+                        else {}
+                    ),
                 },
                 "exclusion_rules": {
-                    "exclude": ["可转债", "二级债", "含权益基准", "复合基准"],
+                    "exclude": ["可转债", "二级债", "含权益基准", "多个债券指数", "口径或期限不明"],
                 },
                 "minimum_peer_count": 5,
             })
         return groups
+
+
+FundClassificationCatalog.CHINABOND_CONTRACT_REFERENCE_RULES = [
+    FundClassificationCatalog._chinabond_contract_rule(base_key, price_return_key, tenor_key)
+    for base_key, price_return_key, tenor_key in FundClassificationCatalog.CHINABOND_CONTRACT_BUCKETS
+]
+for _rule in FundClassificationCatalog.CHINABOND_CONTRACT_REFERENCE_RULES:
+    _rule["minimum_primary_weight"] = 80
+    _rule["allowed_secondary_references"] = ["存款", "现金", "DR007"]
+FundClassificationCatalog.ACTIVE_FIXED_INCOME_REFERENCE_RULES = (
+    FundClassificationCatalog.CHINABOND_CONTRACT_REFERENCE_RULES
+    + FundClassificationCatalog.ACTIVE_FIXED_INCOME_REFERENCE_RULES
+)

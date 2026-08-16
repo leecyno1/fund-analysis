@@ -32,11 +32,18 @@ class MetricFactory:
         annualized_return = (1 + total_return) ** (self.trading_days / periods) - 1
         daily_returns = self._daily_returns(points)
         positive_ratio = sum(1 for value in daily_returns if value > 0) / len(daily_returns) if daily_returns else 0
+        running_peak = points[0][1]
+        record_breaking_days = 1
+        for _, nav in points[1:]:
+            if nav > running_peak:
+                running_peak = nav
+                record_breaking_days += 1
 
         return {
             "total_return": total_return,
             "annualized_return": annualized_return,
             "positive_return_ratio": positive_ratio,
+            "record_breaking_days_ratio": record_breaking_days / len(points),
             "start_nav": first_nav,
             "end_nav": last_nav,
             "observations": float(len(points)),
@@ -65,6 +72,7 @@ class MetricFactory:
 
         return {
             "annualized_volatility": annualized_volatility,
+            "downside_risk": downside_deviation,
             "sharpe_ratio": sharpe_ratio,
             "sortino_ratio": sortino_ratio,
             "max_drawdown": max_drawdown,

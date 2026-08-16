@@ -75,8 +75,13 @@ class ResearchMemoProfileProjectionService:
             wind_code,
             profile_wind_code,
         ]))
+        alias_cleanup_count = self._clear_alias_profiles(
+            profile_repo,
+            entity_fund_ids,
+            profile_wind_code,
+        )
         reports = self._reports_for_fund(entity_fund_ids, current_report)
-        confirmed = self._confirmed_profile_items(reports)
+        confirmed = self._confirmed_profile_items(reports, entity_fund_ids)
         style_labels = [item["value"] for item in confirmed if item["kind"] == "style_label"]
         if not style_labels:
             if (
@@ -84,10 +89,10 @@ class ResearchMemoProfileProjectionService:
                 and existing.get("manager_tenure_start")
                 and profile_repo.clear_projected_style(profile_wind_code, self.UPDATED_BY)
             ):
-                return {"wind_code": profile_wind_code, "status": "cleared", "reason": "no_confirmed_style_label"}
+                return {"wind_code": profile_wind_code, "status": "cleared", "reason": "no_confirmed_style_label", "alias_cleanup_count": alias_cleanup_count}
             if existing and profile_repo.delete_projected_profile(profile_wind_code, self.UPDATED_BY):
-                return {"wind_code": profile_wind_code, "status": "deleted", "reason": "no_confirmed_style_label"}
-            return {"wind_code": profile_wind_code, "status": "skipped", "reason": "no_confirmed_style_label"}
+                return {"wind_code": profile_wind_code, "status": "deleted", "reason": "no_confirmed_style_label", "alias_cleanup_count": alias_cleanup_count}
+            return {"wind_code": profile_wind_code, "status": "skipped", "reason": "no_confirmed_style_label", "alias_cleanup_count": alias_cleanup_count}
 
         style_counts = Counter(style_labels)
         style_recency = {
@@ -113,6 +118,7 @@ class ResearchMemoProfileProjectionService:
                 "status": "skipped",
                 "reason": "standardized_classification_unavailable",
                 "missing_items": context.get("missing_items") or [],
+                "alias_cleanup_count": alias_cleanup_count,
             }
 
         classifications = self._unique_values(confirmed, "classification")
@@ -147,7 +153,7 @@ class ResearchMemoProfileProjectionService:
             strategy_tags=strategy_tags,
             manager_tenure_start=existing.get("manager_tenure_start") if existing else None,
             capacity_notes=existing.get("capacity_notes") if existing else None,
-            data_quality_notes="风格标签来自人工确认的调研纪要；同类组和基准来自基金分类目录",
+            data_quality_notes="风格标签来自人工确认且明确指向该产品的调研纪要；同类组和基准来自基金分类目录",
             evidence=evidence,
             updated_by=self.UPDATED_BY,
         )
@@ -156,7 +162,28 @@ class ResearchMemoProfileProjectionService:
             "source_wind_code": wind_code,
             "status": "projected",
             "profile": profile,
+            "alias_cleanup_count": alias_cleanup_count,
         }
+
+    def _clear_alias_profiles(
+        self,
+        profile_repo: Any,
+        entity_fund_ids: List[str],
+        canonical_code: str,
+    ) -> int:
+        cleared = 0
+        for alias in entity_fund_ids:
+            normalized = str(alias or "").strip().upper()
+            if not normalized or normalized == canonical_code:
+                continue
+            profile = profile_repo.get_profile(normalized)
+            if not profile or profile.get("updated_by") != self.UPDATED_BY:
+                continue
+            if profile.get("manager_tenure_start") and profile_repo.clear_projected_style(normalized, self.UPDATED_BY):
+                cleared += 1
+            elif profile_repo.delete_projected_profile(normalized, self.UPDATED_BY):
+                cleared += 1
+        return cleared
 
     def _reports_for_fund(
         self,
@@ -178,8 +205,17 @@ class ResearchMemoProfileProjectionService:
             reports[str(current_report.get("id"))] = current_report
         return list(reports.values())
 
-    def _confirmed_profile_items(self, reports: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def _confirmed_profile_items(
+        self,
+        reports: List[Dict[str, Any]],
+        entity_fund_ids: List[str],
+    ) -> List[Dict[str, Any]]:
         items: List[Dict[str, Any]] = []
+        target_codes = {
+            str(fund_id or "").strip().upper()
+            for fund_id in entity_fund_ids
+            if str(fund_id or "").strip()
+        }
         field_by_kind = {
             "style_label": "style_labels",
             "classification": "classifications",
@@ -197,6 +233,10 @@ class ResearchMemoProfileProjectionService:
                     proposal.get("review_status") != "confirmed"
                     or kind not in self.PROFILE_KINDS
                     or value not in confirmed_fields[kind]
+                    or not target_codes.intersection(
+                        str(code or "").strip().upper()
+                        for code in (proposal.get("target_fund_ids") or [])
+                    )
                 ):
                     continue
                 source_ref = proposal.get("source_ref") or {}
@@ -213,6 +253,8 @@ class ResearchMemoProfileProjectionService:
                     "relative_path": source_ref.get("relative_path") or report.get("local_relative_path"),
                     "source_path": source_ref.get("source_path") or report.get("local_source_path"),
                     "excerpt": source_ref.get("excerpt"),
+                    "scope": "fund",
+                    "target_fund_ids": proposal.get("target_fund_ids") or [],
                 })
         return items
 

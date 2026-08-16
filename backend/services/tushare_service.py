@@ -6,17 +6,34 @@ import re
 import time
 import logging
 import hashlib
+import csv
+import io
+import json
+import urllib.parse
+import urllib.request
 from typing import Optional, List, Dict, Any
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass
 import pandas as pd
 
 from services.fund_nav_evidence_service import FundNavEvidenceService
+from lib.holding_weight_validation import normalize_holding_weights
 
 logger = logging.getLogger(__name__)
 
 TUSHARE_NO_PROXY_HOSTS = ("api.tushare.pro", "tushare.pro", "waditu.com", "api.waditu.com")
 TUSHARE_INDEX_CODE_PATTERN = re.compile(r"^[0-9A-Z]{6}\.(SH|SZ|CSI)$", re.IGNORECASE)
+TUSHARE_GLOBAL_INDEX_CODES = {"HSI"}
+GLOBAL_INDEX_CNY_BENCHMARKS = {
+    "NDX.CNY": {
+        "base_code": "NDX",
+        "base_currency": "USD",
+        "provider": "yahoo_chart",
+        "provider_symbol": "^NDX",
+        "fallback_provider": "fred_csv",
+        "fallback_series_id": "NASDAQ100",
+    },
+}
 
 # Tushare SDK
 try:
@@ -100,6 +117,10 @@ class TushareDataService:
     def __init__(self, token: str = None, mock_mode: bool = None, strict_no_mock: bool = False):
         self._ensure_tushare_no_proxy()
         self.token = token or os.environ.get("TUSHARE_TOKEN")
+        self.request_timeout_seconds = max(
+            3,
+            min(int(os.environ.get("TUSHARE_REQUEST_TIMEOUT_SECONDS", "8")), 30),
+        )
         self._pro: Optional[Any] = None
         self.strict_no_mock = strict_no_mock
 
@@ -119,11 +140,14 @@ class TushareDataService:
         self._manager_cache: Optional[Dict[str, Any]] = None
         self._manager_cache_time: float = 0
         self._manager_cache_ttl: float = 3600  # 1小时过期
+        self._stock_profile_cache: Dict[str, Dict[str, Any]] = {}
+        self._stock_profile_cache_loaded = False
+        self._benchmark_nav_cache: Dict[tuple, List[Dict[str, Any]]] = {}
 
         if not self.mock_mode and TUSHARE_AVAILABLE:
             try:
                 ts.set_token(self.token)
-                self._pro = ts.pro_api(self.token)
+                self._pro = ts.pro_api(self.token, timeout=self.request_timeout_seconds)
                 logger.info("Tushare connected successfully")
             except Exception as e:
                 if self.strict_no_mock:
@@ -150,7 +174,7 @@ class TushareDataService:
         if self._pro is None and not self.mock_mode:
             try:
                 ts.set_token(self.token)
-                self._pro = ts.pro_api(self.token)
+                self._pro = ts.pro_api(self.token, timeout=self.request_timeout_seconds)
             except Exception as e:
                 if self.strict_no_mock:
                     raise RuntimeError(f"Tushare pro API init failed: {e}") from e
@@ -386,10 +410,27 @@ class TushareDataService:
     def get_benchmark_nav(self, benchmark_code: str, start_date: str, end_date: str) -> List[Dict[str, Any]]:
         """获取可核验的指数基准序列；不支持的基准代码显式返回空集。"""
         normalized_code = str(benchmark_code or "").strip().upper()
-        if self.mock_mode or not TUSHARE_INDEX_CODE_PATTERN.fullmatch(normalized_code):
+        cache_key = (normalized_code, str(start_date), str(end_date))
+        if cache_key in self._benchmark_nav_cache:
+            return [dict(item) for item in self._benchmark_nav_cache[cache_key]]
+        if normalized_code in GLOBAL_INDEX_CNY_BENCHMARKS:
+            result = self._get_global_index_cny_nav(
+                normalized_code,
+                start_date=str(start_date),
+                end_date=str(end_date),
+            )
+            if result:
+                self._benchmark_nav_cache[cache_key] = [dict(item) for item in result]
+            return result
+        is_global_index = normalized_code in TUSHARE_GLOBAL_INDEX_CODES
+        if self.mock_mode or (
+            not is_global_index
+            and not TUSHARE_INDEX_CODE_PATTERN.fullmatch(normalized_code)
+        ):
             return []
         try:
-            frame = self.pro.index_daily(
+            endpoint = self.pro.index_global if is_global_index else self.pro.index_daily
+            frame = endpoint(
                 ts_code=normalized_code,
                 start_date=str(start_date).replace("-", ""),
                 end_date=str(end_date).replace("-", ""),
@@ -406,12 +447,257 @@ class TushareDataService:
                         "date": trade_date,
                         "nav": close,
                         "benchmark_code": normalized_code,
-                        "source": "tushare.index_daily",
+                        "source": "tushare.index_global" if is_global_index else "tushare.index_daily",
                     })
+            self._benchmark_nav_cache[cache_key] = [dict(item) for item in result]
             return result
         except Exception as error:
-            logger.warning("Tushare index_daily unavailable for %s: %s", normalized_code, error)
+            logger.warning("Tushare benchmark unavailable for %s: %s", normalized_code, error)
             return []
+
+    def _get_global_index_cny_nav(
+        self,
+        benchmark_code: str,
+        start_date: str,
+        end_date: str,
+    ) -> List[Dict[str, Any]]:
+        """用全球指数本币收益与 Tushare 汇率构建人民币计价基准。"""
+        metadata = GLOBAL_INDEX_CNY_BENCHMARKS.get(benchmark_code) or {}
+        if self.mock_mode or not metadata:
+            return []
+
+        if metadata.get("provider") == "yahoo_chart":
+            index_series = self._get_yahoo_index_nav(
+                str(metadata.get("provider_symbol") or ""),
+                start_date,
+                end_date,
+            )
+        else:
+            index_series = self._get_tushare_global_index_nav(
+                str(metadata.get("base_code") or ""),
+                start_date,
+                end_date,
+            )
+        if not index_series and metadata.get("fallback_provider") == "fred_csv":
+            index_series = self._get_fred_index_nav(
+                str(metadata.get("fallback_series_id") or ""),
+                start_date,
+                end_date,
+            )
+        fx_series = self._get_currency_cny_series(
+            str(metadata.get("base_currency") or ""),
+            start_date,
+            end_date,
+        )
+        index_by_date = {
+            str(item.get("date")): _as_float(item.get("nav"))
+            for item in index_series
+            if item.get("date") and _as_float(item.get("nav")) is not None
+        }
+        fx_by_date = {
+            str(item.get("date")): _as_float(item.get("cny_rate"))
+            for item in fx_series
+            if item.get("date") and _as_float(item.get("cny_rate")) is not None
+        }
+        common_dates = sorted(set(index_by_date) & set(fx_by_date))
+        source = (
+            f"derived:{(index_series[0].get('source') if index_series else 'global_index_unavailable')}"
+            "+tushare.fx_daily.common_dates_v1"
+        )
+        return [
+            {
+                "date": item_date,
+                "nav": round(index_by_date[item_date] * fx_by_date[item_date], 8),
+                "benchmark_code": benchmark_code,
+                "source": source,
+                "base_index_code": metadata.get("base_code"),
+                "base_currency": metadata.get("base_currency"),
+                "evaluation_currency": "CNY",
+            }
+            for item_date in common_dates
+            if index_by_date[item_date] > 0 and fx_by_date[item_date] > 0
+        ]
+
+    def _get_tushare_global_index_nav(
+        self,
+        index_code: str,
+        start_date: str,
+        end_date: str,
+    ) -> List[Dict[str, Any]]:
+        if not index_code:
+            return []
+        try:
+            frame = self.pro.index_global(
+                ts_code=index_code,
+                start_date=str(start_date).replace("-", ""),
+                end_date=str(end_date).replace("-", ""),
+                fields="ts_code,trade_date,close",
+            )
+        except Exception as error:
+            logger.warning("Tushare global index unavailable for %s: %s", index_code, error)
+            return []
+        if frame is None or frame.empty:
+            return []
+        return [
+            {
+                "date": trade_date,
+                "nav": close,
+                "source": "tushare.index_global",
+            }
+            for _, row in frame.sort_values("trade_date").iterrows()
+            if (trade_date := _format_tushare_date(row.get("trade_date")))
+            if (close := _as_float(row.get("close"))) is not None and close > 0
+        ]
+
+    def _get_yahoo_index_nav(
+        self,
+        symbol: str,
+        start_date: str,
+        end_date: str,
+    ) -> List[Dict[str, Any]]:
+        """Tushare 缺少纳指100时的有界备用源；只读日线收盘价。"""
+        if not symbol:
+            return []
+        start_timestamp = int(datetime.fromisoformat(str(start_date)[:10]).replace(tzinfo=timezone.utc).timestamp())
+        end_timestamp = int(
+            (datetime.fromisoformat(str(end_date)[:10]) + timedelta(days=1))
+            .replace(tzinfo=timezone.utc)
+            .timestamp()
+        )
+        encoded_symbol = urllib.parse.quote(symbol, safe="")
+        url = (
+            f"https://query1.finance.yahoo.com/v8/finance/chart/{encoded_symbol}"
+            f"?period1={start_timestamp}&period2={end_timestamp}&interval=1d&events=history"
+        )
+        request = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        try:
+            with urllib.request.urlopen(request, timeout=self.request_timeout_seconds) as response:
+                payload = json.load(response)
+        except Exception as error:
+            logger.warning("Yahoo benchmark fallback unavailable for %s: %s", symbol, error)
+            return []
+        results = ((payload.get("chart") or {}).get("result") or [])
+        if not results:
+            return []
+        result = results[0]
+        timestamps = result.get("timestamp") or []
+        closes = (((result.get("indicators") or {}).get("quote") or [{}])[0].get("close") or [])
+        series = []
+        for timestamp, close_value in zip(timestamps, closes):
+            close = _as_float(close_value)
+            if close is None or close <= 0:
+                continue
+            item_date = datetime.fromtimestamp(int(timestamp), tz=timezone.utc).date().isoformat()
+            series.append({"date": item_date, "nav": close, "source": "yahoo.chart"})
+        return series
+
+    def _get_fred_index_nav(
+        self,
+        series_id: str,
+        start_date: str,
+        end_date: str,
+    ) -> List[Dict[str, Any]]:
+        """Yahoo 受限时从 FRED 读取 Nasdaq 官方日线序列。"""
+        normalized_series_id = str(series_id or "").strip().upper()
+        if not normalized_series_id:
+            return []
+        query = urllib.parse.urlencode({
+            "id": normalized_series_id,
+            "cosd": str(start_date)[:10],
+            "coed": str(end_date)[:10],
+        })
+        request = urllib.request.Request(
+            f"https://fred.stlouisfed.org/graph/fredgraph.csv?{query}",
+            headers={"User-Agent": "Mozilla/5.0"},
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=self.request_timeout_seconds) as response:
+                payload = response.read().decode("utf-8-sig")
+        except Exception as error:
+            logger.warning("FRED benchmark fallback unavailable for %s: %s", normalized_series_id, error)
+            return []
+
+        result = []
+        for row in csv.DictReader(io.StringIO(payload)):
+            item_date = str(row.get("observation_date") or "").strip()
+            close = _as_float(row.get(normalized_series_id))
+            if item_date and close is not None and close > 0:
+                result.append({
+                    "date": item_date,
+                    "nav": close,
+                    "source": f"fred.fredgraph.csv:{normalized_series_id}",
+                })
+        return result
+
+    def _get_currency_cny_series(
+        self,
+        currency: str,
+        start_date: str,
+        end_date: str,
+    ) -> List[Dict[str, Any]]:
+        normalized_currency = str(currency or "").strip().upper()
+        if normalized_currency == "CNY":
+            return []
+        direct_codes = {
+            "USD": "USDCNH.FXCM",
+        }
+        fx_code = direct_codes.get(normalized_currency)
+        if not fx_code:
+            return []
+        try:
+            frame = self.pro.fx_daily(
+                ts_code=fx_code,
+                start_date=str(start_date).replace("-", ""),
+                end_date=str(end_date).replace("-", ""),
+                fields="ts_code,trade_date,bid_close,ask_close",
+            )
+        except Exception as error:
+            logger.warning("Tushare FX unavailable for %s: %s", fx_code, error)
+            return []
+        if frame is None or frame.empty:
+            return []
+        result = []
+        for _, row in frame.sort_values("trade_date").iterrows():
+            item_date = _format_tushare_date(row.get("trade_date"))
+            bid = _as_float(row.get("bid_close"))
+            ask = _as_float(row.get("ask_close"))
+            if item_date and bid and ask and bid > 0 and ask > 0:
+                result.append({
+                    "date": item_date,
+                    "cny_rate": (bid + ask) / 2.0,
+                    "source": f"tushare.fx_daily:{fx_code}:mid_close",
+                })
+        return result
+
+    def get_hong_kong_stock_returns(
+        self,
+        stock_codes: List[str],
+        start_date: str,
+        end_date: str,
+    ) -> Dict[str, Any]:
+        """批量读取港股区间收益，避开 Tushare 港股日线的低频调用限制。"""
+        from services.hong_kong_market_service import HongKongMarketDataService
+
+        service = getattr(self, "_hong_kong_market_service", None)
+        if service is None:
+            service = HongKongMarketDataService()
+            self._hong_kong_market_service = service
+        return service.get_period_returns(stock_codes, start_date, end_date)
+
+    def get_hang_seng_index_snapshot(self, refresh: bool = False) -> Dict[str, Any]:
+        from services.hang_seng_index_service import HangSengIndexService
+
+        service = getattr(self, "_hang_seng_index_service", None)
+        if service is None:
+            service = HangSengIndexService()
+            self._hang_seng_index_service = service
+        return service.get_hsi_snapshot(refresh=refresh)
+
+    @staticmethod
+    def get_hang_seng_index_snapshot_before(as_of_date: str) -> Optional[Dict[str, Any]]:
+        from repositories import get_market_index_constituent_repo
+
+        return get_market_index_constituent_repo().get_latest_on_or_before("HSI", as_of_date)
 
     def get_benchmark_rate(self, benchmark_code: str, start_date: str, end_date: str) -> List[Dict[str, Any]]:
         """获取利率型基准；利率证据与净值序列严格分离。"""
@@ -642,6 +928,9 @@ class TushareDataService:
                     if df is not None and not df.empty:
                         break
 
+            if df is not None and not df.empty and "end_date" in df.columns:
+                df = df[df["end_date"].astype(str) == date_str]
+
             if df is None or df.empty:
                 logger.warning(
                     "Tushare fund_portfolio unavailable for %s %s; returning empty holdings instead of mock data",
@@ -650,45 +939,192 @@ class TushareDataService:
                 )
                 return []
 
-            holdings = []
+            stock_codes = [
+                self._normalize_stock_code(row.get("symbol") or row.get("stock_code"))
+                for _, row in df.iterrows()
+            ]
+            stock_profiles = self._get_stock_profiles(stock_codes)
+            holdings_by_code: Dict[str, Dict[str, Any]] = {}
             for _, row in df.iterrows():
-                stock_code = str(row.get("symbol") or row.get("stock_code") or "")
-                if stock_code.endswith(".SH"):
-                    stock_code = stock_code[:-3] + ".SH"
-                elif stock_code.endswith(".SZ"):
-                    stock_code = stock_code[:-3] + ".SZ"
-                stock_profile = self._get_stock_profile(stock_code)
+                stock_code = self._normalize_stock_code(row.get("symbol") or row.get("stock_code"))
+                stock_profile = stock_profiles.get(stock_code, {})
                 ratio = _as_float(row.get("stk_mkv_ratio"))
+                market_value = _as_float(row.get("mkv"))
 
-                holdings.append({
+                item = {
                     "stock_code": stock_code,
                     "stock_name": row.get("name") or stock_profile.get("name") or "未知",
-                    "weight": round(ratio / 100, 6) if ratio is not None else None,
+                    # Tushare 明确定义 stk_mkv_ratio 为“占股票市值比”，不是占基金净值比。
+                    "weight": None,
+                    "fund_nav_weight": None,
+                    "equity_portfolio_weight": round(ratio / 100, 6) if ratio is not None else None,
+                    "weight_basis": "equity_portfolio",
                     "shares": row.get("amount"),
-                    "market_cap": row.get("mkv"),
+                    "market_cap": market_value,
                     "industry": row.get("industry") or stock_profile.get("industry") or "未知",
-                })
-            total_market_cap = sum(_as_float(item.get("market_cap")) or 0 for item in holdings)
-            if total_market_cap > 0:
+                    "announcement_date": self._format_date_value(row.get("ann_date")),
+                    "report_date": self._format_date_value(row.get("end_date")),
+                    "source": "tushare.fund_portfolio",
+                }
+                existing = holdings_by_code.get(stock_code)
+                if existing is None:
+                    holdings_by_code[stock_code] = item
+                else:
+                    for field in ("stock_name", "industry", "announcement_date", "report_date"):
+                        if existing.get(field) in {None, "", "未知"} and item.get(field) not in {None, "", "未知"}:
+                            existing[field] = item[field]
+                    for field in ("shares", "market_cap", "equity_portfolio_weight"):
+                        if _as_float(item.get(field)) is not None and (
+                            _as_float(existing.get(field)) is None
+                            or float(item[field]) > float(existing[field])
+                        ):
+                            existing[field] = item[field]
+            holdings = list(holdings_by_code.values())
+            fund_net_asset, fund_net_asset_basis = self._fund_net_asset_for_period(ts_code, date_str)
+            if fund_net_asset and fund_net_asset > 0:
                 for item in holdings:
                     market_cap = _as_float(item.get("market_cap"))
-                    if market_cap is not None and (item.get("weight") is None or item.get("weight") <= 0):
-                        item["weight"] = round(market_cap / total_market_cap, 6)
-            holdings.sort(key=lambda item: item.get("weight") or 0, reverse=True)
+                    if market_cap is not None and market_cap >= 0:
+                        fund_nav_weight = round(market_cap / fund_net_asset, 6)
+                        item["weight"] = fund_nav_weight
+                        item["fund_nav_weight"] = fund_nav_weight
+                        item["weight_basis"] = "fund_nav"
+                        item["fund_net_asset"] = fund_net_asset
+                        item["fund_net_asset_basis"] = fund_net_asset_basis
+                        item["fund_net_asset_date"] = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:]}"
+                        item["weight_source"] = f"tushare.fund_nav.{fund_net_asset_basis}"
+            holdings, validation = normalize_holding_weights(holdings)
+            if validation.is_invalid:
+                logger.warning(
+                    "Invalid fund NAV holding weights for %s %s: %s (sum=%.6f); using equity-portfolio weights",
+                    wind_code,
+                    quarter,
+                    validation.reason,
+                    validation.total_weight,
+                )
+            holdings.sort(
+                key=lambda item: item.get("fund_nav_weight")
+                if item.get("fund_nav_weight") is not None
+                else item.get("equity_portfolio_weight") or 0,
+                reverse=True,
+            )
             return holdings
         except Exception as e:
             logger.error(f"Tushare get_fund_holdings error for {wind_code} {quarter}: {e}")
             return []
 
-    def _get_stock_profile(self, stock_code: str) -> Dict[str, Any]:
+    def _fund_net_asset_for_period(self, ts_code: str, period: str) -> tuple[Optional[float], Optional[str]]:
+        """读取报告期合计资产净值；多份额基金不能使用单份额净资产作分母。"""
         try:
-            df = self.pro.stock_basic(ts_code=stock_code, fields="ts_code,name,industry")
-            if df is not None and not df.empty:
-                row = df.iloc[0]
-                return {"name": row.get("name"), "industry": row.get("industry")}
-        except:
-            pass
-        return {}
+            frame = self.pro.fund_nav(
+                ts_code=ts_code,
+                nav_date=period,
+                fields="ts_code,nav_date,net_asset,total_netasset",
+            )
+            if frame is None or frame.empty:
+                return None, None
+            for column in ("total_netasset", "net_asset"):
+                if column not in frame.columns:
+                    continue
+                values = [
+                    value
+                    for value in (_as_float(item) for item in frame[column].tolist())
+                    if value is not None and value > 0
+                ]
+                if values:
+                    return values[0], column
+            return None, None
+        except Exception as exc:
+            logger.warning("Tushare fund net asset unavailable for %s %s: %s", ts_code, period, exc)
+            return None, None
+
+    @staticmethod
+    def _format_date_value(value: Any) -> Optional[str]:
+        text = str(value or "").strip()
+        if len(text) == 8 and text.isdigit():
+            return f"{text[:4]}-{text[4:6]}-{text[6:]}"
+        return text or None
+
+    @staticmethod
+    def _normalize_stock_code(value: Any) -> str:
+        code = str(value or "").strip().upper()
+        hong_kong = re.fullmatch(r"(\d{1,5})\.HK", code)
+        if hong_kong:
+            return f"{hong_kong.group(1).zfill(5)}.HK"
+        if re.fullmatch(r"\d{6}", code):
+            if code.startswith(("4", "8", "92")):
+                return f"{code}.BJ"
+            if code.startswith(("5", "6", "9")):
+                return f"{code}.SH"
+            return f"{code}.SZ"
+        return code
+
+    def _get_stock_profiles(self, stock_codes: List[str]) -> Dict[str, Dict[str, Any]]:
+        cache = getattr(self, "_stock_profile_cache", None)
+        if cache is None:
+            cache = {}
+            self._stock_profile_cache = cache
+
+        if not getattr(self, "_stock_profile_cache_loaded", False):
+            try:
+                frame = self.pro.stock_basic(
+                    exchange="",
+                    list_status="L",
+                    fields="ts_code,name,industry",
+                )
+                if frame is not None and not frame.empty:
+                    for _, row in frame.iterrows():
+                        code = self._normalize_stock_code(row.get("ts_code"))
+                        if code:
+                            cache[code] = {
+                                "name": row.get("name"),
+                                "industry": row.get("industry"),
+                            }
+                self._stock_profile_cache_loaded = True
+            except Exception as exc:
+                logger.warning("Tushare stock profile cache unavailable: %s", exc)
+
+        hong_kong_codes = {code for code in stock_codes if code.endswith(".HK")}
+        hong_kong_industries: Dict[str, str] = {}
+        if hong_kong_codes:
+            try:
+                snapshot = self.get_hang_seng_index_snapshot()
+                hong_kong_industries = dict(snapshot.get("industry_map") or {})
+                hong_kong_industries.update({
+                    str(item.get("constituent_code")): str(item.get("industry"))
+                    for item in snapshot.get("constituents") or []
+                    if item.get("constituent_code") and item.get("industry")
+                })
+            except Exception as exc:
+                logger.warning("Hang Seng industry map unavailable: %s", exc)
+
+        for stock_code in set(stock_codes):
+            if not stock_code or stock_code in cache:
+                continue
+            try:
+                if stock_code.endswith(".HK"):
+                    frame = self.pro.hk_basic(
+                        ts_code=stock_code,
+                        fields="ts_code,name,fullname,market,list_date",
+                    )
+                else:
+                    frame = self.pro.stock_basic(
+                        ts_code=stock_code,
+                        fields="ts_code,name,industry",
+                    )
+                if frame is not None and not frame.empty:
+                    row = frame.iloc[0]
+                    cache[stock_code] = {
+                        "name": row.get("name"),
+                        "industry": row.get("industry") or hong_kong_industries.get(stock_code),
+                    }
+            except Exception:
+                continue
+        return {code: cache.get(code, {}) for code in stock_codes if code}
+
+    def _get_stock_profile(self, stock_code: str) -> Dict[str, Any]:
+        normalized = self._normalize_stock_code(stock_code)
+        return self._get_stock_profiles([normalized]).get(normalized, {})
 
     def _get_stock_industry(self, stock_code: str) -> str:
         try:
@@ -700,6 +1136,84 @@ class TushareDataService:
         return "未知"
 
     # ==================== 基金经理数据 ====================
+
+    def get_manager_identity_candidates(self, manager_name: str) -> List[Dict[str, Any]]:
+        """按精确姓名返回可审计的基金经理身份候选，不用模糊匹配。"""
+        if self.mock_mode:
+            return []
+
+        name = str(manager_name or "").strip()
+        if not name:
+            return []
+        try:
+            df = self.pro.fund_manager(
+                name=name,
+                fields="ts_code,name,gender,edu,birth_year,begin_date,end_date,fund_name",
+            )
+            if df is None or df.empty:
+                return []
+
+            exact_rows = [
+                row.to_dict()
+                for _, row in df.iterrows()
+                if str(row.get("name") or "").strip() == name
+            ]
+            if not exact_rows:
+                return []
+
+            known_genders = {
+                str(row.get("gender") or "").strip()
+                for row in exact_rows
+                if str(row.get("gender") or "").strip()
+            }
+            known_education = {
+                str(row.get("edu") or "").strip()
+                for row in exact_rows
+                if str(row.get("edu") or "").strip()
+            }
+            shared_gender = next(iter(known_genders)) if len(known_genders) == 1 else ""
+            shared_education = next(iter(known_education)) if len(known_education) == 1 else ""
+            grouped: Dict[str, Dict[str, Any]] = {}
+            for row in exact_rows:
+                gender = str(row.get("gender") or shared_gender).strip()
+                education = str(row.get("edu") or shared_education).strip()
+                manager_id = f"{name}|{gender}|{education}"
+                candidate = grouped.setdefault(manager_id, {
+                    "manager_id": manager_id,
+                    "name": name,
+                    "gender": gender,
+                    "education": education,
+                    "birth_year": row.get("birth_year"),
+                    "current_funds": [],
+                    "tenures": [],
+                    "source": "tushare.fund_manager",
+                })
+                fund_code = _to_wind_code(str(row.get("ts_code") or "").strip())
+                begin_date = _format_tushare_date(row.get("begin_date"))
+                end_date = _format_tushare_date(row.get("end_date"))
+                if not fund_code or not begin_date:
+                    continue
+                tenure = {
+                    "fund_code": fund_code,
+                    "fund_name": row.get("fund_name") or fund_code,
+                    "start_date": begin_date,
+                    "end_date": end_date,
+                    "is_current": end_date is None,
+                }
+                candidate["tenures"].append(tenure)
+                if tenure["is_current"]:
+                    candidate["current_funds"].append(fund_code)
+
+            for candidate in grouped.values():
+                candidate["current_funds"] = list(dict.fromkeys(candidate["current_funds"]))
+                candidate["tenures"] = sorted(
+                    candidate["tenures"],
+                    key=lambda item: (not item["is_current"], item["start_date"], item["fund_code"]),
+                )
+            return sorted(grouped.values(), key=lambda item: item["manager_id"])
+        except Exception as exc:
+            logger.error("Tushare manager identity lookup failed for %s: %s", name, exc)
+            return []
 
     def get_fund_managers(self, wind_code: str) -> List[Dict[str, Any]]:
         """按基金代码获取基金经理任职关系。"""
@@ -741,6 +1255,54 @@ class TushareDataService:
             return managers
         except Exception as e:
             logger.error(f"Tushare get_fund_managers error for {wind_code}: {e}")
+            return []
+
+    def get_manager_tenures(self, manager_id: str) -> List[Dict[str, Any]]:
+        """按规范经理 ID 获取完整现任与历史产品任职记录。"""
+        if self.mock_mode:
+            return []
+
+        name, expected_gender, expected_education = (str(manager_id or "").split("|") + ["", ""])[0:3]
+        if not name.strip():
+            return []
+        try:
+            df = self.pro.fund_manager(
+                name=name.strip(),
+                fields="ts_code,name,gender,edu,birth_year,begin_date,end_date,fund_name",
+            )
+            if df is None or df.empty:
+                return []
+
+            rows = []
+            for _, row in df.iterrows():
+                row_data = row.to_dict()
+                row_name = str(row_data.get("name") or "").strip()
+                gender = str(row_data.get("gender") or "").strip()
+                education = str(row_data.get("edu") or "").strip()
+                if row_name != name.strip():
+                    continue
+                if expected_gender and gender and gender != expected_gender:
+                    continue
+                if expected_education and education and education != expected_education:
+                    continue
+                fund_code = _to_wind_code(str(row_data.get("ts_code") or "").strip())
+                begin_date = _format_tushare_date(row_data.get("begin_date"))
+                end_date = _format_tushare_date(row_data.get("end_date"))
+                if not fund_code or not begin_date:
+                    continue
+                rows.append({
+                    "manager_id": f"{row_name}|{gender}|{education}",
+                    "fund_code": fund_code,
+                    "fund_name": row_data.get("fund_name") or fund_code,
+                    "start_date": begin_date,
+                    "end_date": end_date,
+                    "is_current": end_date is None,
+                    "source": "tushare.fund_manager",
+                    "raw_data": row_data,
+                })
+            return sorted(rows, key=lambda item: (not item["is_current"], item["start_date"], item["fund_code"]))
+        except Exception as e:
+            logger.error(f"Tushare get_manager_tenures error for {manager_id}: {e}")
             return []
 
     def get_manager_info(self, manager_id: str) -> Dict[str, Any]:
@@ -960,6 +1522,11 @@ class TushareDataService:
                                 "fund_count": 0,
                                 "_company": "",
                             }
+                        elif row.get("begin_date") and (
+                            not all_funds_by_manager[key].get("begin_date")
+                            or str(row.get("begin_date")) < str(all_funds_by_manager[key].get("begin_date"))
+                        ):
+                            all_funds_by_manager[key]["begin_date"] = row.get("begin_date")
 
                         # 追加基金
                         all_funds_by_manager[key]["funds"].append({
@@ -994,13 +1561,13 @@ class TushareDataService:
                         batch_str = ",".join([_to_ts_code(c) for c in batch])
                         basic_df = self.pro.fund_basic(
                             ts_code=batch_str,
-                            fields="ts_code,custodian"
+                            fields="ts_code,management"
                         )
                         if basic_df is not None and not basic_df.empty:
                             for _, row in basic_df.iterrows():
                                 ts = row.get("ts_code", "")
                                 wind = _to_wind_code(ts)
-                                comp = row.get("custodian", "")
+                                comp = row.get("management", "")
                                 for m in all_funds_by_manager.values():
                                     for f in m["funds"]:
                                         if f["wind_code"] == wind:
@@ -1024,6 +1591,21 @@ class TushareDataService:
                     m["tenure_years"] = 5
 
                 m["fund_count"] = len(m["funds"])
+                m["company"] = next(
+                    (
+                        str(fund.get("company") or "").strip()
+                        for fund in m["funds"]
+                        if not fund.get("end_date") and str(fund.get("company") or "").strip()
+                    ),
+                    next(
+                        (
+                            str(fund.get("company") or "").strip()
+                            for fund in m["funds"]
+                            if str(fund.get("company") or "").strip()
+                        ),
+                        "",
+                    ),
+                )
                 m.pop("_company", None)
                 result.append(m)
 
@@ -1120,7 +1702,7 @@ class TushareDataService:
         try:
             all_funds = []
             # 遍历所有状态，获取完整基金列表
-            for status in ['D', 'L']:  # D=在运作, L=已清算
+            for status in ['L', 'D']:  # L=存续/上市，D=摘牌/终止
                 offset = 0
                 limit = 1000
                 while True:

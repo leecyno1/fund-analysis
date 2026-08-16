@@ -13,7 +13,7 @@ from services.fund_classification_catalog import FundClassificationCatalog
 class FundClassificationService:
     """生成多层基金分类及其证据。"""
 
-    METHODOLOGY_VERSION = "fund_classification_v2"
+    METHODOLOGY_VERSION = "fund_classification_v4"
 
     FAMILY_META: Dict[str, Dict[str, Any]] = FundClassificationCatalog.family_meta()
 
@@ -61,6 +61,67 @@ class FundClassificationService:
                 fund,
                 evidence,
                 [f"策略族谱 {explicit_family} 尚未登记到分类方法中"],
+            )
+
+        if self._is_qdii(fund_type):
+            evidence.append(self._evidence(
+                "fund.type",
+                fund_type,
+                "fund_metadata",
+                "QDII 法定类型证据",
+            ))
+            qdii_candidate, qdii_reason = self._qdii_candidate(fund, profile)
+            if qdii_candidate:
+                evidence.extend(qdii_candidate["evidence"])
+                return self._classified_result(
+                    fund,
+                    {
+                        **profile,
+                        "peer_group": qdii_candidate["peer_group_name"],
+                        "primary_benchmark": qdii_candidate["benchmark_name"],
+                    },
+                    qdii_candidate["strategy_family_key"],
+                    evidence,
+                    confidence=0.94,
+                    source="qdii_asset_class_fallback",
+                )
+            return self._unavailable_result(
+                fund,
+                evidence,
+                [qdii_reason or "QDII 资产类别证据不足，不能进入同类评价"],
+            )
+
+        if self._is_fof(fund_name, fund_type):
+            evidence.append(self._evidence(
+                "fund.type/name",
+                f"{fund_type} {fund_name}".strip(),
+                "fund_metadata",
+                "FOF 产品类型证据",
+            ))
+            fof_candidate, fof_reason = self._fof_candidate(fund, profile)
+            if fof_candidate:
+                evidence.append(self._evidence(
+                    "fund.contract_benchmark",
+                    fof_candidate["benchmark_name"],
+                    "fund_metadata",
+                    fof_candidate["rationale"],
+                ))
+                return self._classified_result(
+                    fund,
+                    {
+                        **profile,
+                        "peer_group": fof_candidate["peer_group_name"],
+                        "primary_benchmark": fof_candidate["benchmark_name"],
+                    },
+                    fof_candidate["strategy_family_key"],
+                    evidence,
+                    confidence=0.9,
+                    source="fof_contract_benchmark_fallback",
+                )
+            return self._unavailable_result(
+                fund,
+                evidence,
+                [fof_reason or "FOF 合同基准资产权重不足，不能进入专属 FOF 同类组"],
             )
 
         family_key, matched_field, matched_value = self._infer_family(fund_type, fund_name, profile)
@@ -148,6 +209,97 @@ class FundClassificationService:
                 return value
         return None
 
+    @staticmethod
+    def _is_fof(fund_name: str, fund_type: str) -> bool:
+        evidence = f"{fund_name} {fund_type}".lower()
+        return "fof" in evidence or "基金中基金" in evidence
+
+    @staticmethod
+    def _is_qdii(fund_type: str) -> bool:
+        return "qdii" in str(fund_type or "").lower()
+
+    def _qdii_candidate(
+        self,
+        fund: Dict[str, Any],
+        profile: Dict[str, Any],
+    ) -> Tuple[Optional[Dict[str, Any]], str]:
+        from services.fund_classification_ingestion_service import FundClassificationIngestionService
+
+        raw_data = fund.get("raw_data") if isinstance(fund.get("raw_data"), dict) else {}
+        info = raw_data.get("info") if isinstance(raw_data.get("info"), dict) else {}
+        universe = raw_data.get("universe") if isinstance(raw_data.get("universe"), dict) else {}
+        invest_type = self._text(fund.get("invest_type") or universe.get("invest_type") or info.get("invest_type"))
+        contract_type = self._text(fund.get("contract_type") or universe.get("contract_type") or info.get("contract_type"))
+        declared_benchmark = self._text(
+            fund.get("contract_benchmark")
+            or fund.get("benchmark")
+            or profile.get("primary_benchmark")
+            or universe.get("benchmark")
+            or info.get("benchmark")
+        )
+        candidate, reason = FundClassificationIngestionService()._qdii_candidate(
+            declared_benchmark,
+            invest_type,
+            contract_type,
+        )
+        if not candidate:
+            reason_labels = {
+                "qdii_missing_declared_benchmark": "QDII 缺少合同业绩比较基准",
+                "qdii_index_not_supported": "该 QDII 指数尚未进入可核验的全球指数基准目录",
+                "qdii_index_contract_type_conflict": "QDII 被动指数的合同类型不是股票型",
+                "qdii_index_reference_not_100_percent": "QDII 指数基金的纳斯达克100合同基准权重不是100%",
+                "qdii_index_currency_basis_unverified": "QDII 指数基金的合同基准未明确汇率调整或人民币计价口径",
+                "qdii_unsupported_or_conflicting_asset_class": "QDII 投资类型与合同类型不足以确认资产类别",
+            }
+            return None, reason_labels.get(reason, "QDII 资产类别证据不足")
+        return {
+            "strategy_family_key": str(candidate["strategy_family_key"]),
+            "peer_group_name": str(candidate["peer_group_benchmark_name"]),
+            "benchmark_name": str(candidate["benchmark_name"]),
+            "evidence": [
+                self._evidence("fund.invest_type", invest_type, "fund_metadata", "QDII 投资类型"),
+                self._evidence("fund.contract_type", contract_type, "fund_metadata", "QDII 合同类型"),
+                self._evidence("fund.contract_benchmark", declared_benchmark, "fund_metadata", "QDII 合同业绩比较基准"),
+            ],
+        }, ""
+
+    def _fof_candidate(
+        self,
+        fund: Dict[str, Any],
+        profile: Dict[str, Any],
+    ) -> Tuple[Optional[Dict[str, str]], str]:
+        from services.fund_classification_ingestion_service import FundClassificationIngestionService
+
+        raw_data = fund.get("raw_data") if isinstance(fund.get("raw_data"), dict) else {}
+        info = raw_data.get("info") if isinstance(raw_data.get("info"), dict) else {}
+        universe = raw_data.get("universe") if isinstance(raw_data.get("universe"), dict) else {}
+        declared_benchmark = self._text(
+            fund.get("contract_benchmark")
+            or fund.get("benchmark")
+            or profile.get("primary_benchmark")
+            or universe.get("benchmark")
+            or info.get("benchmark")
+        )
+        candidate, reason = FundClassificationIngestionService()._fof_candidate(
+            declared_benchmark,
+            self._text(fund.get("invest_type") or universe.get("invest_type") or info.get("invest_type")),
+            self._text(fund.get("contract_type") or universe.get("contract_type") or info.get("contract_type")),
+        )
+        if not candidate:
+            reason_labels = {
+                "fof_missing_declared_benchmark": "FOF 缺少合同业绩比较基准，不能确认风险目标",
+                "fof_benchmark_weights_unavailable": "FOF 合同基准没有可核验的资产权重",
+                "fof_benchmark_weights_incomplete": "FOF 合同基准资产权重合计不完整",
+                "fof_benchmark_asset_class_ambiguous": "FOF 合同基准包含无法识别的资产类别",
+            }
+            return None, reason_labels.get(reason, "FOF 合同类型或投资类型与专属分类口径冲突")
+        return {
+            "strategy_family_key": str(candidate["strategy_family_key"]),
+            "peer_group_name": str(candidate["benchmark_name"]).replace("FOF 合同基准", "FOF"),
+            "benchmark_name": str(candidate["benchmark_name"]),
+            "rationale": str(candidate["rationale"]),
+        }, ""
+
     def _infer_family(
         self,
         fund_type: str,
@@ -156,8 +308,6 @@ class FundClassificationService:
     ) -> Tuple[Optional[str], str, str]:
         combined = f"{fund_type} {fund_name} {self._text(profile.get('peer_group'))}".lower()
 
-        if any(token in combined for token in ("qdii", "海外", "全球", "国际基金")):
-            return "qdii_global_theme", "fund.type/name", combined.strip()
         if any(token in combined for token in ("货币", "money", "现金管理")):
             return "cash_management", "fund.type/name", combined.strip()
         if any(token in combined for token in ("指数增强", "增强指数", "enhanced index")):
@@ -165,6 +315,8 @@ class FundClassificationService:
         if any(token in combined for token in ("指数", "index", "etf", "联接")):
             if any(token in combined for token in ("债券", "同业存单", "国开债", "政金债")):
                 return "index_fixed_income", "fund.type/name", combined.strip()
+            if any(token in combined for token in self.SECTOR_TERMS):
+                return "index_sector", "fund.type/name", combined.strip()
             return "index_broad", "fund.type/name", combined.strip()
         if any(token in combined for token in ("债券", "纯债", "信用债", "产业债", "bond", "固收")):
             family = "fixed_income_credit" if any(token in combined for token in ("信用", "产业债")) else "fixed_income_general"

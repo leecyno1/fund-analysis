@@ -4,12 +4,14 @@
 基于基金分类、滚动指标、现任经理任期指标和数据质量，按评价口径输出可解释评分。
 分类证据不足或尚未建立专属评价方法时显式停止，禁止默认套用主动权益评分。
 """
+from datetime import date
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
 from services.data_quality_service import DataQualityService
 from services.fund_classification_service import FundClassificationService
 from services.fund_evaluation_methodology import FundEvaluationMethodology
+from services.manager_tenure_coverage import metric_details_coverage_status
 from services.scoring_contract import build_scoring_output
 
 
@@ -27,6 +29,7 @@ class ProfessionalScoringService:
         metric_repo: Optional[Any] = None,
         profile_repo: Optional[Any] = None,
         methodology: Optional[FundEvaluationMethodology] = None,
+        fof_holding_service: Optional[Any] = None,
     ):
         self.data_quality_service = data_quality_service or DataQualityService()
         self.classification_service = classification_service or FundClassificationService()
@@ -35,6 +38,7 @@ class ProfessionalScoringService:
         self._metric_repo_adapter = metric_repo
         self._profile_repo_adapter = profile_repo
         self.methodology = methodology or FundEvaluationMethodology()
+        self.fof_holding_service = fof_holding_service
 
     def score_fund(self, fund_code: str) -> Dict[str, Any]:
         fund_repo = self._get_fund_repo()
@@ -56,6 +60,7 @@ class ProfessionalScoringService:
         panel: List[Dict[str, Any]],
         quality: Dict[str, Any],
         standardized_classification: Optional[Dict[str, Any]] = None,
+        evaluation_window: str = "1y",
     ) -> Dict[str, Any]:
         """通过稳定 Interface 对已经取得的基金事实执行分类门禁和专业评分。"""
         wind_code = fund.get("wind_code") or fund.get("ts_code") or fund.get("id") or "unknown"
@@ -67,20 +72,52 @@ class ProfessionalScoringService:
                 classification,
                 quality,
                 classification.get("missing_items") or ["基金分类证据不足，不能选择评价方法"],
+                evaluation_window=evaluation_window,
             )
+        history_gap = self._window_history_gap(fund, evaluation_window)
+        if history_gap:
+            return self._unavailable_evaluation(
+                wind_code,
+                classification,
+                quality,
+                [history_gap],
+                evaluation_window=evaluation_window,
+            )
+        fof_lookthrough = self._fof_lookthrough_evidence(wind_code, profile_key)
+        if fof_lookthrough and (fof_lookthrough.get("evidence_gate") or {}).get("status") != "sufficient":
+            result = self._unavailable_evaluation(
+                wind_code,
+                classification,
+                quality,
+                (fof_lookthrough.get("evidence_gate") or {}).get("missing_items")
+                or fof_lookthrough.get("missing_items")
+                or ["FOF 底层基金穿透证据不足，不能输出综合分"],
+                evaluation_window=evaluation_window,
+            )
+            result["fof_lookthrough"] = fof_lookthrough
+            return result
         metrics = self._merge_metric_windows(
             self._metrics_by_window(panel),
             self._fund_fallback_metrics(fund),
         )
-        methodology_result = self.methodology.evaluate(profile_key, metrics, quality)
+        methodology_result = self.methodology.evaluate(
+            profile_key,
+            metrics,
+            quality,
+            selected_window=evaluation_window,
+        )
         if methodology_result.get("status") not in {"ok", "partial"}:
-            return self._unavailable_evaluation(
+            result = self._unavailable_evaluation(
                 wind_code,
                 classification,
                 quality,
                 methodology_result.get("missing_data") or ["类别专属基金评价证据不足"],
                 calculation_method=methodology_result.get("calculation_method"),
+                evaluation_window=evaluation_window,
             )
+            if fof_lookthrough:
+                result["fof_lookthrough"] = fof_lookthrough
+            return result
         dimensions = methodology_result["dimensions"]
         missing_data = methodology_result.get("missing_data", [])
         output = build_scoring_output(
@@ -99,14 +136,29 @@ class ProfessionalScoringService:
         output["evaluation_scope"] = "classification_gated"
         output["classification"] = classification
         output["fund_type_profile"] = profile_key
+        output["evaluation_window"] = evaluation_window
         output["peer_group"] = classification.get("peer_group")
         output["primary_benchmark"] = classification.get("primary_benchmark")
         output["data_quality"] = quality
+        if fof_lookthrough:
+            output["fof_lookthrough"] = fof_lookthrough
         output["product_scope"] = self._product_scope()
         return output
 
+    def _fof_lookthrough_evidence(self, wind_code: str, profile_key: Optional[str]) -> Dict[str, Any]:
+        if profile_key not in {"fof_equity", "fof_balanced", "fof_bond"}:
+            return {}
+        if self.fof_holding_service is None:
+            from services.fund_fof_holding_service import FundFofHoldingService
+
+            self.fof_holding_service = FundFofHoldingService()
+        return self.fof_holding_service.get(wind_code, refresh=False)
+
     def score_peer_metrics(self, profile_key: str, metrics: Dict[str, Any]) -> Optional[float]:
         return self.methodology.score_peer(profile_key, metrics)
+
+    def score_peer_details(self, profile_key: str, metrics: Dict[str, Any]) -> Dict[str, Any]:
+        return self.methodology.score_peer_details(profile_key, metrics)
 
     def metric_facts_from_fund(self, fund: Dict[str, Any]) -> Dict[str, Dict[str, float]]:
         """把基金原始字段适配为类别评价可消费的指标事实。"""
@@ -147,6 +199,7 @@ class ProfessionalScoringService:
         quality: Dict[str, Any],
         missing_data: List[str],
         calculation_method: Optional[str] = None,
+        evaluation_window: str = "1y",
     ) -> Dict[str, Any]:
         return {
             "status": "insufficient_evidence",
@@ -161,7 +214,8 @@ class ProfessionalScoringService:
             "missing_data": list(missing_data),
             "source_snapshot_ids": [],
             "as_of_date": None,
-            "calculation_method": calculation_method or "category_evaluation_methodology_v1:unavailable",
+            "calculation_method": calculation_method or f"{self.methodology.METHODOLOGY_VERSION}:unavailable:{evaluation_window}",
+            "evaluation_window": evaluation_window,
             "evaluation_scope": "classification_gated",
             "classification": classification,
             "fund_type_profile": classification.get("evaluation_profile_key"),
@@ -170,6 +224,27 @@ class ProfessionalScoringService:
             "data_quality": quality,
             "product_scope": self._product_scope(),
         }
+
+    @staticmethod
+    def _window_history_gap(fund: Dict[str, Any], evaluation_window: str) -> Optional[str]:
+        establishment = fund.get("establishment_date")
+        if not establishment:
+            return None
+        try:
+            established_on = date.fromisoformat(str(establishment)[:10])
+        except ValueError:
+            return None
+        required_days = {"6m": 183, "1y": 365, "3y": 1095}.get(evaluation_window)
+        if required_days is None:
+            return None
+        actual_days = (date.today() - established_on).days
+        if actual_days >= required_days:
+            return None
+        window_label = {"6m": "近 6 月", "1y": "近 1 年", "3y": "近 3 年"}.get(
+            evaluation_window,
+            evaluation_window,
+        )
+        return f"{window_label}历史不足：当前 {actual_days} 天，至少需要 {required_days} 天"
 
     def _product_scope(self) -> Dict[str, str]:
         return {
@@ -182,8 +257,15 @@ class ProfessionalScoringService:
 
     def _metrics_by_window(self, panel: List[Dict[str, Any]]) -> Dict[str, Dict[str, float]]:
         metrics: Dict[str, Dict[str, float]] = {}
+        partial_manager_tenure = any(
+            item.get("metric_window") == "manager_tenure"
+            and metric_details_coverage_status(item.get("details")) == "partial_since_data_start"
+            for item in panel
+        )
         for item in panel:
             window = item.get("metric_window") or "latest"
+            if window == "manager_tenure" and partial_manager_tenure:
+                continue
             name = item.get("metric_name")
             value = item.get("metric_value")
             if not name or value is None:
@@ -296,13 +378,21 @@ class ProfessionalScoringService:
         return value / 100.0 if percentage_points or abs(value) >= 0.05 else value
 
     def _positive_factors(self, dimensions: Dict[str, Any], quality: Dict[str, Any]) -> List[str]:
-        factors = [f"{name} 维度得分较高" for name, item in dimensions.items() if item.get("score", 0) >= 75]
+        factors = [
+            f"{name} 维度得分较高"
+            for name, item in dimensions.items()
+            if item.get("score") is not None and item["score"] >= 75
+        ]
         if quality.get("status") == "complete":
             factors.append("数据质量完整，评分可信度较高")
         return factors[:6]
 
     def _negative_factors(self, dimensions: Dict[str, Any], missing_data: List[str]) -> List[str]:
-        factors = [f"{name} 维度需要复核" for name, item in dimensions.items() if item.get("score", 0) < 55]
+        factors = [
+            f"{name} 维度需要复核"
+            for name, item in dimensions.items()
+            if item.get("score") is not None and item["score"] < 55
+        ]
         if missing_data:
             factors.append("存在缺失数据，需降低结论确定性")
         return factors[:6]

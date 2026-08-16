@@ -42,20 +42,56 @@ class ResearchMemoMetadataExtractor:
 
     @staticmethod
     def _parse_json(raw: Any) -> Dict[str, Any]:
-        if isinstance(raw, dict):
-            return raw
-        text = str(raw or "").strip()
-        fenced = re.search(r"```(?:json)?\s*([\s\S]*?)```", text, re.IGNORECASE)
-        if fenced:
-            text = fenced.group(1).strip()
-        else:
-            match = re.search(r"\{[\s\S]*\}", text)
-            if not match:
-                raise ValueError("模型没有返回 JSON 对象")
-            text = match.group(0)
-        parsed = json.loads(text)
-        if not isinstance(parsed, dict):
-            raise ValueError("模型结果必须是 JSON 对象")
+        expected_fields = set(ResearchMemoMetadataExtractor.FIELD_KINDS)
+
+        def unwrap(value: Any) -> Optional[Dict[str, Any]]:
+            if isinstance(value, dict):
+                if expected_fields.intersection(value):
+                    return value
+                for key in ("result", "output", "data", "content", "text"):
+                    if key in value and (nested := unwrap(value[key])) is not None:
+                        return nested
+                return None
+            if isinstance(value, list):
+                for item in value:
+                    if (nested := unwrap(item)) is not None:
+                        return nested
+                return None
+            if isinstance(value, str):
+                return decode_text(value)
+            return None
+
+        def decode_text(text: str) -> Optional[Dict[str, Any]]:
+            cleaned = str(text or "").strip()
+            if not cleaned:
+                return None
+            candidates = [
+                match.group(1).strip()
+                for match in re.finditer(r"```(?:json)?\s*([\s\S]*?)```", cleaned, re.IGNORECASE)
+            ]
+            candidates.append(cleaned)
+            decoder = json.JSONDecoder()
+            for candidate in candidates:
+                try:
+                    parsed = json.loads(candidate)
+                except json.JSONDecodeError:
+                    parsed = None
+                if parsed is not None and (unwrapped := unwrap(parsed)) is not None:
+                    return unwrapped
+                for index, character in enumerate(candidate):
+                    if character not in "{[":
+                        continue
+                    try:
+                        parsed, _ = decoder.raw_decode(candidate[index:])
+                    except json.JSONDecodeError:
+                        continue
+                    if (unwrapped := unwrap(parsed)) is not None:
+                        return unwrapped
+            return None
+
+        parsed = unwrap(raw)
+        if parsed is None:
+            raise ValueError("模型没有返回可用的 JSON 对象")
         return parsed
 
     def _validated_proposals(self, data: Dict[str, Any], content: str) -> List[Dict[str, Any]]:
@@ -100,8 +136,6 @@ def get_research_memo_metadata_extractor() -> ResearchMemoMetadataExtractor:
         from services.ai_report import get_report_generator
 
         generator = get_report_generator()
-        if not generator.api_key:
-            return ResearchMemoMetadataExtractor(generator=None)
         return ResearchMemoMetadataExtractor(generator=generator)
     except Exception:
         return ResearchMemoMetadataExtractor(generator=None)

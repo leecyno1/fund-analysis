@@ -6,17 +6,32 @@
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional
 
+from services.fund_manager_tenure_context import resolve_manager_tenure_context
+
 
 class DataQualityService:
     """按基金基础信息、研究画像、净值覆盖和指标快照评估可信度。"""
 
-    MANAGER_TENURE_NOT_APPLICABLE = {"index_broad", "index_fixed_income", "cash_management"}
+    MANAGER_TENURE_NOT_APPLICABLE = {
+        "index_broad",
+        "index_sector",
+        "index_fixed_income",
+        "qdii_index",
+        "cash_management",
+    }
+    MIN_ONE_YEAR_NAV_OBSERVATIONS = 240
 
     def __init__(self, classification_adapter: Optional[Any] = None):
         self._classification_adapter = classification_adapter
 
     def evaluate_fund(self, fund_code: str) -> Dict[str, Any]:
-        from repositories import get_fund_repo, get_metric_snapshot_repo, get_nav_repo, get_research_profile_repo
+        from repositories import (
+            get_fund_repo,
+            get_manager_repo,
+            get_metric_snapshot_repo,
+            get_nav_repo,
+            get_research_profile_repo,
+        )
 
         fund_repo = get_fund_repo()
         profile_repo = get_research_profile_repo()
@@ -28,6 +43,7 @@ class DataQualityService:
         profile = profile_repo.get_profile(wind_code) or {}
         nav_series = nav_repo.get_nav_series(wind_code)
         metric_panel = metric_repo.get_latest_panel("fund", wind_code)
+        manager_tenure_context = get_manager_repo().get_current_fund_tenure_context(wind_code)
         try:
             classification_context = self._get_classification_adapter().get_classification_context(wind_code) or {}
         except Exception:
@@ -38,6 +54,7 @@ class DataQualityService:
             metric_panel,
             classification_context,
             nav_series=nav_series,
+            manager_tenure_context=manager_tenure_context,
         )
 
     def evaluate_from_inputs(
@@ -47,15 +64,17 @@ class DataQualityService:
         metric_panel: List[Dict[str, Any]],
         classification_context: Dict[str, Any],
         nav_series: Optional[List[Dict[str, Any]]] = None,
+        manager_tenure_context: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """对已批量读取的事实评分，避免基金列表和推荐逐只重复查库。"""
         wind_code = fund.get("wind_code") or fund.get("ts_code") or fund.get("id") or "unknown"
         strategy_family_key = classification_context.get("strategy_family_key")
+        tenure_context = resolve_manager_tenure_context(fund, profile, manager_tenure_context)
         checks = {
             "fund_base": self._check_fund_base(fund),
             "research_profile": self._check_research_context(profile, classification_context),
             "manager_tenure_start": self._check_manager_tenure(
-                profile.get("manager_tenure_start"),
+                tenure_context.get("start_date"),
                 strategy_family_key,
             ),
             "nav_coverage": (
@@ -79,6 +98,8 @@ class DataQualityService:
             for check in checks.values()
             if not check["passed"]
         ]
+        checks["manager_tenure_start"]["source"] = tenure_context.get("source")
+        checks["manager_tenure_start"]["manager_ids"] = tenure_context.get("manager_ids") or []
 
         return {
             "target_type": "fund",
@@ -90,6 +111,7 @@ class DataQualityService:
             "summary": self._summary(status, score, issues),
             "classification_context_status": classification_context.get("status"),
             "strategy_family_key": strategy_family_key,
+            "manager_tenure": tenure_context,
         }
 
     def _check_fund_base(self, fund: Dict[str, Any]) -> Dict[str, Any]:
@@ -179,7 +201,7 @@ class DataQualityService:
         if len(points) < 2:
             return {"passed": False, "message": "净值序列不足", "observations": len(points)}
         coverage_days = (points[-1] - points[0]).days + 1
-        passed = len(points) >= 252 and coverage_days >= 365
+        passed = len(points) >= self.MIN_ONE_YEAR_NAV_OBSERVATIONS and coverage_days >= 365
         return {
             "passed": passed,
             "message": "净值覆盖满足滚动评价" if passed else "净值覆盖不足一年",
@@ -208,7 +230,7 @@ class DataQualityService:
                 observations = max(observations, int(float(item.get("metric_value") or 0)))
             except (TypeError, ValueError):
                 continue
-        passed = observations >= 252
+        passed = observations >= self.MIN_ONE_YEAR_NAV_OBSERVATIONS
         return {
             "passed": passed,
             "message": "1 年指标样本证明净值覆盖满足评价" if passed else "缺少足够的 1 年净值观察",

@@ -13,6 +13,10 @@ from services.llm_runtime import LlmCircuitOpen, get_llm_runtime_guard
 logger = logging.getLogger(__name__)
 
 
+class LlmGenerationError(RuntimeError):
+    """Raised when the configured model cannot return usable content."""
+
+
 SYSTEM_PROMPT = """你是一位专业的基金研究分析师，擅长深度分析基金经理的投资能力、风格特征和业绩归因。
 你的分析报告应当:
 1. 数据驱动: 结合具体数据指标进行分析
@@ -68,8 +72,14 @@ class ClaudeReportGenerator:
         return "anthropic"
 
     def _resolve_api_key(self) -> Optional[str]:
-        if self.provider in {"siliconflow", "deepseek", "openai-compatible"}:
-            for key_name in ("LLM_API_KEY", "SILICONFLOW_API_KEY", "OPENAI_COMPATIBLE_API_KEY", "OPENAI_API_KEY"):
+        if self.provider in {"siliconflow", "deepseek"}:
+            for key_name in ("SILICONFLOW_API_KEY", "LLM_API_KEY"):
+                value = (os.environ.get(key_name) or "").strip()
+                if len(value) >= 30:
+                    return value
+            return None
+        if self.provider == "openai-compatible":
+            for key_name in ("OPENAI_COMPATIBLE_API_KEY", "LLM_API_KEY", "OPENAI_API_KEY"):
                 value = (os.environ.get(key_name) or "").strip()
                 if len(value) >= 30:
                     return value
@@ -152,6 +162,7 @@ class ClaudeReportGenerator:
         managers: List[Dict[str, Any]],
         research_reports: List[Dict],
         user_question: str = "",
+        assessment_summary: Dict[str, Any] = None,
     ) -> str:
         """生成面向基金评价的现场分析，不延伸到交易或个人适当性判断。"""
         prompt = "\n".join([
@@ -162,17 +173,30 @@ class ClaudeReportGenerator:
             "3. 因子风险和主动收益归因只用于解释，不参与基金评分。",
             "4. 调研纪要中的观点要标明纪要标题和日期，不得伪造引用。",
             "5. 不输出买入、卖出、仓位、金额或个人适当性建议。",
+            "6. evidence_scope=manager_level 的纪要只能作为基金经理层证据，不能写成该基金专属策略或持仓结论。",
+            "7. holding_style_peer_evidence 只有 status=peer_percentile_ready 时才能作为量化风格标签；descriptor_ready 只能描述原始描述子。",
+            "8. 公开持仓风格同类分位不是完整 Barra 风险模型，必须与正式 Barra 分开表述。",
+            "9. 公开持仓稳定性仅比较相邻两期披露的前十大持仓，不得写成真实换手率，且不参与基金评分。",
+            "10. period_performance 中 coverage_status=partial 的年度只能描述区间收益，不得引用同类名次。",
+            "11. manager_tenure_performance 只有 coverage_status=full_tenure 时才能描述完整任期和同区间排名；partial_since_data_start 只能称为本地可见期，不得把前任历史业绩归因给现任经理。",
+            "12. multi_period_evidence 只有 status=long_term_ready 时才能描述完整近 3 年收益风险证据；short_term_only 必须明确长期证据不足。",
+            "13. 不得用近 6 月或近 1 年领先推断长期持续；consistency_status=divergent 时必须提示短长期表现分化。",
+            "14. holding_style_drift_evidence 只比较同一专业同类组内相邻公开持仓期；不是完整组合、不是 RBSA 或 Barra，且不参与基金评分。",
+            "15. manager_tenure_performance.status=not_applicable 时，不得把基金经理任期或经理资料写成评价缺口。",
             "报告结构：一句话结论、基金定位、同类表现、风险与归因、经理与纪要证据、适合继续关注的情形、需要警惕的信号、数据缺口。",
             f"\n## 用户关注的问题\n{user_question or '请做一次完整的基金评价'}",
+            "\n## 统一综合评价事实\n```json\n" + self._to_json(assessment_summary or {}) + "\n```",
             "\n## 基金基础数据\n```json\n" + self._to_json(fund_data) + "\n```",
             "\n## 分类内专业评价\n```json\n" + self._to_json(evaluation_data) + "\n```",
+            "\n## 多周期收益风险证据\n```json\n" + self._to_json(evaluation_data.get("multi_period_evidence") or {}) + "\n```",
             "\n## Barra 与持仓行业暴露证据\n```json\n" + self._to_json(factor_evidence) + "\n```",
             "\n## Brinson 与补充净值行为解释\n```json\n" + self._to_json(attribution_evidence) + "\n```",
             "\n## 模型边界\n正式 Barra/Brinson 与净值行为解释必须分开表述；不得把 supplementary_nav_factor 标成 Barra，不得把 supplementary_nav_return 标成 Brinson。",
             "\n## 当前基金经理\n```json\n" + self._to_json(managers) + "\n```",
             "\n## 关联调研纪要\n```json\n" + self._to_json(research_reports) + "\n```",
         ])
-        return self._call_llm(prompt, "fund_analysis")
+        timeout_seconds = int(os.environ.get("LLM_EVALUATION_TIMEOUT_SECONDS", "20"))
+        return self._call_llm(prompt, "fund_analysis", timeout_seconds=timeout_seconds)
 
     def generate_manager_analysis(
         self,
@@ -212,7 +236,7 @@ class ClaudeReportGenerator:
             "纪要原文：",
             content[:12_000],
         ])
-        return self._call_llm(prompt, "memo_metadata_extraction")
+        return self._call_llm(prompt, "memo_metadata_extraction", strict=True)
 
     def _to_json(self, data: Any) -> str:
         return json.dumps(data, ensure_ascii=False, indent=2, default=str)
@@ -323,21 +347,39 @@ class ClaudeReportGenerator:
         parts.append("\n请生成一份对比分析报告，包含整体对比表格、各维度分析、以及综合结论。")
         return "\n".join(parts)
 
-    def _call_llm(self, prompt: str, report_type: str) -> str:
+    def _call_llm(
+        self,
+        prompt: str,
+        report_type: str,
+        strict: bool = False,
+        timeout_seconds: Optional[int] = None,
+    ) -> str:
         """调用模型 API"""
         guard = get_llm_runtime_guard()
         if self.provider in {"siliconflow", "deepseek", "openai-compatible"}:
             if not self.api_key:
                 logger.warning("OpenAI-compatible API key not configured. Refusing to generate mock report.")
-                return "## 报告生成失败\n\n模型 API Key 未配置；系统已阻止输出模拟研究报告，请配置真实模型服务或使用本地确定性证据报告。"
+                message = f"{self.provider} API Key 未配置"
+                if strict:
+                    raise LlmGenerationError(message)
+                return f"## 报告生成失败\n\n{message}；系统已阻止输出模拟研究报告，请配置真实模型服务或使用本地确定性证据报告。"
             try:
                 guard.before_request(self.runtime_key)
             except LlmCircuitOpen as error:
+                if strict:
+                    raise LlmGenerationError(f"模型服务暂时降级，请约 {error.retry_after_seconds} 秒后重试") from error
                 return f"## 报告生成失败\n\n模型服务暂时降级，将在约 {error.retry_after_seconds} 秒后恢复尝试；本次使用本地确定性证据报告。"
-            return self._call_openai_compatible(prompt)
+            return self._call_openai_compatible(
+                prompt,
+                strict=strict,
+                json_object=report_type == "memo_metadata_extraction",
+                timeout_seconds=timeout_seconds,
+            )
 
         if not self.client:
             logger.warning("Anthropic client not available. Refusing to generate mock report.")
+            if strict:
+                raise LlmGenerationError("Anthropic 客户端或 API Key 不可用")
             return "## 报告生成失败\n\nAnthropic 客户端或 API Key 不可用；系统已阻止输出模拟研究报告，请配置真实模型服务或使用本地确定性证据报告。"
 
         try:
@@ -352,15 +394,26 @@ class ClaudeReportGenerator:
             guard.record_success(self.runtime_key)
             return content
         except LlmCircuitOpen as error:
+            if strict:
+                raise LlmGenerationError(f"模型服务暂时降级，请约 {error.retry_after_seconds} 秒后重试") from error
             return f"## 报告生成失败\n\n模型服务暂时降级，将在约 {error.retry_after_seconds} 秒后恢复尝试；本次使用本地确定性证据报告。"
         except Exception as e:
             guard.record_failure(self.runtime_key, e)
             logger.error("Anthropic API error: {}".format(e))
+            if strict:
+                raise LlmGenerationError(self._model_error_message(e)) from e
             return "## 报告生成失败\n\n错误: {}\n\n请检查API配置后重试。".format(e)
 
-    def _call_openai_compatible(self, prompt: str) -> str:
+    def _call_openai_compatible(
+        self,
+        prompt: str,
+        strict: bool = False,
+        json_object: bool = False,
+        timeout_seconds: Optional[int] = None,
+    ) -> str:
         guard = get_llm_runtime_guard()
-        url = self.base_url.rstrip("/") + "/v1/chat/completions"
+        base_url = self.base_url.rstrip("/")
+        url = base_url + ("/chat/completions" if base_url.endswith("/v1") else "/v1/chat/completions")
         payload = {
             "model": self.model,
             "messages": [
@@ -370,6 +423,8 @@ class ClaudeReportGenerator:
             "temperature": 0.2,
             "max_tokens": 4096,
         }
+        if json_object:
+            payload["response_format"] = {"type": "json_object"}
         request = urllib.request.Request(
             url,
             data=json.dumps(payload).encode("utf-8"),
@@ -379,7 +434,7 @@ class ClaudeReportGenerator:
             },
             method="POST",
         )
-        timeout = int(os.environ.get("LLM_TIMEOUT_SECONDS", "240"))
+        timeout = timeout_seconds or int(os.environ.get("LLM_TIMEOUT_SECONDS", "240"))
         try:
             with urllib.request.urlopen(request, timeout=timeout) as response:
                 data = json.loads(response.read().decode("utf-8"))
@@ -390,11 +445,23 @@ class ClaudeReportGenerator:
             detail = error.read().decode("utf-8", errors="ignore")
             guard.record_failure(self.runtime_key, f"HTTP {error.code}: {detail[:160]}")
             logger.error("OpenAI-compatible API HTTP error %s: %s", error.code, detail[:500])
+            if strict:
+                raise LlmGenerationError(self._model_error_message(error, status_code=error.code)) from error
             return "## 报告生成失败\n\n模型服务返回错误，请检查 API Key、模型名和供应商配额。"
         except Exception as error:
             guard.record_failure(self.runtime_key, error)
             logger.error("OpenAI-compatible API error: %s", error)
+            if strict:
+                raise LlmGenerationError(self._model_error_message(error)) from error
             return "## 报告生成失败\n\n错误: {}\n\n请检查模型服务配置后重试。".format(error)
+
+    def _model_error_message(self, error: Exception, status_code: Optional[int] = None) -> str:
+        if status_code in {401, 403}:
+            return f"{self.provider} 鉴权失败，请更新该供应商的 API Key"
+        if status_code == 429:
+            return f"{self.provider} 请求受限或额度不足"
+        message = str(error or "模型请求失败").strip().replace("\n", " ")
+        return f"{self.provider} 模型请求失败：{message[:180]}"
 
 # 全局单例
 _report_generator: Optional[ClaudeReportGenerator] = None
