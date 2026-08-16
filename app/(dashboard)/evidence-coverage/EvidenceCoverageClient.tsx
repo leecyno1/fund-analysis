@@ -15,6 +15,7 @@ import {
   Sparkles,
 } from 'lucide-react'
 import { canonicalResearchHref, materialEvidenceHref } from '@/lib/research-platform/routes'
+import SchedulerAndPendingPanel from './SchedulerAndPendingPanel'
 
 type CoverageLevel = 'strong' | 'partial' | 'weak'
 
@@ -510,6 +511,7 @@ export default function EvidenceCoverageClient() {
 
   return (
     <div className="space-y-6">
+      <SchedulerAndPendingPanel />
       <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-start">
         <div>
           <div className="flex items-center gap-2">
