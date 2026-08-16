@@ -121,7 +121,7 @@ def get_pg_engine():
     if _pg_engine is None:
         try:
             from sqlalchemy import create_engine
-            pg_url = get_database_url("postgresql://postgres:postgres@localhost:5432/fund_analysis")
+            pg_url = get_database_url("postgresql://postgres@localhost:5432/fund_analysis")
             _pg_engine = create_engine(pg_url, pool_pre_ping=True)
             logger.info("PostgreSQL connected")
         except Exception as e:

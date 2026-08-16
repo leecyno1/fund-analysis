@@ -1,11 +1,11 @@
-# 基金选择助手与 Newma Desk 模组
+# 独立基金应用与 Desk Adapter
 
 状态：Canonical
 Desk：Manifest `1.1` / Bridge `1.0` / ViewSpec `1.0`
 
 ## 产品范围
 
-Desk 模组复用正式基金选择工具，只提供五个入口：
+正式产品是独立基金应用。Desk Adapter 复用正式页面，只提供五个入口：
 
 | 页面 | 路由 | 用途 |
 | --- | --- | --- |
@@ -20,13 +20,17 @@ Desk 模组复用正式基金选择工具，只提供五个入口：
 ## 运行结构
 
 ```text
-牛马 Desk / 独立浏览器
-  └─ 基金选择模组页面
+独立浏览器
+  └─ 基金选择应用（3000）
+      └─ FastAPI 基金后端（8005）
+
+牛马 Desk（可选宿主）
+  └─ 基金选择 Suite
       ├─ security.selected
       ├─ Level 3 Context
       └─ Manifest Actions
-          └─ Next.js /api Adapter
-              └─ FastAPI 基金研究 Module
+          └─ FastAPI Desk Adapter
+              └─ 正式基金 Module
                   └─ PostgreSQL 与真实数据源
 ```
 
@@ -36,6 +40,8 @@ Desk 模组复用正式基金选择工具，只提供五个入口：
 GET /.well-known/newma-desk-suite.json
 GET /api/newma-desk/health
 ```
+
+`3001` 由 Orchestra 使用，基金项目不得占用。项目只提供标准 Suite 与发现入口，不直接调用 Newma 控制面；人工验收通过后再将描述文件加入 `desk-mods`。
 
 ## Desk Actions
 
