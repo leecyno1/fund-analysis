@@ -6,6 +6,7 @@ import { useMemo, useState, useTransition } from 'react'
 import { ArrowLeft, BarChart3, Bot, Building2, CalendarRange, CircleAlert, ExternalLink, FileText, GitCompareArrows, Network, Plus, Search, ShieldCheck, Sparkles, X } from 'lucide-react'
 import { CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import type { CamelFund } from '@/lib/backend-api'
+import EvidenceTriptychStrip from './EvidenceTriptychStrip'
 import {
   asRecord,
   formatAsset,
@@ -132,7 +133,36 @@ export type ComparisonFund = {
   managerTenurePerformance: ManagerTenurePerformance
   multiPeriodEvidence: MultiPeriodEvidence
   researchMemoCount: number
+  attributionEvidence: AttributionEvidenceSnippet
+  styleEvidence: StyleEvidenceSnippet
+  memoHighlights: MemoHighlight[]
   periodPerformance: CalendarPerformanceSnapshot
+}
+
+export type AttributionEvidenceSnippet = {
+  status: string
+  headline: string
+  detail: string
+  coverage: number | null
+  formalBarraReady: boolean
+  barraDescriptorReady: boolean
+}
+
+export type StyleEvidenceSnippet = {
+  status: string
+  scope: string
+  quarter: string
+  labels: string[]
+  memoLabels: string[]
+}
+
+export type MemoHighlight = {
+  id: string
+  title: string
+  reportDate: string
+  managerName: string
+  scope: 'fund' | 'manager' | 'other'
+  summary: string
 }
 
 type AlignedFundMetrics = {
@@ -567,6 +597,8 @@ export default function SimpleComparisonClient({ funds, alignedComparison, holdi
           {alignedReady && !alignedRankingEligible ? <p className="mt-2 text-[11px] font-bold leading-5 text-[#835f25]">当前只展示实际可见期，不宣布收益、回撤、波动或修复速度领先。</p> : null}
         </section>
       ) : null}
+
+      {comparable ? <EvidenceTriptychStrip funds={funds} /> : null}
 
       {comparable ? (
         <section data-testid="multi-period-evidence" className="overflow-hidden border border-[#dbe1dc] bg-white">

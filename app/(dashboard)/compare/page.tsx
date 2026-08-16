@@ -82,6 +82,28 @@ async function loadComparisonFund(code: string): Promise<ComparisonFund | null> 
   const evaluationReady = textValue(evaluationPayload.status) !== 'insufficient_evidence'
     && textValue(dataQuality.status) !== 'insufficient'
   const score = numberValue(evaluation.overall_score)
+
+  // Attribution / style / memo evidence for the three-sided evidence strip
+  const assessmentSummary = asRecord(snapshot.assessment_summary ?? evaluationPayload.assessment_summary)
+  const attributionEvidenceRecord = asRecord(assessmentSummary.attribution_evidence)
+  const styleEvidenceRecord = asRecord(assessmentSummary.style_evidence)
+  const memoItemsRaw = Array.isArray(researchMemos.items) ? researchMemos.items.map(asRecord) : []
+  const memoHighlights = memoItemsRaw.slice(0, 3).map((memo) => {
+    const scopeRaw = textValue(memo.scope || memo.memo_scope).toLowerCase()
+    const scope: 'fund' | 'manager' | 'other' =
+      scopeRaw === 'fund' || scopeRaw === 'fund_specific' ? 'fund'
+      : scopeRaw === 'manager' || scopeRaw === 'manager_level' ? 'manager'
+      : 'other'
+    return {
+      id: textValue(memo.id || memo.report_id),
+      title: textValue(memo.title) || '无标题纪要',
+      reportDate: textValue(memo.report_date),
+      managerName: textValue(memo.manager_name),
+      scope,
+      summary: textValue(memo.summary || memo.excerpt || memo.viewpoint),
+    }
+  })
+
   const evaluationWindows = Object.fromEntries(evaluationWindowKeys.map((key) => {
     const windowPayload = asRecord(evaluationWindowsPayload[key] || (key === '1y' ? evaluationPayload : {}))
     const windowPeerContext = asRecord(windowPayload.peer_context)
@@ -177,6 +199,22 @@ async function loadComparisonFund(code: string): Promise<ComparisonFund | null> 
       dataAsOf: textValue(multiPeriodEvidencePayload.data_as_of),
     },
     researchMemoCount: numberValue(researchMemos.count) || 0,
+    attributionEvidence: {
+      status: textValue(attributionEvidenceRecord.status) || 'unavailable',
+      headline: textValue(attributionEvidenceRecord.headline),
+      detail: textValue(attributionEvidenceRecord.detail),
+      coverage: numberValue(attributionEvidenceRecord.coverage),
+      formalBarraReady: Boolean(attributionEvidenceRecord.formal_barra_ready),
+      barraDescriptorReady: Boolean(attributionEvidenceRecord.barra_descriptor_ready),
+    },
+    styleEvidence: {
+      status: textValue(styleEvidenceRecord.status) || 'unavailable',
+      scope: textValue(styleEvidenceRecord.scope),
+      quarter: textValue(styleEvidenceRecord.quarter),
+      labels: Array.isArray(styleEvidenceRecord.labels) ? styleEvidenceRecord.labels.map(textValue).filter(Boolean) : [],
+      memoLabels: Array.isArray(styleEvidenceRecord.memo_labels) ? styleEvidenceRecord.memo_labels.map(textValue).filter(Boolean) : [],
+    },
+    memoHighlights,
     periodPerformance: {
       status: textValue(periodPerformancePayload.status) || 'insufficient_evidence',
       navBasis: textValue(periodPerformancePayload.nav_basis),
