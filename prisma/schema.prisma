@@ -1357,3 +1357,50 @@ model IndustryReturn {
   @@index([industry])
   @@map("industry_returns")
 }
+
+// ============================================================
+// 投资论点结构化 (Investment Thesis) — 研究结论的容器
+// 每只重点研究基金能保存一份结构化论点：为什么买、卖出触发、有效期、
+// 支撑证据快照 ID、状态机与编辑历史，用于后续复盘和学习。
+// ============================================================
+enum InvestmentThesisState {
+  candidate
+  researching
+  observing
+  invalid
+  archived
+}
+
+model InvestmentThesis {
+  id           String                @id @default(uuid()) @db.Uuid
+  fundWindCode String                @map("fund_wind_code")
+  title        String
+  state        InvestmentThesisState @default(candidate)
+
+  coreReasoning Json    @default("[]") @map("core_reasoning")
+  sellTriggers  Json    @default("[]") @map("sell_triggers")
+  oneLiner      String? @map("one_liner")
+  counterView   String? @map("counter_view")
+  risks         Json    @default("[]")
+
+  validUntil        DateTime? @map("valid_until") @db.Date
+  nextReviewDate    DateTime? @map("next_review_date") @db.Date
+  reviewCadenceDays Int       @default(30) @map("review_cadence_days")
+
+  evidenceSnapshot Json @default("{}") @map("evidence_snapshot")
+
+  stateHistory Json @default("[]") @map("state_history")
+  editHistory  Json @default("[]") @map("edit_history")
+
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamptz
+  closedAt  DateTime? @map("closed_at") @db.Timestamptz
+
+  closeReason  String? @map("close_reason")
+  closeVerdict String? @map("close_verdict")
+
+  @@index([fundWindCode])
+  @@index([state])
+  @@index([nextReviewDate])
+  @@map("investment_theses")
+}

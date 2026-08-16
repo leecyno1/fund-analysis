@@ -1,6 +1,7 @@
 import {
   BadgeCheck,
   Bookmark,
+  BookMarked,
   Bot,
   BookOpenText,
   ChartNoAxesCombined,
@@ -49,6 +50,7 @@ export const fundWorkspaceNavigation: readonly FundWorkspaceNavigationGroup[] = 
   {
     label: '我的',
     items: [
+      { href: '/theses', label: '投资论点', shortLabel: '论点', icon: BookMarked, matches: ['/theses'] },
       { href: '/watchlist', label: '自选与候选', shortLabel: '自选', icon: Bookmark, matches: ['/watchlist'] },
       { href: '/analysis', label: 'AI 分析', shortLabel: 'AI', icon: Bot, matches: ['/analysis'] },
       { href: '/recommendations', label: '候选基金', shortLabel: '候选', icon: Tags, matches: ['/recommendations'] },
