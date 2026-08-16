@@ -216,7 +216,7 @@ export function applyNewmaDeskEnvironment(
 }
 
 function applyStandaloneEnvironment() {
-  const theme: NewmaDeskTheme = window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+  const theme: NewmaDeskTheme = document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light'
   applyNewmaDeskEnvironment({
     theme,
     locale: navigator.language || 'zh-CN',

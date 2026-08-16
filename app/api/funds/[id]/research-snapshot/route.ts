@@ -4,13 +4,20 @@ import { backendApiBaseUrl } from '@/lib/backend-api'
 export const dynamic = 'force-dynamic'
 
 export async function GET(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
     const { id } = await params
+    const requestUrl = new URL(request.url)
+    const query = new URLSearchParams()
+    for (const key of ['window', 'include_research', 'include_attribution', 'live_attribution']) {
+      const value = requestUrl.searchParams.get(key)
+      if (value) query.set(key, value)
+    }
+    const suffix = query.size ? `?${query.toString()}` : ''
     const response = await fetch(
-      `${backendApiBaseUrl}/api/funds/${encodeURIComponent(id)}/research-snapshot`,
+      `${backendApiBaseUrl}/api/funds/${encodeURIComponent(id)}/research-snapshot${suffix}`,
       { cache: 'no-store', signal: AbortSignal.timeout(120_000) },
     )
     const payload = await response.json().catch(() => ({}))
