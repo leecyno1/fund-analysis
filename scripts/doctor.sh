@@ -15,7 +15,7 @@ set +a
 
 DATABASE_URL="${DATABASE_URL:-postgresql://postgres:fundanalysis2024@localhost:5432/fund_analysis}"
 BACKEND_URL="${BACKEND_URL:-http://127.0.0.1:8005}"
-FRONTEND_URL="${FRONTEND_URL:-http://127.0.0.1:3001}"
+FRONTEND_URL="${FRONTEND_URL:-http://127.0.0.1:3000}"
 MIN_FUND_COUNT="${MIN_FUND_COUNT:-10000}"
 
 fail() {

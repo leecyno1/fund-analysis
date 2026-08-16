@@ -1,5 +1,5 @@
 const backendBaseUrl = process.env.BACKEND_API_URL || process.env.NEXT_PUBLIC_BACKEND_API_URL || 'http://127.0.0.1:8005'
-const frontendBaseUrl = process.env.FRONTEND_BASE_URL || 'http://127.0.0.1:3001'
+const frontendBaseUrl = process.env.FRONTEND_BASE_URL || 'http://127.0.0.1:3000'
 
 function parseArgs(argv) {
   const options = {

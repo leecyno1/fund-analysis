@@ -1,4 +1,4 @@
-const baseUrl = process.env.FRONTEND_BASE_URL || 'http://127.0.0.1:3001'
+const baseUrl = process.env.FRONTEND_BASE_URL || 'http://127.0.0.1:3000'
 
 async function fetchJson(url, options) {
   const response = await fetch(url, { cache: 'no-store', ...options })

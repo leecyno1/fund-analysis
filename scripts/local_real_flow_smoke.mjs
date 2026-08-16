@@ -1,4 +1,4 @@
-const baseUrl = process.env.LOCAL_APP_URL || process.env.FRONTEND_BASE_URL || 'http://127.0.0.1:3001'
+const baseUrl = process.env.LOCAL_APP_URL || process.env.FRONTEND_BASE_URL || 'http://127.0.0.1:3000'
 
 function assert(condition, message) {
   if (!condition) throw new Error(message)

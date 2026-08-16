@@ -19,7 +19,7 @@ if [[ -z "${TUSHARE_TOKEN:-}" ]]; then
 fi
 
 PYTHON_BIN=""
-for candidate in "${BACKEND_PYTHON:-}" "/opt/anaconda3/bin/python" "/usr/local/bin/python3" "/opt/homebrew/bin/python3" "$(command -v python3 || true)" "$(command -v python || true)"; do
+for candidate in "${BACKEND_PYTHON:-}" "$ROOT_DIR/.venv/bin/python" "/opt/anaconda3/bin/python" "/usr/local/bin/python3" "/opt/homebrew/bin/python3" "$(command -v python3 || true)" "$(command -v python || true)"; do
   if [[ -n "$candidate" && -x "$candidate" ]] && "$candidate" - <<'PY' >/dev/null 2>&1
 required = ["sqlalchemy", "psycopg2", "tushare", "pandas"]
 for module in required:

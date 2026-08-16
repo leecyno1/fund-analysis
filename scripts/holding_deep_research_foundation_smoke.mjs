@@ -43,6 +43,8 @@ for (const field of [
   'heavyPositionChanges',
   'overlapWeight',
   'jaccardScore',
+  'cosineSimilarity',
+  'same_quarter_top10_normalized_overlap_v1',
   'commonHoldings',
   'similarity',
 ]) {
@@ -55,6 +57,9 @@ assertIncludes(tool, '集中度', 'tool names concentration')
 assertIncludes(tool, '换手', 'tool names turnover')
 assertIncludes(tool, '重仓变化', 'tool names heavy position changes')
 assertIncludes(tool, '基金间持仓相似度', 'tool names fund holding similarity')
+assertIncludes(tool, '同一报告期前十大公开重仓股', 'tool limits similarity to aligned disclosed top-ten holdings')
+assertIncludes(tool, 'normalizedWeight', 'tool normalizes each fund top-ten weights before comparison')
+assertIncludes(tool, 'overlapWeight >= 0.55', 'tool uses the backend similarity threshold')
 assertIncludes(tool, '不能输出行业、主题、风格或相似度结论', 'tool blocks conclusions when holdings are missing')
 assertIncludes(tool, '不构成配置、交易或组合建议', 'tool keeps similarity in research-only scope')
 assertIncludes(tool, 'FUND_RESEARCH_GUARDRAILS.noTradingDirective', 'tool keeps research-only guardrail')

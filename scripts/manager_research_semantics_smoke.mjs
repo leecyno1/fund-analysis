@@ -22,22 +22,23 @@ const managerDetail = read('app/(dashboard)/managers/[id]/page.tsx')
 const reportsPage = read('app/(dashboard)/reports/page.tsx')
 
 for (const expected of [
-  '经理列表研究复核雷达',
-  '经理研究补证优先队列',
-  '经理入口短名单分',
-  '经理评价只负责缩小研究对象',
-  '材料核验完整度',
-  '研究方式假设',
+  '基金经理优选',
+  '先按基金类别找经理',
+  '专业分类',
+  '任期指标',
+  '调研纪要',
+  '补产品证据',
 ]) {
   assertIncludes(managerList, expected, `manager page uses research term ${expected}`)
 }
 
 for (const expected of [
-  '研究复核场景',
-  '经理入口研究评级',
-  '经理研究证据卡',
-  '名下基金研究队列',
-  '研究方式假设',
+  '当前管理基金与任期证据',
+  '产品任职全景',
+  '投资框架与风格画像',
+  '调研纪要与历史观点',
+  '复查事件',
+  '补研究材料',
 ]) {
   assertIncludes(managerDetail, expected, `manager detail uses research term ${expected}`)
 }

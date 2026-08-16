@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import ts from 'typescript'
 
@@ -25,14 +25,19 @@ const view = json('desk/views/fund-selection.view.json')
 const bridgeSource = read('lib/newma-desk/bridge.ts')
 const contextSource = read('lib/newma-desk/context.ts')
 const moduleSource = read('app/(desk)/mod/fund-research/[workspace]/FundResearchDeskModule.tsx')
+const adapterSource = read('lib/newma-desk/use-fund-research-desk-adapter.ts')
 const architecture = read('docs/architecture/professional-fund-research-module-v2.md')
 
 assert(suite.schemaVersion === '1.0', 'Suite schemaVersion must be 1.0')
 assert(suite.id === 'professional-fund-research-suite', 'Suite ID must remain stable')
 assert(suite.name === '基金选择助手', 'Suite must use the simple product name')
 assert(suite.runtime.defaultBaseUrl === 'http://127.0.0.1:3000', 'Suite must use the active frontend port')
+assert(!JSON.stringify(suite).includes('127.0.0.1:3001'), 'Fund Suite must never use the Orchestra port')
+assert(suite.agentWorkspace === undefined, 'Standalone project must not claim the Newma Desk source tree')
 assert(suite.manifest.schemaVersion === '1.1', 'Manifest must use version 1.1')
 assert(suite.manifest.compatibility.level === 3, 'Suite pages must keep Level 3 Context')
+assert(suite.manifest.navigation.directory?.id === suite.id, 'Suite must remain one complete Desk project')
+assert(suite.manifest.navigation.project?.id === 'fund-research', 'Suite must use the standard fund-research domain')
 assert(suite.pages.length === 5, 'Suite must expose five focused pages')
 assert(suite.pages.find((page) => page.id === 'fund-recommendations')?.name === '基金推荐', 'Suite must use the current recommendation name')
 
@@ -59,13 +64,18 @@ const permissions = new Set(suite.manifest.permissions)
 for (const [actionId, action] of Object.entries(suite.manifest.actions)) {
   assert(permissions.has(action.permission), `${actionId} permission is not declared`)
   assert(action.binding.type === 'data', `${actionId} must bind to a real data capability`)
+  assert(action.binding.service === 'fund-analysis-data', `${actionId} must use the isolated fund data service`)
   assert(dataService.capabilities[action.binding.capability], `${actionId} capability missing from data-service.json`)
 }
 
-assert(dataService.baseUrl === 'http://127.0.0.1:3000/api', 'Data service must use the active Next.js adapter')
-assert(dataService.healthPath === '/newma-desk/health', 'Health path must resolve below the /api base URL')
-assert(dataService.capabilities['fund.compare'].path === '/funds/research-compare', 'Desk compare must avoid purchase and suitability adapters')
-assert(read('app/api/fund-browser/route.ts').includes("url.searchParams.get('page_size')"), 'Desk fund search must honor its page_size schema')
+assert(dataService.id === 'fund-analysis-data', 'Desk data service must use the project-scoped ID')
+assert(dataService.baseUrl === 'http://127.0.0.1:8005/api/newma-desk', 'Data service must use the real fund backend')
+assert(dataService.healthPath === '/health', 'Health path must resolve below the Newma backend adapter')
+assert(dataService.capabilities['fund.compare'].path === '/fund-compare', 'Desk compare must use the fixed Newma capability route')
+assert(read('backend/routes/newma_desk.py').includes('FundBrowserService().browse'), 'Desk fund search must call the real fund browser service')
+assert(read('backend/routes/newma_desk.py').includes('PerformanceAttributionService().analyze'), 'Desk attribution must call the real attribution service')
+assert(!existsSync(join(root, 'scripts/register_newma_desk.mjs')), 'Fund project must not publish itself into Desk')
+assert(!read('package.json').includes('newma:register'), 'Package scripts must not bypass desk-mods review')
 assert(!JSON.stringify(suite).match(/DATABASE_URL|api[_-]?key|secret|token/i), 'Suite must not expose credentials')
 assert(!JSON.stringify(dataService).match(/DATABASE_URL|api[_-]?key|secret|token/i), 'Data descriptor must not expose credentials')
 
@@ -74,7 +84,7 @@ assert(view.blocks.some((block) => block.type === 'table'), 'View must expose ca
 assert(view.blocks.some((block) => block.type === 'actions'), 'View must expose actions')
 
 const forbidden = ['fund.due-diligence.evaluate', 'fund.monitoring.review', 'fund.methodology.audit', '准入初筛', '尽调工作台', '监控复核', '每日基金研究驾驶舱']
-const activeDeskSurface = [JSON.stringify(suite), contextSource, moduleSource].join('\n')
+const activeDeskSurface = [JSON.stringify(suite), contextSource, moduleSource, adapterSource].join('\n')
 for (const phrase of forbidden) assert(!activeDeskSurface.includes(phrase), `Removed Desk concept returned: ${phrase}`)
 
 for (const phrase of [
@@ -83,9 +93,9 @@ for (const phrase of [
 ]) assert(contextSource.includes(phrase), `Context missing: ${phrase}`)
 
 for (const phrase of [
-  'data-vibe-page="1.0"', 'data-vibe-block-id="fund-selection-capabilities"',
-  'data-vibe-block-id="fund-selection-actions"', 'security.selected', 'publishContext', '不生成虚构数据',
-]) assert(moduleSource.includes(phrase), `Desk module missing: ${phrase}`)
+  'data-vibe-page="1.0"', 'data-vibe-mod-id={workspace.modId}',
+  'security.selected', 'publishContext', '{children}',
+]) assert([moduleSource, adapterSource].some((source) => source.includes(phrase)), `Desk module missing: ${phrase}`)
 
 const bridge = loadTypeScriptModule('lib/newma-desk/bridge.ts')
 const hello = bridge.buildHelloMessage('fund-discover')

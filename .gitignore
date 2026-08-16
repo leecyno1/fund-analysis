@@ -54,6 +54,9 @@ __pycache__/
 # local agent/runtime state
 .jiebang/
 
+# persistent local database/runtime data
+/.data/
+
 # generated browser test reports
 frontend/test_report_*.json
 /.playwright-cli/

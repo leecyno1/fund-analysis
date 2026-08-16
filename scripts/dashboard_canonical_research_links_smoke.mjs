@@ -20,7 +20,9 @@ function assertNotIncludes(content, unexpected, label) {
 const dashboard = read('app/(dashboard)/page.tsx')
 const acceptance = read('scripts/fund_research_acceptance_smoke.mjs')
 
-assertIncludes(dashboard, "redirect('/discover')", 'root page opens the simple fund browser')
+assertIncludes(dashboard, 'Fund selection home', 'root page keeps the ordinary-user fund selection home')
+assertIncludes(dashboard, 'form action="/discover"', 'root page exposes the simple fund search entry')
+assertIncludes(dashboard, "href: '/discover'", 'root page links to the simple fund browser')
 
 for (const staleDirectLink of [
   'href="/investor-selection"',
@@ -35,4 +37,4 @@ for (const staleDirectLink of [
 
 assertIncludes(acceptance, 'dashboard_canonical_research_links_smoke.mjs', 'main acceptance includes dashboard canonical link smoke')
 
-console.log('OK root page routes ordinary users directly to the simple fund browser')
+console.log('OK root page gives ordinary users a simple fund-selection home and browser entry')

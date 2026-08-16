@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process'
 
-const baseUrl = process.env.FRONTEND_BASE_URL || 'http://127.0.0.1:3001'
+const baseUrl = process.env.FRONTEND_BASE_URL || 'http://127.0.0.1:3000'
 
 const staticChecks = [
   'scripts/fund_research_scope_smoke.mjs',
@@ -64,6 +64,7 @@ const staticChecks = [
   'scripts/report_generation_trust_smoke.mjs',
   'scripts/report_search_embedding_trust_smoke.mjs',
   'scripts/fund_research_trading_copy_guard_smoke.mjs',
+  'scripts/fund_comparison_smoke.mjs',
   'scripts/local_research_library_flow_smoke.mjs',
 ]
 
