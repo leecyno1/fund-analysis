@@ -57,6 +57,10 @@ __pycache__/
 # persistent local database/runtime data
 /.data/
 
+# scheduled_update.sh runtime state
+/logs/
+/.scheduled_update.locks/
+
 # generated browser test reports
 frontend/test_report_*.json
 /.playwright-cli/
