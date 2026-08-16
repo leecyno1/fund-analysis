@@ -104,6 +104,11 @@ function n(value: number) {
   return Number(value || 0).toLocaleString('zh-CN')
 }
 
+const PASSIVE_PREFIXES = ['指数-', '指数增强-', 'QDII-', '货币-']
+function isPassiveGroup(name: string) {
+  return PASSIVE_PREFIXES.some((prefix) => name.startsWith(prefix))
+}
+
 function formatMemoDate(memo: Memo) {
   const value = memo.report_date?.slice(0, 10)
   if (!value) return '—'
@@ -148,11 +153,11 @@ export default async function HomePage() {
           {/* 同类组覆盖 */}
           <section className="border border-[#d9dfda] bg-white">
             <header className="flex items-center justify-between border-b border-[#eaedea] px-4 py-2">
-              <span className="flex items-center gap-1.5 text-xs font-bold text-[#1f2d26]"><BarChart3 className="h-3.5 w-3.5 text-[#4a7c64]" />同类评价覆盖</span>
+              <span className="flex items-center gap-1.5 text-xs font-bold text-[#1f2d26]"><BarChart3 className="h-3.5 w-3.5 text-[#4a7c64]" />主动基金评价覆盖</span>
               <Link href="/recommendations" className="text-[11px] text-[#4a7c64] hover:underline">全部类别</Link>
             </header>
             <div className="grid gap-px bg-[#eaedea] sm:grid-cols-2 lg:grid-cols-3">
-              {data.featured_peer_groups.length ? data.featured_peer_groups.map((group) => (
+              {data.featured_peer_groups.filter((g) => !isPassiveGroup(g.name)).length ? data.featured_peer_groups.filter((g) => !isPassiveGroup(g.name)).map((group) => (
                 <Link key={group.key} href={group.href} className="bg-white px-3 py-2.5 hover:bg-[#f7faf8]">
                   <div className="truncate text-xs font-medium text-[#1f2d26]">{group.name}</div>
                   <div className="mt-1.5 flex items-baseline gap-2 text-[11px] text-[#748079]">

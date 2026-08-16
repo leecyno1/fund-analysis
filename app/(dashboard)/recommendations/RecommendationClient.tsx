@@ -4,7 +4,7 @@ import Link from 'next/link'
 import { useEffect, useMemo, useState } from 'react'
 import { ArrowRight, BookmarkPlus, Bot, CheckCircle2, CircleAlert, GitCompareArrows, LoaderCircle, Tags, X } from 'lucide-react'
 import type { CamelFund } from '@/lib/backend-api'
-import { fundCategoryPresets } from '@/lib/fund-category-presets'
+import { primaryPresets } from '@/lib/fund-category-presets'
 import {
   bondHoldingEvidence,
   baseFeeRate,
@@ -133,7 +133,7 @@ export default function RecommendationClient({ initialFunds, initialCategories, 
     : Array.from(new Set(universe.map((fund) => peerGroup(fund)).filter((value) => value !== '类别待确认'))),
   [initialCategories, universe])
   const quickCategories = useMemo(
-    () => fundCategoryPresets.filter((preset) => categories.includes(preset.category)),
+    () => primaryPresets.filter((preset) => categories.includes(preset.category)),
     [categories],
   )
   const [category, setCategory] = useState(initialCategory)
@@ -301,10 +301,10 @@ export default function RecommendationClient({ initialFunds, initialCategories, 
         <section>
           <div className="mb-3 flex flex-wrap items-end justify-between gap-3">
             <div>
-              <h2 className="text-lg font-bold text-[#1e2d26]">你想先看哪一类？</h2>
-              <p className="mt-1 text-xs leading-6 text-[#76817b]">不需要先懂基金分类，点一个常见方向就能看候选。</p>
+              <h2 className="text-lg font-bold text-[#1e2d26]">主动基金候选</h2>
+              <p className="mt-1 text-xs leading-6 text-[#76817b]">按同类组做分类内评价，排名限于同一 peer group。</p>
             </div>
-            <span className="text-xs font-bold text-[#28745c]">一次只比同类基金</span>
+            <span className="text-xs font-bold text-[#28745c]">同类组内评价</span>
           </div>
           <div className="grid gap-px overflow-hidden border border-[#d7ddd8] bg-[#d7ddd8] sm:grid-cols-2 xl:grid-cols-3">
             {quickCategories.map((preset) => {
@@ -329,8 +329,8 @@ export default function RecommendationClient({ initialFunds, initialCategories, 
 
       <section className="grid gap-5 border border-[#dbe1dc] bg-white p-5 md:grid-cols-2">
         <label className="block">
-          <span className="text-sm font-bold">更多专业分类</span>
-          <span className="mt-1 block text-xs text-[#7a8580]">需要更细的指数、债券或配置类别时再使用</span>
+          <span className="text-sm font-bold">指数 / 被动工具 / 其他分类</span>
+          <span className="mt-1 block text-xs text-[#7a8580]">被动指数仅评判跟踪误差、费率和规模，不做选基推荐</span>
           <select value={category} onChange={(event) => void chooseCategory(event.target.value)} className="mt-3 h-11 w-full rounded-md border border-[#cfd6d0] bg-white px-3 text-sm outline-none focus:border-[#28745c]">
             <option value="">请选择一个基金类别</option>
             {categories.map((item) => <option key={item} value={item}>{item}</option>)}
