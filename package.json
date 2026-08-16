@@ -21,6 +21,7 @@
     "smoke:watchlist": "node scripts/watchlist_smoke.mjs",
     "smoke:fund-recommendations": "node scripts/fund_recommendation_flow_smoke.mjs",
     "smoke:holding-style-peer": "node scripts/holding_style_peer_evidence_smoke.mjs",
+    "smoke:analysis-evidence-metadata": "node --experimental-strip-types --disable-warning=ExperimentalWarning --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/analysis_evidence_metadata_smoke.mjs",
     "desk:check": "node scripts/newma_desk_fund_research_compat_smoke.mjs",
     "research:real-data-report": "node scripts/fund_research_real_data_report.mjs",
     "research:sync-ima": "bash scripts/sync_ima_research_library.sh",
