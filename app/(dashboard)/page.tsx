@@ -1,12 +1,10 @@
 import Link from 'next/link'
 import {
-  ArrowRight,
+  AlertCircle,
   BarChart3,
-  Bookmark,
   BookOpenText,
-  Bot,
+  ClipboardCheck,
   Search,
-  Tags,
   UserRoundSearch,
 } from 'lucide-react'
 import { backendApiBaseUrl } from '@/lib/backend-api'
@@ -79,10 +77,14 @@ const emptySummary: HomeSummary = {
 
 async function loadHome() {
   try {
-    const response = await fetch(`${backendApiBaseUrl}/api/home`, { cache: 'no-store' })
-    const payload = await response.json().catch(() => ({}))
-    if (!response.ok) throw new Error(payload.detail || 'home unavailable')
-    return { data: payload as HomePayload, error: '' }
+    const [homeRes, pendingRes] = await Promise.all([
+      fetch(`${backendApiBaseUrl}/api/home`, { cache: 'no-store' }),
+      fetch(`${backendApiBaseUrl}/api/data-health/pending-queue`, { cache: 'no-store' }),
+    ])
+    const payload = await homeRes.json().catch(() => ({}))
+    if (!homeRes.ok) throw new Error(payload.detail || 'home unavailable')
+    const pendingPayload = pendingRes.ok ? await pendingRes.json().catch(() => ({})) : {}
+    return { data: payload as HomePayload, pendingCount: Number(pendingPayload.total || 0), error: '' }
   } catch {
     return {
       data: {
@@ -92,145 +94,165 @@ async function loadHome() {
         featured_managers: [],
         latest_research_memos: [],
       } satisfies HomePayload,
-      error: '本地基金数据库暂时无法连接，请先启动后端服务。',
+      pendingCount: 0,
+      error: '后端服务未连接',
     }
   }
 }
 
-function numberText(value: number) {
+function n(value: number) {
   return Number(value || 0).toLocaleString('zh-CN')
 }
 
 function formatMemoDate(memo: Memo) {
   const value = memo.report_date?.slice(0, 10)
-  if (!value) return '日期待确认'
+  if (!value) return '—'
   if (memo.report_date_precision === 'quarter') {
     const month = Number(value.slice(5, 7))
-    return `${value.slice(0, 4)} Q${Math.floor((month - 1) / 3) + 1}`
+    return `${value.slice(0, 4)}Q${Math.floor((month - 1) / 3) + 1}`
   }
-  if (memo.report_date_precision === 'month') return `${value.slice(0, 7)} 月`
+  if (memo.report_date_precision === 'month') return value.slice(0, 7)
   return value
 }
 
 export default async function HomePage() {
-  const { data, error } = await loadHome()
-  const summary = data.summary || emptySummary
+  const { data, pendingCount, error } = await loadHome()
+  const s = data.summary || emptySummary
 
   return (
-    <div className="space-y-8">
-      <section className="relative overflow-hidden border border-[#c9d5ce] bg-[#173f35] px-6 py-9 text-white sm:px-9 sm:py-12">
-        <div className="absolute -right-28 -top-28 h-80 w-80 rounded-full border border-white/10" />
-        <div className="absolute right-16 top-20 h-40 w-40 rounded-full border border-white/10" />
-        <div className="relative grid gap-9 xl:grid-cols-[minmax(0,1fr)_390px] xl:items-end">
-          <div className="max-w-3xl">
-            <p className="text-xs font-bold uppercase tracking-[0.16em] text-[#a9d0bf]">Fund selection home</p>
-            <h1 className="mt-4 text-4xl font-bold tracking-tight sm:text-5xl">先找基金，再看懂它</h1>
-            <p className="mt-5 max-w-2xl text-sm leading-7 text-[#dbe7e1] sm:text-base">
-              从基金、经理或调研纪要进入；分类、同类评价和业绩归因在后台完成，缺少证据时会明确告诉你。
-            </p>
-            <form action="/discover" className="mt-7 grid max-w-2xl gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
-              <label className="relative block">
-                <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-[#71867c]" />
-                <input name="search" type="search" placeholder="输入基金名称或代码" className="h-12 w-full border border-white/20 bg-white pl-11 pr-4 text-sm text-[#18231e] outline-none focus:border-[#9ac2b0]" />
-              </label>
-              <button type="submit" className="h-12 bg-[#e8c475] px-7 text-sm font-bold text-[#243027] hover:bg-[#f0d493]">查找基金</button>
-            </form>
-            <div className="mt-4 flex flex-wrap gap-x-5 gap-y-2 text-xs text-[#bed4ca]">
-              <Link href="/managers" className="hover:text-white">按基金经理查找</Link>
-              <Link href="/companies" className="hover:text-white">按基金公司查找</Link>
-              <Link href="/research" className="hover:text-white">搜索调研纪要</Link>
+    <div className="space-y-4">
+      {/* ─── 顶部：搜索 + 数据概览 ─── */}
+      <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_auto]">
+        <form action="/discover" className="flex h-9 items-center border border-[#d4dbd6] bg-white">
+          <Search className="ml-3 h-3.5 w-3.5 shrink-0 text-[#8b978f]" />
+          <input name="search" type="search" placeholder="基金名称 / 代码 / 经理 / 公司" className="h-full min-w-0 flex-1 bg-transparent px-2.5 text-xs outline-none placeholder:text-[#a3ada7]" />
+          <button type="submit" className="h-full border-l border-[#d4dbd6] bg-[#f5f7f5] px-4 text-xs font-medium text-[#3d5347] hover:bg-[#eaf0eb]">搜索</button>
+        </form>
+        <div className="flex items-center gap-px overflow-hidden border border-[#d4dbd6] bg-[#d4dbd6] text-xs">
+          <Stat label="份额" value={n(s.fund_share_count)} />
+          <Stat label="已分类" value={n(s.classified_fund_count)} />
+          <Stat label="可评价" value={n(s.recommendation_ready_fund_count)} />
+          <Stat label="可出候选" value={`${s.recommendation_ready_category_count} 类`} />
+          <Stat label="经理" value={n(s.fund_manager_count)} />
+          <Stat label="纪要" value={n(s.research_memo_count)} />
+          <Stat label="自选" value={n(s.watchlist_fund_count)} />
+        </div>
+      </div>
+
+      {error ? <div className="flex items-center gap-2 border border-[#e4c78e] bg-[#fef9ee] px-3 py-2 text-xs text-[#78571f]"><AlertCircle className="h-3.5 w-3.5 shrink-0" />{error}</div> : null}
+
+      {/* ─── 主体三栏 ─── */}
+      <div className="grid gap-3 xl:grid-cols-[minmax(0,1.4fr)_minmax(320px,.6fr)]">
+        {/* 左列：同类组 + 纪要 */}
+        <div className="space-y-3">
+          {/* 同类组覆盖 */}
+          <section className="border border-[#d9dfda] bg-white">
+            <header className="flex items-center justify-between border-b border-[#eaedea] px-4 py-2">
+              <span className="flex items-center gap-1.5 text-xs font-bold text-[#1f2d26]"><BarChart3 className="h-3.5 w-3.5 text-[#4a7c64]" />同类评价覆盖</span>
+              <Link href="/recommendations" className="text-[11px] text-[#4a7c64] hover:underline">全部类别</Link>
+            </header>
+            <div className="grid gap-px bg-[#eaedea] sm:grid-cols-2 lg:grid-cols-3">
+              {data.featured_peer_groups.length ? data.featured_peer_groups.map((group) => (
+                <Link key={group.key} href={group.href} className="bg-white px-3 py-2.5 hover:bg-[#f7faf8]">
+                  <div className="truncate text-xs font-medium text-[#1f2d26]">{group.name}</div>
+                  <div className="mt-1.5 flex items-baseline gap-2 text-[11px] text-[#748079]">
+                    <span>{group.classified_fund_count}</span>
+                    <span className="font-bold text-[#2b6b4f]">{group.recommendation_ready_fund_count} 可评价</span>
+                    {group.style_ready_fund_count ? <span>{group.style_ready_fund_count} 有风格</span> : null}
+                  </div>
+                </Link>
+              )) : <div className="col-span-full px-4 py-6 text-center text-xs text-[#8b978f]">暂无可用同类组</div>}
             </div>
-          </div>
-          <div className="grid grid-cols-2 gap-px overflow-hidden border border-white/20 bg-white/20 text-[#18231e]">
-            <div className="bg-[#f7f5ed] p-5"><strong className="block text-2xl">{numberText(summary.fund_share_count)}</strong><span className="mt-1 block text-[11px] text-[#68756e]">基金份额</span></div>
-            <div className="bg-[#f7f5ed] p-5"><strong className="block text-2xl">{numberText(summary.fund_manager_count)}</strong><span className="mt-1 block text-[11px] text-[#68756e]">基金经理</span></div>
-            <div className="bg-[#f7f5ed] p-5"><strong className="block text-2xl">{numberText(summary.research_memo_count)}</strong><span className="mt-1 block text-[11px] text-[#68756e]">调研纪要</span></div>
-            <div className="bg-[#f7f5ed] p-5"><strong className="block text-2xl">{numberText(summary.recommendation_ready_category_count)}</strong><span className="mt-1 block text-[11px] text-[#68756e]">可生成候选的类别</span></div>
-          </div>
-        </div>
-      </section>
+          </section>
 
-      {error ? <div className="border border-[#e6c9a0] bg-[#fff8ec] px-5 py-4 text-sm text-[#7c5b2d]">{error}</div> : null}
-
-      <section>
-        <div className="mb-4 flex items-end justify-between gap-4">
-          <div><h2 className="text-xl font-bold">从这里开始</h2><p className="mt-1 text-xs text-[#748079]">一次只做一件事，复杂方法留在后台。</p></div>
-        </div>
-        <div className="grid gap-px overflow-hidden border border-[#d7ded9] bg-[#d7ded9] sm:grid-cols-2 xl:grid-cols-4">
-          {[
-            { href: '/discover', icon: Search, title: '找一只基金', detail: '看净值、收益、回撤、经理和同类位置' },
-            { href: '/recommendations', icon: Tags, title: '看同类候选', detail: `已有 ${summary.recommendation_ready_fund_count} 只基金通过类别证据门槛` },
-            { href: '/research', icon: BookOpenText, title: '读经理纪要', detail: '按经理归档原文、标签和人工确认结果' },
-            { href: '/watchlist', icon: Bookmark, title: '查看我的自选', detail: summary.watchlist_fund_count ? `已收藏 ${summary.watchlist_fund_count} 只基金` : '把感兴趣的基金放在一起继续研究' },
-          ].map((item) => {
-            const Icon = item.icon
-            return (
-              <Link key={item.href} href={item.href} className="group bg-white p-5 transition hover:bg-[#f3f7f4]">
-                <span className="grid h-10 w-10 place-items-center bg-[#e7efe9] text-[#28624e]"><Icon className="h-5 w-5" /></span>
-                <strong className="mt-5 block text-base text-[#1f2d26] group-hover:text-[#28624e]">{item.title}</strong>
-                <span className="mt-2 block text-xs leading-6 text-[#748079]">{item.detail}</span>
-                <ArrowRight className="mt-5 h-4 w-4 text-[#8c9992] transition group-hover:translate-x-1 group-hover:text-[#28624e]" />
-              </Link>
-            )
-          })}
-        </div>
-      </section>
-
-      <section className="grid gap-6 xl:grid-cols-[minmax(0,1.25fr)_minmax(360px,.75fr)]">
-        <div className="border border-[#d9e0db] bg-white p-5 sm:p-6">
-          <div className="flex flex-wrap items-end justify-between gap-3">
-            <div><div className="flex items-center gap-2 text-xs font-bold text-[#28745c]"><BarChart3 className="h-4 w-4" />同类候选入口</div><h2 className="mt-2 text-2xl font-bold">哪些类别现在能用</h2></div>
-            <Link href="/recommendations" className="text-xs font-bold text-[#28745c]">查看全部<ArrowRight className="ml-1 inline h-3.5 w-3.5" /></Link>
-          </div>
-          <p className="mt-2 text-xs leading-6 text-[#748079]">只展示分类和关键量化证据已经齐全的同类组，不跨类别排名。</p>
-          <div className="mt-5 grid gap-3 sm:grid-cols-2">
-            {data.featured_peer_groups.length ? data.featured_peer_groups.map((group) => (
-              <Link key={group.key} href={group.href} className="group border border-[#e0e5e1] bg-[#fafbf9] p-4 hover:border-[#8eb09f]">
-                <div className="flex items-start justify-between gap-3"><strong className="text-sm text-[#27362f] group-hover:text-[#28745c]">{group.name}</strong><ArrowRight className="h-4 w-4 shrink-0 text-[#9aa59f]" /></div>
-                <div className="mt-4 flex flex-wrap gap-3 text-[11px] text-[#748079]"><span>{group.classified_fund_count} 只同类基金</span><span className="font-bold text-[#28745c]">{group.recommendation_ready_fund_count} 只可评价</span>{group.style_ready_fund_count ? <span>{group.style_ready_fund_count} 只有风格证据</span> : null}</div>
-              </Link>
-            )) : <div className="sm:col-span-2 border border-dashed border-[#cbd3cd] px-5 py-12 text-center text-sm text-[#748079]">暂无可用同类候选，需先补齐真实量化指标。</div>}
-          </div>
+          {/* 最近纪要 */}
+          <section className="border border-[#d9dfda] bg-white">
+            <header className="flex items-center justify-between border-b border-[#eaedea] px-4 py-2">
+              <span className="flex items-center gap-1.5 text-xs font-bold text-[#1f2d26]"><BookOpenText className="h-3.5 w-3.5 text-[#4a7c64]" />最近入库纪要</span>
+              <Link href="/research" className="text-[11px] text-[#4a7c64] hover:underline">全部</Link>
+            </header>
+            <div className="divide-y divide-[#eef1ee]">
+              {data.latest_research_memos.length ? data.latest_research_memos.map((memo) => {
+                const labels = [...(memo.classifications || []), ...(memo.style_labels || []), ...(memo.tags || [])].slice(0, 5)
+                return (
+                  <Link key={memo.id} href={memo.href} className="flex gap-3 px-4 py-2.5 hover:bg-[#f7faf8]">
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-xs font-medium text-[#1f2d26]">{memo.title || '无标题'}</div>
+                      <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-[#748079]">
+                        <span className="font-medium text-[#3d5347]">{memo.manager_name || '经理待确认'}</span>
+                        <span>{formatMemoDate(memo)}</span>
+                        {labels.map((label) => <span key={label} className="bg-[#f0f3f0] px-1.5 py-0.5 text-[10px]">{label}</span>)}
+                      </div>
+                      {memo.summary ? <div className="mt-1 line-clamp-1 text-[11px] text-[#8b978f]">{memo.summary}</div> : null}
+                    </div>
+                  </Link>
+                )
+              }) : <div className="px-4 py-6 text-center text-xs text-[#8b978f]">纪要库为空</div>}
+            </div>
+          </section>
         </div>
 
-        <div className="border border-[#d9e0db] bg-white p-5 sm:p-6">
-          <div className="flex items-center justify-between gap-3"><div><div className="flex items-center gap-2 text-xs font-bold text-[#28745c]"><UserRoundSearch className="h-4 w-4" />经理研究</div><h2 className="mt-2 text-2xl font-bold">近期研究覆盖较完整</h2></div><Link href="/managers" className="text-xs font-bold text-[#28745c]">更多</Link></div>
-          <div className="mt-5 divide-y divide-[#e8ece9]">
-            {data.featured_managers.length ? data.featured_managers.map((manager) => (
-              <Link key={manager.id} href={`/managers/${encodeURIComponent(manager.id)}`} className="flex items-center gap-4 py-4 first:pt-0 last:pb-0">
-                <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-[#e8f0eb] text-sm font-bold text-[#28624e]">{manager.name?.slice(0, 1) || '经'}</span>
-                <span className="min-w-0 flex-1"><strong className="block truncate text-sm">{manager.name || '姓名待补'}</strong><span className="mt-1 block truncate text-xs text-[#748079]">{manager.company || '基金公司待补'} · {(manager.category_labels || []).join(' / ') || '分类待补'}</span></span>
-                <span className="text-right text-[11px] text-[#748079]"><strong className="block text-sm text-[#8a6b31]">{manager.memo_count || 0}</strong>份纪要</span>
-              </Link>
-            )) : <div className="py-10 text-center text-sm text-[#748079]">暂无经理研究摘要。</div>}
-          </div>
-        </div>
-      </section>
+        {/* 右列：经理研究 + 快捷入口 */}
+        <div className="space-y-3">
+          {/* 经理研究 */}
+          <section className="border border-[#d9dfda] bg-white">
+            <header className="flex items-center justify-between border-b border-[#eaedea] px-4 py-2">
+              <span className="flex items-center gap-1.5 text-xs font-bold text-[#1f2d26]"><UserRoundSearch className="h-3.5 w-3.5 text-[#4a7c64]" />经理研究覆盖</span>
+              <Link href="/managers" className="text-[11px] text-[#4a7c64] hover:underline">全部</Link>
+            </header>
+            <div className="divide-y divide-[#eef1ee]">
+              {data.featured_managers.length ? data.featured_managers.map((manager) => (
+                <Link key={manager.id} href={`/managers/${encodeURIComponent(manager.id)}`} className="flex items-center gap-3 px-4 py-2 hover:bg-[#f7faf8]">
+                  <span className="grid h-7 w-7 shrink-0 place-items-center bg-[#eaf2ed] text-[11px] font-bold text-[#2b6b4f]">{manager.name?.slice(0, 1) || '?'}</span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-xs font-medium text-[#1f2d26]">{manager.name || '—'}</span>
+                    <span className="block truncate text-[11px] text-[#748079]">{manager.company || ''} {(manager.category_labels || []).join('/')}</span>
+                  </span>
+                  <span className="text-right text-[11px]">
+                    <strong className="text-[#8a6b31]">{manager.memo_count || 0}</strong><span className="text-[#a3ada7]"> 纪要</span>
+                  </span>
+                </Link>
+              )) : <div className="px-4 py-6 text-center text-xs text-[#8b978f]">暂无</div>}
+            </div>
+          </section>
 
-      <section className="border border-[#d9e0db] bg-white p-5 sm:p-6">
-        <div className="flex flex-wrap items-end justify-between gap-3">
-          <div><div className="flex items-center gap-2 text-xs font-bold text-[#28745c]"><BookOpenText className="h-4 w-4" />调研纪要库</div><h2 className="mt-2 text-2xl font-bold">最近入库的基金经理纪要</h2></div>
-          <Link href="/research" className="text-xs font-bold text-[#28745c]">打开调研库<ArrowRight className="ml-1 inline h-3.5 w-3.5" /></Link>
+          {/* 快捷入口 */}
+          <section className="border border-[#d9dfda] bg-white">
+            <header className="border-b border-[#eaedea] px-4 py-2 text-xs font-bold text-[#1f2d26]">快捷入口</header>
+            <nav className="grid grid-cols-2 gap-px bg-[#eaedea]">
+              <QuickLink href="/discover" label="基金浏览器" sub="搜索/筛选/净值" />
+              <QuickLink href="/compare" label="同类比较" sub="多基金对齐分析" />
+              <QuickLink href="/evaluation" label="评价与分类" sub="分类内同类评分" />
+              <QuickLink href="/analysis/advanced" label="业绩归因" sub="Brinson/Barra" />
+              <QuickLink href="/analysis" label="AI 研究分析" sub="按需运行" />
+              <QuickLink href="/recommendations" label="候选生成" sub="按类别/风格" />
+              <QuickLink href="/watchlist" label="自选分组" sub={s.watchlist_fund_count ? `${s.watchlist_fund_count} 只` : '—'} />
+              <QuickLink href="/research/pending" label="待确认" sub={`${pendingCount} 项`} icon={<ClipboardCheck className="h-3 w-3 text-[#8a6b31]" />} />
+            </nav>
+          </section>
         </div>
-        <div className="mt-5 grid gap-3 lg:grid-cols-2">
-          {data.latest_research_memos.length ? data.latest_research_memos.map((memo) => {
-            const labels = [...(memo.classifications || []), ...(memo.style_labels || []), ...(memo.tags || [])].slice(0, 4)
-            return (
-              <Link key={memo.id} href={memo.href} className="group border border-[#e0e5e1] p-5 hover:border-[#8eb09f]">
-                <div className="flex flex-wrap items-center gap-2 text-[11px] text-[#78847d]"><span>{memo.manager_name || '经理待确认'}</span><span>·</span><span>{formatMemoDate(memo)}</span><span>·</span><span>{memo.source || '本地纪要'}</span></div>
-                <h3 className="mt-3 line-clamp-2 font-bold leading-6 text-[#25332c] group-hover:text-[#28745c]">{memo.title || '无标题纪要'}</h3>
-                {memo.summary ? <p className="mt-2 line-clamp-2 text-xs leading-6 text-[#6d7972]">{memo.summary}</p> : null}
-                {labels.length ? <div className="mt-4 flex flex-wrap gap-2">{labels.map((label) => <span key={label} className="bg-[#f0f3f0] px-2 py-1 text-[10px] text-[#5f6d65]">{label}</span>)}</div> : null}
-              </Link>
-            )
-          }) : <div className="lg:col-span-2 border border-dashed border-[#cbd3cd] px-5 py-12 text-center text-sm text-[#748079]">调研纪要库尚无资料。</div>}
-        </div>
-      </section>
-
-      <section className="flex flex-col gap-5 border border-[#d7ded9] bg-[#eef3ef] p-6 sm:flex-row sm:items-center sm:justify-between">
-        <div><div className="flex items-center gap-2 text-xs font-bold text-[#28745c]"><Bot className="h-4 w-4" />按需分析</div><h2 className="mt-2 text-xl font-bold">选定基金后，再让 AI 综合评价</h2><p className="mt-2 text-xs leading-6 text-[#68756e]">AI 会读取分类内评价、业绩归因和调研纪要；输出范围止于基金研究评价。</p></div>
-        <Link href="/analysis" className="inline-flex h-11 shrink-0 items-center justify-center gap-2 bg-[#173f35] px-5 text-sm font-bold text-white">运行一次分析<ArrowRight className="h-4 w-4" /></Link>
-      </section>
+      </div>
     </div>
+  )
+}
+
+function Stat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="bg-white px-3 py-2 text-center">
+      <div className="text-sm font-bold text-[#1f2d26]">{value}</div>
+      <div className="text-[10px] text-[#748079]">{label}</div>
+    </div>
+  )
+}
+
+function QuickLink({ href, label, sub, icon }: { href: string; label: string; sub: string; icon?: React.ReactNode }) {
+  return (
+    <Link href={href} className="flex items-center gap-2 bg-white px-3 py-2.5 hover:bg-[#f7faf8]">
+      {icon || null}
+      <div className="min-w-0">
+        <div className="truncate text-xs font-medium text-[#1f2d26]">{label}</div>
+        <div className="truncate text-[10px] text-[#8b978f]">{sub}</div>
+      </div>
+    </Link>
   )
 }
