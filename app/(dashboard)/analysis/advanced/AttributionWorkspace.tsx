@@ -26,6 +26,20 @@ type BarraEvidence = {
   r_squared?: number | null
   holdings_count?: number
   holdings_disclosed_weight?: number
+  public_risk_model?: {
+    status?: Status
+    is_formal_barra?: boolean
+    observations?: number
+    fund_nav_coverage?: number
+    portfolio_beta?: number
+    observed_volatility?: number
+    modeled_volatility?: number
+    market_factor_volatility?: number
+    specific_volatility?: number
+    modeled_r_squared?: number | null
+    risk_contributions?: Array<{ factor: string; label: string; risk_share?: number | null }>
+    missing_items?: string[]
+  }
   missing_items?: string[]
 }
 
@@ -78,6 +92,19 @@ type AttributionBundle = {
   nav_return_attribution: NavEvidence
 }
 
+type AttributionHistoryItem = {
+  quarter?: string
+  holding_quarter?: string
+  benchmark_id?: string
+  status?: Status
+  active_return?: number | string | null
+  allocation_effect?: number | string | null
+  selection_effect?: number | string | null
+  residual?: number | string | null
+  evidence?: Record<string, unknown> | null
+  updated_at?: string
+}
+
 const statusCopy: Record<Status, { label: string; tone: string }> = {
   ok: { label: '正式结果可用', tone: 'bg-[#e4f1ea] text-[#1f684e]' },
   partial_evidence: { label: '部分证据可用', tone: 'bg-[#fff3d8] text-[#815a16]' },
@@ -87,6 +114,25 @@ const statusCopy: Record<Status, { label: string; tone: string }> = {
 
 function formatPercent(value?: number | null, digits = 2) {
   return value == null || Number.isNaN(value) ? '—' : `${(value * 100).toFixed(digits)}%`
+}
+
+function numberValue(value: number | string | null | undefined) {
+  if (value == null || value === '') return null
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
+function savedBundle(item?: AttributionHistoryItem): AttributionBundle | null {
+  const evidence = item?.evidence
+  if (!evidence || typeof evidence !== 'object' || Array.isArray(evidence)) return null
+  if (!evidence.barra || !evidence.brinson || !evidence.nav_return_attribution) return null
+  return evidence as unknown as AttributionBundle
+}
+
+function formatSavedTime(value?: string) {
+  if (!value) return '—'
+  const parsed = new Date(value)
+  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString('zh-CN', { hour12: false })
 }
 
 function StatusBadge({ status = 'insufficient_evidence' }: { status?: Status }) {
@@ -107,20 +153,48 @@ export default function AttributionWorkspace({
   initialFundCode,
   initialBenchmark,
   initialQuarter,
+  initialHistory,
   autoRun,
 }: {
   initialFundCode: string
   initialBenchmark: string
   initialQuarter: string
+  initialHistory: Record<string, unknown>[]
   autoRun: boolean
 }) {
+  const normalizedInitialHistory = initialHistory as AttributionHistoryItem[]
   const [fundCode, setFundCode] = useState(initialFundCode)
   const [benchmark, setBenchmark] = useState(initialBenchmark)
   const [quarter, setQuarter] = useState(initialQuarter)
-  const [result, setResult] = useState<AttributionBundle | null>(null)
+  const [result, setResult] = useState<AttributionBundle | null>(() => savedBundle(normalizedInitialHistory[0]))
+  const [history, setHistory] = useState<AttributionHistoryItem[]>(normalizedInitialHistory)
+  const [historyLoading, setHistoryLoading] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const hasAutoRun = useRef(false)
+
+  const loadHistory = useCallback(async (code: string, selectLatest = true) => {
+    const normalizedCode = code.trim().toUpperCase()
+    if (!normalizedCode) return
+    setHistoryLoading(true)
+    setError('')
+    try {
+      const response = await fetch(`/api/attribution/fund/${encodeURIComponent(normalizedCode)}/history?limit=8`)
+      const payload = await response.json()
+      if (!response.ok) throw new Error(payload.error || '读取归因历史失败')
+      const items = (Array.isArray(payload.history) ? payload.history : []) as AttributionHistoryItem[]
+      setHistory(items)
+      if (selectLatest) {
+        setResult(savedBundle(items[0]))
+        if (items[0]?.quarter) setQuarter(items[0].quarter)
+        if (items[0]?.benchmark_id) setBenchmark(items[0].benchmark_id)
+      }
+    } catch (historyError) {
+      setError(historyError instanceof Error ? historyError.message : '读取归因历史失败')
+    } finally {
+      setHistoryLoading(false)
+    }
+  }, [])
 
   const runAttribution = useCallback(async () => {
     const code = fundCode.trim().toUpperCase()
@@ -133,12 +207,13 @@ export default function AttributionWorkspace({
       const payload = await response.json()
       if (!response.ok) throw new Error(payload.error || '业绩归因运行失败')
       setResult(payload)
+      void loadHistory(code, false)
     } catch (runError) {
       setError(runError instanceof Error ? runError.message : '业绩归因运行失败')
     } finally {
       setLoading(false)
     }
-  }, [benchmark, fundCode, quarter])
+  }, [benchmark, fundCode, loadHistory, quarter])
 
   useEffect(() => {
     if (!autoRun || hasAutoRun.current) return
@@ -149,7 +224,15 @@ export default function AttributionWorkspace({
   const industries = Object.entries(result?.barra.industry_exposures || {})
   const largestIndustry = Math.max(...industries.map(([, weight]) => weight), 0.01)
   const brinsonEffects = result?.brinson.effects || []
+  const largestBrinsonEffect = Math.max(...brinsonEffects.map((effect) => Math.abs(effect.value || 0)), 0.001)
+  const topIndustryContributors = [...(result?.brinson.industry_detail || [])]
+    .sort((a, b) => Math.abs(b.allocation_contrib + b.selection_contrib + b.interaction_contrib) - Math.abs(a.allocation_contrib + a.selection_contrib + a.interaction_contrib))
+    .slice(0, 8)
   const navEvidence = result?.nav_return_attribution
+  const publicRisk = result?.barra.public_risk_model
+  const publicRiskShares = Object.fromEntries(
+    (publicRisk?.risk_contributions || []).map((item) => [item.factor, item.risk_share]),
+  )
 
   return (
     <div className="space-y-7">
@@ -174,12 +257,47 @@ export default function AttributionWorkspace({
           <label className="block text-sm font-bold">基金代码<input value={fundCode} onChange={(event) => setFundCode(event.target.value)} className="mt-2 h-11 w-full rounded-md border border-[#cfd6d0] px-3 text-sm uppercase outline-none focus:border-[#28745c]" /></label>
           <label className="block text-sm font-bold">比较基准<select value={benchmark} onChange={(event) => setBenchmark(event.target.value)} className="mt-2 h-11 w-full rounded-md border border-[#cfd6d0] bg-white px-3 text-sm outline-none focus:border-[#28745c]"><option value="">自动使用基金分类基准</option><option value="000300.SH">沪深300</option><option value="000905.SH">中证500</option><option value="000852.SH">中证1000</option></select></label>
           <label className="block text-sm font-bold">归因季度<input value={quarter} onChange={(event) => setQuarter(event.target.value.toUpperCase())} placeholder="2026Q2" className="mt-2 h-11 w-full rounded-md border border-[#cfd6d0] px-3 text-sm uppercase outline-none focus:border-[#28745c]" /></label>
-          <button type="button" onClick={() => void runAttribution()} disabled={loading} className="inline-flex h-11 items-center justify-center gap-2 rounded-md bg-[#173f35] px-5 text-sm font-bold text-white hover:bg-[#225747] disabled:opacity-50">{loading ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}{loading ? '正在计算' : '运行业绩归因'}</button>
+          <div className="flex gap-2">
+            <button type="button" onClick={() => void loadHistory(fundCode)} disabled={historyLoading} className="inline-flex h-11 items-center justify-center gap-2 rounded-md border border-[#9eb5aa] bg-white px-4 text-sm font-bold text-[#285d49] hover:bg-[#f1f6f3] disabled:opacity-50">{historyLoading ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Database className="h-4 w-4" />}查看历史</button>
+            <button type="button" onClick={() => void runAttribution()} disabled={loading} className="inline-flex h-11 items-center justify-center gap-2 rounded-md bg-[#173f35] px-5 text-sm font-bold text-white hover:bg-[#225747] disabled:opacity-50">{loading ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}{loading ? '正在计算' : '现场运行'}</button>
+          </div>
         </div>
-        <p className="mt-3 text-xs leading-6 text-[#7a8580]">分析季度使用上一季度披露持仓，避免用期末持仓倒推已经发生的收益。</p>
+        <p className="mt-3 text-xs leading-6 text-[#7a8580]">默认先读取已保存结果；只有点击“现场运行”才会重新计算并更新历史。分析季度使用上一季度披露持仓。</p>
       </section>
 
       {error ? <div className="border border-[#e5b8ad] bg-[#fff0ed] px-5 py-4 text-sm text-[#8b443a]"><CircleAlert className="mr-2 inline h-4 w-4" />{error}</div> : null}
+
+      <section className="border border-[#dbe1dc] bg-white p-5 sm:p-6">
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div><h2 className="text-lg font-bold">已保存归因历史</h2><p className="mt-1 text-xs leading-6 text-[#7a8580]">选择历史记录不会调用外部数据源，也不会重复写入。</p></div>
+          <span className="text-xs font-bold text-[#28745c]">{history.length} 条</span>
+        </div>
+        {history.length ? (
+          <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            {history.map((item, index) => {
+              const bundle = savedBundle(item)
+              return (
+                <button
+                  key={`${item.quarter || 'unknown'}-${item.updated_at || index}`}
+                  type="button"
+                  disabled={!bundle}
+                  onClick={() => {
+                    if (!bundle) return
+                    setResult(bundle)
+                    if (item.quarter) setQuarter(item.quarter)
+                    if (item.benchmark_id) setBenchmark(item.benchmark_id)
+                  }}
+                  className="border border-[#e0e5e1] bg-[#fafbfa] p-4 text-left hover:border-[#8fac9e] hover:bg-[#f3f7f5] disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <div className="flex items-center justify-between gap-2"><strong>{item.quarter || '季度待补'}</strong><StatusBadge status={item.status} /></div>
+                  <div className="mt-3 text-xs leading-6 text-[#65716b]">主动收益 {formatPercent(numberValue(item.active_return))}<br />配置 {formatPercent(numberValue(item.allocation_effect))} · 选择 {formatPercent(numberValue(item.selection_effect))}<br />基准 {item.benchmark_id || '待补'}</div>
+                  <div className="mt-2 text-[10px] text-[#8a948f]">{formatSavedTime(item.updated_at)}</div>
+                </button>
+              )
+            })}
+          </div>
+        ) : <div className="mt-4 border border-dashed border-[#cdd5cf] px-5 py-8 text-center text-sm text-[#7a8580]">暂无已保存归因，可由用户现场运行一次。</div>}
+      </section>
 
       {result ? (
         <>
@@ -192,8 +310,9 @@ export default function AttributionWorkspace({
 
           <section className="grid gap-7 xl:grid-cols-2">
             <article className="border border-[#dbe1dc] bg-white p-5 sm:p-6">
-              <div className="flex items-start justify-between gap-4"><div><h2 className="text-lg font-bold">Barra 风格与风险暴露</h2><p className="mt-1 text-xs leading-6 text-[#7a8580]">正式因子缺失时，只展示公开持仓行业暴露。</p></div><StatusBadge status={result.barra.status} /></div>
+              <div className="flex items-start justify-between gap-4"><div><h2 className="text-lg font-bold">Barra 风格与风险暴露</h2><p className="mt-1 text-xs leading-6 text-[#7a8580]">正式 Barra 尚未接入；公开持仓模型补充市场风险与个股特异风险。</p></div><StatusBadge status={result.barra.status} /></div>
               <div className="mt-5 grid grid-cols-3 gap-px bg-[#e1e6e2] text-center text-xs"><div className="bg-[#f7f9f7] p-3"><div className="text-[#7b8680]">披露持仓</div><strong className="mt-1 block text-base">{result.barra.holdings_count || 0} 只</strong></div><div className="bg-[#f7f9f7] p-3"><div className="text-[#7b8680]">披露权重</div><strong className="mt-1 block text-base">{formatPercent(result.barra.holdings_disclosed_weight, 1)}</strong></div><div className="bg-[#f7f9f7] p-3"><div className="text-[#7b8680]">正式因子</div><strong className="mt-1 block text-base">{result.barra.formal_model_ready ? '可用' : '待接入'}</strong></div></div>
+              {publicRisk?.status === 'partial_evidence' ? <div className="mt-5 border border-[#dfe5e1] bg-[#fafbfa] p-4"><div className="flex flex-wrap items-center justify-between gap-2"><strong className="text-xs">公开持仓统计风险</strong><span className="text-[10px] font-bold text-[#8a6422]">非正式 Barra</span></div><div className="mt-3 grid grid-cols-2 gap-px bg-[#e1e6e2] text-center text-xs sm:grid-cols-4"><div className="bg-white p-3"><div className="text-[#7b8680]">组合 Beta</div><strong className="mt-1 block text-base">{publicRisk.portfolio_beta?.toFixed(2) ?? '—'}</strong></div><div className="bg-white p-3"><div className="text-[#7b8680]">历史波动</div><strong className="mt-1 block text-base">{formatPercent(publicRisk.observed_volatility, 1)}</strong></div><div className="bg-white p-3"><div className="text-[#7b8680]">市场风险占比</div><strong className="mt-1 block text-base">{formatPercent(publicRiskShares.MARKET, 1)}</strong></div><div className="bg-white p-3"><div className="text-[#7b8680]">特异风险占比</div><strong className="mt-1 block text-base">{formatPercent(publicRiskShares.SPECIFIC, 1)}</strong></div></div><p className="mt-3 text-[10px] leading-5 text-[#7a8580]">基于 {publicRisk.observations || 0} 个交易日，仅代表覆盖基金净值 {formatPercent(publicRisk.fund_nav_coverage, 1)} 的已披露 A 股。</p></div> : null}
               {industries.length ? <div className="mt-5 space-y-3">{industries.slice(0, 10).map(([industry, weight]) => <div key={industry}><div className="mb-1 flex justify-between text-xs"><span className="font-bold text-[#4f5d56]">{industry}</span><span>{formatPercent(weight, 1)}</span></div><div className="h-2 bg-[#edf0ed]"><div className="h-full bg-[#3d826a]" style={{ width: `${Math.max(3, weight / largestIndustry * 100)}%` }} /></div></div>)}</div> : <div className="mt-5 border border-dashed border-[#cdd5cf] p-6 text-center text-sm text-[#7a8580]">暂无持仓行业暴露</div>}
               <MissingEvidence items={result.barra.missing_items} />
             </article>
@@ -201,7 +320,12 @@ export default function AttributionWorkspace({
             <article className="border border-[#dbe1dc] bg-white p-5 sm:p-6">
               <div className="flex items-start justify-between gap-4"><div><h2 className="text-lg font-bold">Brinson 行业归因</h2><p className="mt-1 text-xs leading-6 text-[#7a8580]">配置、选择、交互和未披露持仓残差。</p></div><StatusBadge status={result.brinson.status} /></div>
               <div className="mt-5 grid grid-cols-3 gap-px bg-[#e1e6e2] text-center text-xs"><div className="bg-[#f7f9f7] p-3"><div className="text-[#7b8680]">基金收益</div><strong className="mt-1 block text-base">{formatPercent(result.brinson.returns?.fund)}</strong></div><div className="bg-[#f7f9f7] p-3"><div className="text-[#7b8680]">基准收益</div><strong className="mt-1 block text-base">{formatPercent(result.brinson.returns?.benchmark)}</strong></div><div className="bg-[#f7f9f7] p-3"><div className="text-[#7b8680]">主动收益</div><strong className="mt-1 block text-base">{formatPercent(result.brinson.returns?.active)}</strong></div></div>
-              {brinsonEffects.length ? <div className="mt-5 grid gap-3 sm:grid-cols-2">{brinsonEffects.map((effect) => <div key={effect.name} className="border border-[#e1e5e2] p-4"><div className="text-xs text-[#6c7872]">{effect.label}</div><div className={`mt-2 text-lg font-bold ${(effect.value || 0) >= 0 ? 'text-[#236c51]' : 'text-[#a04f43]'}`}>{formatPercent(effect.value)}</div></div>)}</div> : <div className="mt-5 border border-dashed border-[#cdd5cf] p-6 text-center text-sm text-[#7a8580]">当前无法输出配置与选择效应</div>}
+              {brinsonEffects.length ? <div className="mt-5 space-y-3">{brinsonEffects.map((effect) => {
+                const value = effect.value || 0
+                const width = Math.max(2, Math.abs(value) / largestBrinsonEffect * 50)
+                return <div key={effect.name} className="grid grid-cols-[5rem_minmax(0,1fr)_4.5rem] items-center gap-3"><span className="text-xs font-bold text-[#59665f]">{effect.label}</span><div className="relative h-5 bg-[#f1f3f1]"><span className="absolute left-1/2 top-0 h-full w-px bg-[#aeb8b1]" /><span className={`absolute top-1 h-3 ${value >= 0 ? 'left-1/2 bg-[#398267]' : 'right-1/2 bg-[#b66a5e]'}`} style={{ width: `${width}%` }} /></div><strong className={`text-right text-xs ${value >= 0 ? 'text-[#236c51]' : 'text-[#a04f43]'}`}>{formatPercent(value)}</strong></div>
+              })}</div> : <div className="mt-5 border border-dashed border-[#cdd5cf] p-6 text-center text-sm text-[#7a8580]">当前无法输出配置与选择效应</div>}
+              {topIndustryContributors.length ? <div className="mt-5 overflow-x-auto border border-[#e1e5e2]"><table className="w-full min-w-[560px] text-left text-xs"><thead className="bg-[#f3f6f3] text-[#66726c]"><tr><th className="px-3 py-2">主要行业</th><th className="px-3 py-2 text-right">组合权重</th><th className="px-3 py-2 text-right">基准权重</th><th className="px-3 py-2 text-right">配置</th><th className="px-3 py-2 text-right">选择</th></tr></thead><tbody className="divide-y divide-[#e5e9e6]">{topIndustryContributors.map((item) => <tr key={item.industry}><td className="px-3 py-2 font-bold">{item.industry}</td><td className="px-3 py-2 text-right">{formatPercent(item.portfolio_weight, 1)}</td><td className="px-3 py-2 text-right">{formatPercent(item.benchmark_weight, 1)}</td><td className="px-3 py-2 text-right">{formatPercent(item.allocation_contrib)}</td><td className="px-3 py-2 text-right">{formatPercent(item.selection_contrib)}</td></tr>)}</tbody></table></div> : null}
               {result.brinson.coverage?.portfolio_holdings != null ? <div className="mt-5 text-xs leading-6 text-[#65716b]">持仓披露覆盖 {formatPercent(result.brinson.coverage.portfolio_holdings, 1)} · 持仓收益覆盖 {formatPercent(result.brinson.coverage.holding_returns, 1)} · 基准成分覆盖 {formatPercent(result.brinson.coverage.benchmark_constituents, 1)}</div> : null}
               <MissingEvidence items={result.brinson.missing_items} />
             </article>

@@ -11,7 +11,7 @@ export async function GET(request: Request) {
     page: url.searchParams.get('page') || '1',
     page_size: String(pageSize),
   })
-  for (const key of ['keyword', 'manager_id', 'fund_id', 'tags']) {
+  for (const key of ['keyword', 'manager_id', 'fund_id', 'folder_id', 'tags', 'viewpoint_topics', 'research_domain', 'start_date', 'end_date']) {
     const value = url.searchParams.get(key)
     if (value) backendParams.set(key, value)
   }

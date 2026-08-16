@@ -5,7 +5,7 @@ export const dynamic = 'force-dynamic'
 export function GET() {
   return NextResponse.json({
     ok: true,
-    service: 'fund-research-data',
+    service: 'fund-analysis-data',
     product: 'simple-fund-selection',
     capabilities: [
       'fund.search',

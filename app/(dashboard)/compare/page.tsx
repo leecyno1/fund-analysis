@@ -1,36 +1,24 @@
-import Link from 'next/link'
-import { ArrowLeft, CircleAlert } from 'lucide-react'
 import { backendApiBaseUrl, toCamelFund, type CamelFund } from '@/lib/backend-api'
-import SimpleComparisonClient, { type ComparisonFund } from './SimpleComparisonClient'
+import SimpleComparisonClient, { type AlignedComparison, type ComparisonFund, type HoldingSimilaritySnapshot } from './SimpleComparisonClient'
 
 export const dynamic = 'force-dynamic'
 
-type EvaluationPayload = {
-  status?: string
-  classification?: {
-    status?: string
-    peer_group?: string
-    peer_group_id?: string
-    primary_benchmark?: string
-  }
-  peer_context?: {
-    sample_status?: string
-    valid_metric_peer_count?: number
-    minimum_peer_count?: number
-  }
-  evaluation?: {
-    overall_score?: number | null
-    overall_grade?: string | null
-    metric_scores?: Record<string, number | string | null>
-    data_quality?: {
-      status?: string
-    }
-  }
+const evaluationWindowKeys = ['6m', '1y', '3y'] as const
+
+type UnknownRecord = Record<string, unknown>
+
+function asRecord(value: unknown): UnknownRecord {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as UnknownRecord : {}
 }
 
-type NavPoint = {
-  date: string
-  nav: number
+function textValue(value: unknown) {
+  return value == null ? '' : String(value)
+}
+
+function numberValue(value: unknown) {
+  if (value == null || value === '') return null
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : null
 }
 
 function parseCodes(value?: string | string[]) {
@@ -38,35 +26,33 @@ function parseCodes(value?: string | string[]) {
   return Array.from(new Set(raw.split(',').map((code) => code.trim().toUpperCase()).filter(Boolean))).slice(0, 6)
 }
 
-function dateYearsAgo(years: number) {
-  const date = new Date()
-  date.setFullYear(date.getFullYear() - years)
-  return date.toISOString().slice(0, 10)
-}
-
 async function loadComparisonFund(code: string): Promise<ComparisonFund | null> {
-  const endDate = new Date().toISOString().slice(0, 10)
-  const [detailResponse, evaluationResponse, navResponse] = await Promise.all([
-    fetch(`${backendApiBaseUrl}/api/funds/${encodeURIComponent(code)}`, { cache: 'no-store' }),
-    fetch(`${backendApiBaseUrl}/api/funds/${encodeURIComponent(code)}/evaluation?window=1y`, { cache: 'no-store' }),
-    fetch(`${backendApiBaseUrl}/api/funds/${encodeURIComponent(code)}/nav?${new URLSearchParams({ start_date: dateYearsAgo(3), end_date: endDate })}`, { cache: 'no-store' }),
+  const [snapshotResponse, holdingsResponse] = await Promise.all([
+    fetch(`${backendApiBaseUrl}/api/funds/${encodeURIComponent(code)}/research-snapshot`, { cache: 'no-store' }),
+    fetch(`${backendApiBaseUrl}/api/funds/${encodeURIComponent(code)}/holdings?local_only=true`, { cache: 'no-store' }),
   ])
-  if (!detailResponse.ok) return null
+  if (!snapshotResponse.ok) return null
 
-  const detailPayload = await detailResponse.json().catch(() => ({}))
-  const fund = toCamelFund((detailPayload.fund || detailPayload) as Record<string, unknown>) as CamelFund
-  const evaluation = evaluationResponse.ok
-    ? await evaluationResponse.json().catch(() => ({})) as EvaluationPayload
-    : {}
-  const evaluationReady = evaluation.status !== 'insufficient_evidence'
-    && evaluation.evaluation?.data_quality?.status !== 'insufficient'
-  const metricScores = evaluationReady ? evaluation.evaluation?.metric_scores || {} : {}
-  if (!evaluationReady) {
-    fund.performanceData = {}
-    fund.riskMetrics = {}
-    fund.rollingMetrics = {}
-  }
-  const rollingMetrics = { ...((fund.rollingMetrics || {}) as Record<string, Record<string, unknown>>) }
+  const snapshot = asRecord(await snapshotResponse.json().catch(() => ({})))
+  const evaluationPayload = asRecord(snapshot.evaluation)
+  const classification = asRecord(evaluationPayload.classification)
+  const peerContext = asRecord(evaluationPayload.peer_context)
+  const evaluation = asRecord(evaluationPayload.evaluation)
+  const dataQuality = asRecord(evaluation.data_quality)
+  const metricScores = asRecord(evaluation.metric_scores)
+  const evaluationWindowsPayload = asRecord(snapshot.evaluation_windows)
+  const managers = Array.isArray(snapshot.managers) ? snapshot.managers.map(asRecord) : []
+  const researchProfile = asRecord(snapshot.research_profile)
+  const researchMemos = asRecord(snapshot.research_memos)
+  const periodPerformancePayload = asRecord(snapshot.period_performance)
+  const periodPerformanceSummary = asRecord(periodPerformancePayload.summary)
+  const managerTenurePerformancePayload = asRecord(snapshot.manager_tenure_performance)
+  const multiPeriodEvidencePayload = asRecord(snapshot.multi_period_evidence)
+  const managerTenurePeerRanking = asRecord(managerTenurePerformancePayload.peer_ranking)
+  const managerTenurePeerMetrics = asRecord(managerTenurePeerRanking.metrics)
+  const managerTenureReturnRank = asRecord(managerTenurePeerMetrics.total_return)
+  const rollingMetrics = { ...asRecord(snapshot.rolling_metrics) } as Record<string, Record<string, unknown>>
+
   for (const [path, value] of Object.entries(metricScores)) {
     const separator = path.indexOf('.')
     if (separator <= 0 || value == null) continue
@@ -77,54 +63,285 @@ async function loadComparisonFund(code: string): Promise<ComparisonFund | null> 
       [metricName]: value,
     }
   }
-  fund.rollingMetrics = rollingMetrics
+
+  const fund = toCamelFund({
+    ...asRecord(snapshot.fund),
+    managers,
+    research_profile: researchProfile,
+    rolling_metrics: rollingMetrics,
+    data_quality: snapshot.data_quality,
+  }) as CamelFund
+
   if (fund.totalAsset == null && metricScores['latest.aum'] != null) {
     fund.totalAsset = Number(metricScores['latest.aum'])
   }
-  const navPayload = navResponse.ok ? await navResponse.json().catch(() => ({})) : {}
-  const nav = (Array.isArray(navPayload.data) ? navPayload.data : [])
-    .map((item: Record<string, unknown>) => ({ date: String(item.date || ''), nav: Number(item.nav) }))
-    .filter((item: NavPoint) => item.date && Number.isFinite(item.nav) && item.nav > 0)
+  const holdingsPayload = holdingsResponse.ok ? asRecord(await holdingsResponse.json().catch(() => ({}))) : {}
+  const holdingSummary = asRecord(holdingsPayload.summary)
+  const holdings = Array.isArray(holdingsPayload.holdings) ? holdingsPayload.holdings.map(asRecord) : []
+
+  const evaluationReady = textValue(evaluationPayload.status) !== 'insufficient_evidence'
+    && textValue(dataQuality.status) !== 'insufficient'
+  const score = numberValue(evaluation.overall_score)
+  const evaluationWindows = Object.fromEntries(evaluationWindowKeys.map((key) => {
+    const windowPayload = asRecord(evaluationWindowsPayload[key] || (key === '1y' ? evaluationPayload : {}))
+    const windowPeerContext = asRecord(windowPayload.peer_context)
+    const windowEvaluation = asRecord(windowPayload.evaluation)
+    const professionalPosition = asRecord(asRecord(windowEvaluation.peer_percentiles).professional_score)
+    const ready = textValue(windowPayload.status) !== 'insufficient_evidence'
+      && textValue(asRecord(windowEvaluation.data_quality).status) !== 'insufficient'
+    return [key, {
+      status: textValue(windowPayload.status) || 'unavailable',
+      sampleStatus: textValue(windowPeerContext.sample_status) || 'unavailable',
+      validPeerCount: numberValue(windowPeerContext.valid_metric_peer_count) || 0,
+      minimumPeerCount: numberValue(windowPeerContext.minimum_peer_count) || 0,
+      score: ready ? numberValue(windowEvaluation.overall_score) : null,
+      grade: ready ? textValue(windowEvaluation.overall_grade) : '',
+      peerRank: ready ? numberValue(professionalPosition.rank) : null,
+      peerCount: ready ? numberValue(professionalPosition.peer_count) : null,
+      peerPercentile: ready ? numberValue(professionalPosition.percentile) : null,
+    }]
+  })) as ComparisonFund['evaluationWindows']
+
+  const firstHolding = holdings[0] || {}
 
   return {
     fund,
-    nav,
     classification: {
-      status: String(evaluation.classification?.status || 'unclassified'),
-      peerGroup: String(evaluation.classification?.peer_group || ''),
-      peerGroupId: String(evaluation.classification?.peer_group_id || ''),
-      benchmark: String(evaluation.classification?.primary_benchmark || ''),
+      status: textValue(classification.status) || 'unclassified',
+      peerGroup: textValue(classification.peer_group),
+      peerGroupId: textValue(classification.peer_group_id),
+      benchmark: textValue(classification.primary_benchmark),
     },
     evaluation: {
-      status: String(evaluation.status || 'unavailable'),
-      sampleStatus: String(evaluation.peer_context?.sample_status || 'unavailable'),
-      validPeerCount: Number(evaluation.peer_context?.valid_metric_peer_count || 0),
-      minimumPeerCount: Number(evaluation.peer_context?.minimum_peer_count || 0),
-      score: !evaluationReady || evaluation.evaluation?.overall_score == null
-        ? null
-        : Number(evaluation.evaluation.overall_score),
-      grade: String(evaluation.evaluation?.overall_grade || ''),
+      status: textValue(evaluationPayload.status) || 'unavailable',
+      sampleStatus: textValue(peerContext.sample_status) || 'unavailable',
+      validPeerCount: numberValue(peerContext.valid_metric_peer_count) || 0,
+      minimumPeerCount: numberValue(peerContext.minimum_peer_count) || 0,
+      score: evaluationReady ? score : null,
+      grade: evaluationReady ? textValue(evaluation.overall_grade) : '',
     },
+    evaluationWindows,
+    holding: {
+      latestQuarter: textValue(holdingsPayload.latest_quarter),
+      reportDate: textValue(holdingSummary.report_date),
+      announcementDate: textValue(holdingSummary.announcement_date),
+      holdingCount: numberValue(holdingSummary.holding_count) || 0,
+      weightBasis: textValue(holdingSummary.weight_basis),
+      topTenWeight: numberValue(holdingSummary.top_ten_weight),
+      topTenEquityWeight: numberValue(holdingSummary.top_ten_equity_weight),
+      firstStockName: textValue(firstHolding.stock_name),
+      firstStockWeight: numberValue(
+        textValue(holdingSummary.weight_basis) === 'fund_nav'
+          ? firstHolding.fund_nav_weight ?? firstHolding.weight
+          : firstHolding.equity_portfolio_weight,
+      ),
+    },
+    managers: managers.map((manager) => ({
+      id: textValue(manager.manager_id || manager.wind_code || manager.name),
+      name: textValue(manager.name) || '经理待补充',
+      managementYears: numberValue(manager.management_years),
+      beginDate: textValue(manager.begin_date),
+    })),
+    managerTenureStart: textValue(researchProfile.manager_tenure_start),
+    managerTenurePerformance: {
+      status: textValue(managerTenurePerformancePayload.status) || 'unavailable',
+      coverageStatus: textValue(managerTenurePerformancePayload.coverage_status),
+      requestedStartDate: textValue(managerTenurePerformancePayload.requested_start_date),
+      actualStartDate: textValue(managerTenurePerformancePayload.actual_start_date),
+      actualEndDate: textValue(managerTenurePerformancePayload.actual_end_date),
+      coverageRatio: numberValue(managerTenurePerformancePayload.coverage_ratio),
+      observations: numberValue(managerTenurePerformancePayload.observations) || 0,
+      totalReturn: numberValue(managerTenurePerformancePayload.total_return),
+      annualizedReturn: numberValue(managerTenurePerformancePayload.annualized_return),
+      maxDrawdown: numberValue(managerTenurePerformancePayload.max_drawdown),
+      sharpeRatio: numberValue(managerTenurePerformancePayload.sharpe_ratio),
+      peerRankingStatus: textValue(managerTenurePeerRanking.status),
+      peerRank: numberValue(managerTenureReturnRank.rank),
+      peerCount: numberValue(managerTenureReturnRank.peer_count),
+      peerPercentile: numberValue(managerTenureReturnRank.percentile),
+      scopeNote: textValue(managerTenurePerformancePayload.scope_note),
+    },
+    multiPeriodEvidence: {
+      status: textValue(multiPeriodEvidencePayload.status) || 'short_term_only',
+      return6m: numberValue(multiPeriodEvidencePayload.return_6m),
+      return1y: numberValue(multiPeriodEvidencePayload.return_1y),
+      annualizedReturn1y: numberValue(multiPeriodEvidencePayload.annualized_return_1y),
+      annualizedReturn3y: numberValue(multiPeriodEvidencePayload.annualized_return_3y),
+      maxDrawdown1y: numberValue(multiPeriodEvidencePayload.max_drawdown_1y),
+      maxDrawdown3y: numberValue(multiPeriodEvidencePayload.max_drawdown_3y),
+      sharpeRatio3y: numberValue(multiPeriodEvidencePayload.sharpe_ratio_3y),
+      annualizedReturnGap: numberValue(multiPeriodEvidencePayload.annualized_return_gap),
+      consistencyStatus: textValue(multiPeriodEvidencePayload.consistency_status),
+      consistencyLabel: textValue(multiPeriodEvidencePayload.consistency_label),
+      usedInScore: Boolean(multiPeriodEvidencePayload.used_in_score),
+      dataAsOf: textValue(multiPeriodEvidencePayload.data_as_of),
+    },
+    researchMemoCount: numberValue(researchMemos.count) || 0,
+    periodPerformance: {
+      status: textValue(periodPerformancePayload.status) || 'insufficient_evidence',
+      navBasis: textValue(periodPerformancePayload.nav_basis),
+      latestNavDate: textValue(periodPerformancePayload.latest_nav_date),
+      peerGroupName: textValue(periodPerformancePayload.peer_group_name),
+      periods: (Array.isArray(periodPerformancePayload.periods) ? periodPerformancePayload.periods : [])
+        .flatMap((value) => {
+          const period = asRecord(value)
+          const year = Number(period.year || 0)
+          const label = textValue(period.label)
+          const periodReturn = numberValue(period.return)
+          if (year <= 0 || !label || periodReturn == null) return []
+          return [{
+            year,
+            label,
+            isYtd: Boolean(period.is_ytd),
+            return: periodReturn,
+            coverageStatus: textValue(period.coverage_status),
+            observationCoverage: numberValue(period.observation_coverage),
+            rank: numberValue(period.rank),
+            peerCount: numberValue(period.peer_count) || 0,
+            percentile: numberValue(period.percentile),
+            peerMedianReturn: numberValue(period.peer_median_return),
+            abovePeerMedian: typeof period.above_peer_median === 'boolean' ? period.above_peer_median : null,
+          }]
+        }),
+      summary: {
+        completePeriodCount: Number(periodPerformanceSummary.complete_period_count || 0),
+        positivePeriodCount: Number(periodPerformanceSummary.positive_period_count || 0),
+        peerRankedPeriodCount: Number(periodPerformanceSummary.peer_ranked_period_count || 0),
+        abovePeerMedianCount: Number(periodPerformanceSummary.above_peer_median_count || 0),
+      },
+      boundary: textValue(periodPerformancePayload.boundary),
+    },
+  }
+}
+
+async function loadAlignedComparison(codes: string[]): Promise<AlignedComparison | null> {
+  if (codes.length < 2) return null
+  const response = await fetch(`${backendApiBaseUrl}/api/funds/compare-aligned`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ windCodes: codes }),
+    cache: 'no-store',
+  })
+  if (!response.ok) return null
+  const payload = asRecord(await response.json().catch(() => ({})))
+  const sourceWindows = asRecord(payload.windows)
+  const windows = Object.fromEntries(evaluationWindowKeys.map((key) => {
+    const source = asRecord(sourceWindows[key])
+    const sourceFunds = Array.isArray(source.funds) ? source.funds.map(asRecord) : []
+    return [key, {
+      status: textValue(source.status) || 'insufficient',
+      requestedStartDate: textValue(source.requested_start_date),
+      actualStartDate: textValue(source.actual_start_date),
+      actualEndDate: textValue(source.actual_end_date),
+      observations: numberValue(source.observations) || 0,
+      actualSpanDays: numberValue(source.actual_span_days) || 0,
+      calendarCoverageRatio: numberValue(source.calendar_coverage_ratio) || 0,
+      observationCoverageRatio: numberValue(source.observation_coverage_ratio) || 0,
+      rankingEligible: source.ranking_eligible === true,
+      scopeNote: textValue(source.scope_note),
+      funds: Object.fromEntries(sourceFunds.map((item) => {
+        const windCode = textValue(item.wind_code)
+        return [windCode, {
+          windCode,
+          navBasis: textValue(item.nav_basis),
+          observations: numberValue(item.observations) || 0,
+          totalReturn: numberValue(item.total_return),
+          annualizedReturn: numberValue(item.annualized_return),
+          maxDrawdown: numberValue(item.max_drawdown),
+          annualizedVolatility: numberValue(item.annualized_volatility),
+          sharpeRatio: numberValue(item.sharpe_ratio),
+          drawdownStatus: textValue(item.drawdown_status),
+          drawdownLabel: textValue(item.drawdown_label),
+          currentDrawdown: numberValue(item.current_drawdown),
+          currentUnderwaterDays: numberValue(item.current_underwater_days) || 0,
+          worstDeclineDays: numberValue(item.worst_decline_days) || 0,
+          worstRecoveryDays: numberValue(item.worst_recovery_days),
+          worstRecovered: Boolean(item.worst_recovered),
+          longestUnderwaterDays: numberValue(item.longest_underwater_days) || 0,
+          materialEpisodeCount: numberValue(item.material_episode_count) || 0,
+          recoveredMaterialEpisodeCount: numberValue(item.recovered_material_episode_count) || 0,
+        }]
+      }).filter(([windCode]) => Boolean(windCode))),
+      chart: (Array.isArray(source.chart) ? source.chart.map(asRecord) : []).map((point) => ({
+        date: textValue(point.date),
+        values: Object.fromEntries(Object.entries(asRecord(point.values)).flatMap(([code, value]) => {
+          const parsed = numberValue(value)
+          return parsed == null ? [] : [[code, parsed]]
+        })),
+      })).filter((point) => point.date),
+    }]
+  })) as AlignedComparison['windows']
+
+  return {
+    status: textValue(payload.status) || 'insufficient',
+    methodology: textValue(payload.methodology),
+    riskFreeRate: numberValue(payload.risk_free_rate) || 0,
+    simulationUsed: Boolean(payload.simulation_used),
+    windows,
+  }
+}
+
+async function loadHoldingSimilarity(codes: string[]): Promise<HoldingSimilaritySnapshot | null> {
+  if (codes.length < 2) return null
+  const response = await fetch(`${backendApiBaseUrl}/api/funds/holding-similarity`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ windCodes: codes }),
+    cache: 'no-store',
+  })
+  if (!response.ok) return null
+  const payload = asRecord(await response.json().catch(() => ({})))
+  return {
+    status: textValue(payload.status) || 'insufficient',
+    methodology: textValue(payload.methodology),
+    scope: textValue(payload.scope),
+    source: textValue(payload.source),
+    simulationUsed: Boolean(payload.simulation_used),
+    pairCount: numberValue(payload.pair_count) || 0,
+    availablePairCount: numberValue(payload.available_pair_count) || 0,
+    missingCodes: Array.isArray(payload.missing_codes) ? payload.missing_codes.map(textValue).filter(Boolean) : [],
+    pairs: (Array.isArray(payload.pairs) ? payload.pairs : []).map((value) => {
+      const pair = asRecord(value)
+      return {
+        status: textValue(pair.status) || 'insufficient',
+        fundA: textValue(pair.fund_a),
+        fundB: textValue(pair.fund_b),
+        quarter: textValue(pair.quarter),
+        reportDateA: textValue(pair.report_date_a),
+        reportDateB: textValue(pair.report_date_b),
+        weightBasisA: textValue(pair.weight_basis_a),
+        weightBasisB: textValue(pair.weight_basis_b),
+        holdingCountA: numberValue(pair.holding_count_a) || 0,
+        holdingCountB: numberValue(pair.holding_count_b) || 0,
+        commonHoldingCount: numberValue(pair.common_holding_count) || 0,
+        unionHoldingCount: numberValue(pair.union_holding_count) || 0,
+        overlapRatio: numberValue(pair.overlap_ratio),
+        jaccardScore: numberValue(pair.jaccard_score),
+        cosineSimilarity: numberValue(pair.cosine_similarity),
+        similarityLevel: textValue(pair.similarity_level) || 'unknown',
+        commonHoldings: (Array.isArray(pair.common_holdings) ? pair.common_holdings : []).map((holdingValue) => {
+          const holding = asRecord(holdingValue)
+          return {
+            stockCode: textValue(holding.stock_code),
+            stockName: textValue(holding.stock_name),
+            weightA: numberValue(holding.weight_a),
+            weightB: numberValue(holding.weight_b),
+            overlapContribution: numberValue(holding.overlap_contribution),
+          }
+        }),
+        missingItems: Array.isArray(pair.missing_items) ? pair.missing_items.map(textValue).filter(Boolean) : [],
+      }
+    }),
   }
 }
 
 export default async function ComparePage({ searchParams }: { searchParams: Promise<{ codes?: string | string[] }> }) {
   const codes = parseCodes((await searchParams).codes)
-  const loaded = await Promise.all(codes.map(loadComparisonFund))
+  const [loaded, alignedComparison, holdingSimilarity] = await Promise.all([
+    Promise.all(codes.map(loadComparisonFund)),
+    loadAlignedComparison(codes),
+    loadHoldingSimilarity(codes),
+  ])
   const funds = loaded.filter((item): item is ComparisonFund => Boolean(item))
-
-  if (funds.length < 2) {
-    return (
-      <div className="mx-auto max-w-3xl py-12 text-center">
-        <CircleAlert className="mx-auto h-7 w-7 text-[#8d6a2f]" />
-        <h1 className="mt-4 text-3xl font-bold text-[#18231e]">请先选择至少两只基金</h1>
-        <p className="mt-3 text-sm leading-7 text-[#68746e]">在基金浏览器中勾选 2 至 6 只同类基金，再查看净值和风险指标。</p>
-        <Link href="/discover" className="mt-7 inline-flex h-11 items-center gap-2 rounded-md bg-[#173f35] px-5 text-sm font-bold text-white">
-          <ArrowLeft className="h-4 w-4" />返回找基金
-        </Link>
-      </div>
-    )
-  }
-
-  return <SimpleComparisonClient funds={funds} />
+  return <SimpleComparisonClient funds={funds} alignedComparison={alignedComparison} holdingSimilarity={holdingSimilarity} />
 }

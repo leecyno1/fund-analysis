@@ -2,14 +2,26 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { Bot, BookOpenText, Compass, Tags } from 'lucide-react'
+import { Bookmark, Bot, BookOpenText, Compass, House, Tags } from 'lucide-react'
 
 const navigationItems = [
+  {
+    href: '/',
+    icon: House,
+    label: '首页',
+    matches: ['/'],
+  },
   {
     href: '/discover',
     icon: Compass,
     label: '找基金',
-    matches: ['/discover', '/compare', '/funds', '/market'],
+    matches: ['/discover', '/evaluation', '/compare', '/funds', '/market', '/companies'],
+  },
+  {
+    href: '/watchlist',
+    icon: Bookmark,
+    label: '我的自选',
+    matches: ['/watchlist'],
   },
   {
     href: '/research',
@@ -42,7 +54,7 @@ export default function AppNavigation() {
     <>
       <header className="sticky top-0 z-40 border-b border-[#dce1dc] bg-[#fbfcfa]/95 backdrop-blur-xl">
         <div className="mx-auto flex h-16 max-w-[1440px] items-center justify-between px-4 sm:px-6 lg:px-10">
-          <Link href="/discover" className="flex items-center gap-3" aria-label="选基助手首页">
+          <Link href="/" className="flex items-center gap-3" aria-label="选基助手首页">
             <span className="grid h-9 w-9 place-items-center rounded-md bg-[#173f35] text-sm font-black text-white">基</span>
             <span>
               <span className="block text-[15px] font-bold leading-none text-[#17211d]">选基助手</span>
@@ -79,7 +91,7 @@ export default function AppNavigation() {
         </div>
       </header>
 
-      <nav className="fixed inset-x-3 bottom-3 z-50 grid grid-cols-4 border border-[#d9ded9] bg-[#fbfcfa]/95 p-1.5 shadow-[0_12px_40px_rgba(25,40,32,0.16)] backdrop-blur-xl lg:hidden" aria-label="移动端主要导航">
+      <nav className="fixed inset-x-3 bottom-3 z-50 grid grid-cols-6 border border-[#d9ded9] bg-[#fbfcfa]/95 p-1.5 shadow-[0_12px_40px_rgba(25,40,32,0.16)] backdrop-blur-xl lg:hidden" aria-label="移动端主要导航">
         {navigationItems.map((item) => {
           const Icon = item.icon
           const active = isActive(pathname, item.matches)

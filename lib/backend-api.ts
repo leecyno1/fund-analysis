@@ -12,6 +12,13 @@ export type CamelFund = {
   navDate: string | null
   totalAsset: number | null
   establishmentDate: string | null
+  company: string
+  contractBenchmark: string
+  custodian: string
+  investType: string
+  contractType: string
+  managementFee: number | null
+  custodianFee: number | null
   performanceData: Record<string, unknown>
     riskMetrics: Record<string, unknown>
     evidenceCoverageScore?: number | null
@@ -47,7 +54,17 @@ function asRecordArray(value: unknown) {
 export function toCamelFund(fund: BackendRecord): CamelFund {
   const windCode = asText(fund.wind_code ?? fund.windCode)
   const researchProfile = asRecord(fund.research_profile ?? fund.researchProfile)
+  const styleProfile = asRecord(fund.style_profile ?? fund.styleProfile)
+  const bondHoldingStyle = asRecord(styleProfile?.bond_holding_style ?? styleProfile?.bondHoldingStyle)
+  const fofHoldingStyle = asRecord(styleProfile?.fof_holding_style ?? styleProfile?.fofHoldingStyle)
+  const fundEvaluation = asRecord(fund.fund_evaluation ?? fund.fundEvaluation)
   const recommendationEvidence = asRecord(fund.recommendation_evidence ?? fund.recommendationEvidence)
+  const recommendationManagerTenure = asRecord(
+    recommendationEvidence?.manager_tenure ?? recommendationEvidence?.managerTenure,
+  )
+  const recommendationMultiPeriod = asRecord(
+    recommendationEvidence?.multi_period ?? recommendationEvidence?.multiPeriod,
+  )
   const trust = asRecord(fund.trust)
 
   return {
@@ -76,12 +93,20 @@ export function toCamelFund(fund: BackendRecord): CamelFund {
     navDate: fund.nav_date == null && fund.navDate == null ? null : asText(fund.nav_date ?? fund.navDate),
     totalAsset: asNumberOrNull(fund.total_asset ?? fund.totalAsset),
     establishmentDate: fund.establishment_date == null && fund.establishmentDate == null ? null : asText(fund.establishment_date ?? fund.establishmentDate),
+    company: asText(fund.company),
+    contractBenchmark: asText(fund.contract_benchmark ?? fund.contractBenchmark ?? fund.benchmark),
+    custodian: asText(fund.custodian),
+    investType: asText(fund.invest_type ?? fund.investType),
+    contractType: asText(fund.contract_type ?? fund.contractType),
+    managementFee: asNumberOrNull(fund.management_fee ?? fund.managementFee),
+    custodianFee: asNumberOrNull(fund.custodian_fee ?? fund.custodianFee),
     operationStatus: fund.operation_status ?? fund.operationStatus ?? null,
     salesStatus: fund.sales_status ?? fund.salesStatus ?? null,
     feeInfo: fund.fee_info ?? fund.feeInfo ?? null,
     salesRule: fund.sales_rule ?? fund.salesRule ?? null,
     benchmark: fund.benchmark ?? null,
     peerPercentiles: fund.peer_percentiles ?? fund.peerPercentiles ?? null,
+    peerReturnMetrics: fund.peer_return_metrics ?? fund.peerReturnMetrics ?? {},
     performanceData: asRecord(fund.performance_data ?? fund.performance ?? fund.performanceData) || {},
     riskMetrics: asRecord(fund.risk_metrics ?? fund.riskMetrics) || {},
     screeningScore: fund.screening_score ?? fund.screeningScore ?? null,
@@ -103,6 +128,15 @@ export function toCamelFund(fund: BackendRecord): CamelFund {
           dataQualityNotes: researchProfile.data_quality_notes ?? researchProfile.dataQualityNotes ?? null,
           classificationConfidence: researchProfile.classification_confidence ?? researchProfile.classificationConfidence ?? null,
           classificationSource: researchProfile.classification_source ?? researchProfile.classificationSource ?? null,
+          filterStyleTags: asStringArray(researchProfile.filter_style_tags ?? researchProfile.filterStyleTags),
+          styleTagEvidence: asRecordArray(researchProfile.style_tag_evidence ?? researchProfile.styleTagEvidence).map((item) => ({
+            value: asText(item.value),
+            sourceKey: asText(item.source_key ?? item.sourceKey),
+            sourceLabel: asText(item.source_label ?? item.sourceLabel),
+            evidenceLevel: asText(item.evidence_level ?? item.evidenceLevel),
+            asOf: item.as_of == null && item.asOf == null ? null : asText(item.as_of ?? item.asOf),
+            source: asText(item.source),
+          })),
           evidence: researchProfile.evidence ?? null,
           memoStyleSuggestions: asRecordArray(
             researchProfile.memo_style_suggestions ?? researchProfile.memoStyleSuggestions,
@@ -113,11 +147,77 @@ export function toCamelFund(fund: BackendRecord): CamelFund {
             reportCount: asNumberOrNull(suggestion.report_count ?? suggestion.reportCount),
             reportTitles: asStringArray(suggestion.report_titles ?? suggestion.reportTitles),
           })),
+          derivedStyleEvidence: asRecordArray(
+            researchProfile.derived_style_evidence ?? researchProfile.derivedStyleEvidence,
+          ).map((item) => ({
+            value: asText(item.value),
+            status: asText(item.status, 'derived'),
+            source: asText(item.source),
+            basis: asText(item.basis),
+            confidence: asNumberOrNull(item.confidence),
+            evidenceScope: asText(item.evidence_scope ?? item.evidenceScope),
+            caveat: asText(item.caveat),
+          })),
+          holdingStyleEvidence: asRecordArray(
+            researchProfile.holding_style_evidence ?? researchProfile.holdingStyleEvidence,
+          ),
         }
       : null,
+    styleProfile: styleProfile
+      ? {
+          primaryLabel: styleProfile.primary_label ?? styleProfile.primaryLabel ?? null,
+          status: styleProfile.status ?? 'unavailable',
+          primaryEvidence: styleProfile.primary_evidence ?? styleProfile.primaryEvidence ?? null,
+          labelEvidence: asRecordArray(styleProfile.label_evidence ?? styleProfile.labelEvidence),
+          styleLabel: styleProfile.style_label ?? styleProfile.styleLabel ?? null,
+          strategyTags: asStringArray(styleProfile.strategy_tags ?? styleProfile.strategyTags),
+          quantitativeLabels: asStringArray(styleProfile.quantitative_labels ?? styleProfile.quantitativeLabels),
+          bondHoldingStyle: bondHoldingStyle
+            ? {
+                ...bondHoldingStyle,
+                periodCount: asNumberOrNull(bondHoldingStyle.period_count ?? bondHoldingStyle.periodCount),
+                requiredPeriods: asNumberOrNull(bondHoldingStyle.required_periods ?? bondHoldingStyle.requiredPeriods),
+                secondaryLabels: asStringArray(bondHoldingStyle.secondary_labels ?? bondHoldingStyle.secondaryLabels),
+                formalClassificationReady: Boolean(
+                  bondHoldingStyle.formal_classification_ready ?? bondHoldingStyle.formalClassificationReady,
+                ),
+              }
+            : null,
+          fofHoldingStyle: fofHoldingStyle
+            ? {
+                ...fofHoldingStyle,
+                reportDate: fofHoldingStyle.report_date ?? fofHoldingStyle.reportDate ?? null,
+                disclosedFundCount: asNumberOrNull(
+                  fofHoldingStyle.disclosed_fund_count ?? fofHoldingStyle.disclosedFundCount,
+                ),
+                disclosedNavRatio: asNumberOrNull(
+                  fofHoldingStyle.disclosed_nav_ratio ?? fofHoldingStyle.disclosedNavRatio,
+                ),
+                top5NavRatio: asNumberOrNull(fofHoldingStyle.top5_nav_ratio ?? fofHoldingStyle.top5NavRatio),
+                concentrationLabel: fofHoldingStyle.concentration_label ?? fofHoldingStyle.concentrationLabel ?? null,
+                classificationCoverage: asNumberOrNull(
+                  fofHoldingStyle.classification_coverage ?? fofHoldingStyle.classificationCoverage,
+                ),
+                dominantClassification:
+                  fofHoldingStyle.dominant_classification ?? fofHoldingStyle.dominantClassification ?? null,
+                classificationDistribution:
+                  fofHoldingStyle.classification_distribution ?? fofHoldingStyle.classificationDistribution ?? [],
+              }
+            : null,
+          suggestedLabels: asRecordArray(styleProfile.suggested_labels ?? styleProfile.suggestedLabels),
+          derivedLabels: asRecordArray(styleProfile.derived_labels ?? styleProfile.derivedLabels),
+          holdingStyle: styleProfile.holding_style ?? styleProfile.holdingStyle ?? null,
+          source: styleProfile.source ?? null,
+        }
+      : null,
+    fundEvaluation: fundEvaluation || null,
+    researchEvidence: fund.research_evidence ?? fund.researchEvidence ?? null,
     rollingMetrics: fund.rolling_metrics ?? fund.rollingMetrics ?? {},
     dataQuality: fund.data_quality ?? fund.dataQuality ?? null,
     professionalScoring: fund.professional_scoring ?? fund.professionalScoring ?? null,
+    classificationReady: Boolean(fund.classification_ready ?? fund.classificationReady),
+    evaluationReady: Boolean(fund.evaluation_ready ?? fund.evaluationReady),
+    selectionExplanation: fund.selection_explanation ?? fund.selectionExplanation ?? null,
     recommendationEvidence: recommendationEvidence
       ? {
           reasons: asStringArray(recommendationEvidence.reasons),
@@ -125,6 +225,36 @@ export function toCamelFund(fund: BackendRecord): CamelFund {
           dataAsOf: recommendationEvidence.data_as_of ?? recommendationEvidence.dataAsOf ?? null,
           methodologyVersion: recommendationEvidence.methodology_version ?? recommendationEvidence.methodologyVersion ?? '',
           scoreScope: recommendationEvidence.score_scope ?? recommendationEvidence.scoreScope ?? '',
+          multiPeriod: Object.keys(recommendationMultiPeriod || {}).length
+            ? {
+                status: asText(recommendationMultiPeriod?.status, 'short_term_only'),
+                return6m: asNumberOrNull(recommendationMultiPeriod?.return_6m ?? recommendationMultiPeriod?.return6m),
+                return1y: asNumberOrNull(recommendationMultiPeriod?.return_1y ?? recommendationMultiPeriod?.return1y),
+                annualizedReturn1y: asNumberOrNull(recommendationMultiPeriod?.annualized_return_1y ?? recommendationMultiPeriod?.annualizedReturn1y),
+                annualizedReturn3y: asNumberOrNull(recommendationMultiPeriod?.annualized_return_3y ?? recommendationMultiPeriod?.annualizedReturn3y),
+                maxDrawdown1y: asNumberOrNull(recommendationMultiPeriod?.max_drawdown_1y ?? recommendationMultiPeriod?.maxDrawdown1y),
+                maxDrawdown3y: asNumberOrNull(recommendationMultiPeriod?.max_drawdown_3y ?? recommendationMultiPeriod?.maxDrawdown3y),
+                sharpeRatio3y: asNumberOrNull(recommendationMultiPeriod?.sharpe_ratio_3y ?? recommendationMultiPeriod?.sharpeRatio3y),
+                annualizedReturnGap: asNumberOrNull(recommendationMultiPeriod?.annualized_return_gap ?? recommendationMultiPeriod?.annualizedReturnGap),
+                consistencyStatus: asText(recommendationMultiPeriod?.consistency_status ?? recommendationMultiPeriod?.consistencyStatus),
+                consistencyLabel: asText(recommendationMultiPeriod?.consistency_label ?? recommendationMultiPeriod?.consistencyLabel),
+                usedInScore: Boolean(recommendationMultiPeriod?.used_in_score ?? recommendationMultiPeriod?.usedInScore),
+                dataAsOf: recommendationMultiPeriod?.data_as_of ?? recommendationMultiPeriod?.dataAsOf ?? null,
+              }
+            : null,
+          managerTenure: recommendationManagerTenure
+            ? {
+                status: asText(recommendationManagerTenure.status, 'unavailable'),
+                coverageStatus: asText(recommendationManagerTenure.coverage_status ?? recommendationManagerTenure.coverageStatus),
+                coverageRatio: asNumberOrNull(recommendationManagerTenure.coverage_ratio ?? recommendationManagerTenure.coverageRatio),
+                requestedStartDate: asText(recommendationManagerTenure.requested_start_date ?? recommendationManagerTenure.requestedStartDate),
+                actualStartDate: asText(recommendationManagerTenure.actual_start_date ?? recommendationManagerTenure.actualStartDate),
+                totalReturn: asNumberOrNull(recommendationManagerTenure.total_return ?? recommendationManagerTenure.totalReturn),
+                applicable: Boolean(recommendationManagerTenure.applicable),
+                includedInScore: Boolean(recommendationManagerTenure.included_in_score ?? recommendationManagerTenure.includedInScore),
+                note: asText(recommendationManagerTenure.note),
+              }
+            : null,
           alternatives: asRecordArray(recommendationEvidence.alternatives).map((alternative) => ({
             windCode: asText(alternative.wind_code ?? alternative.windCode),
             name: asText(alternative.name),

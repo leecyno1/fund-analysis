@@ -1,10 +1,13 @@
 import { NextResponse } from 'next/server'
 import { backendApiBaseUrl } from '@/lib/backend-api'
 
-export async function POST(_request: Request, { params }: { params: Promise<{ folderId: string }> }) {
+export async function POST(request: Request, { params }: { params: Promise<{ folderId: string }> }) {
   const { folderId } = await params
   try {
-    const response = await fetch(`${backendApiBaseUrl}/api/research-folders/${encodeURIComponent(folderId)}/scan`, {
+    const requestUrl = new URL(request.url)
+    const backendUrl = new URL(`/api/research-folders/${encodeURIComponent(folderId)}/scan`, backendApiBaseUrl)
+    if (requestUrl.searchParams.get('retry_llm') === 'true') backendUrl.searchParams.set('retry_llm', 'true')
+    const response = await fetch(backendUrl, {
       method: 'POST',
       cache: 'no-store',
     })

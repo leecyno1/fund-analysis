@@ -1,69 +1,106 @@
 @import "tailwindcss";
 
 :root {
-  --background: var(--vibe-bg, #f4efe3);
-  --foreground: var(--vibe-text, #17211d);
   --vibe-bg: #f4efe3;
-  --vibe-surface: #fffdf7;
-  --vibe-surface-muted: #ece6d8;
-  --vibe-surface-raised: #ffffff;
-  --vibe-border: #d7cfbe;
-  --vibe-border-strong: #aaa18f;
-  --vibe-text: #17211d;
-  --vibe-text-soft: #44514b;
-  --vibe-text-muted: #6f786f;
-  --vibe-accent: #0c6b55;
-  --vibe-accent-hover: #085440;
-  --vibe-accent-soft: #dcebe4;
-  --vibe-positive: #13795b;
-  --vibe-negative: #b7443e;
-  --vibe-warning: #9a6812;
-  --vibe-error: #b7443e;
+  --vibe-sidebar: #eae1d0;
+  --vibe-sidebar-rail: #102019;
+  --vibe-sidebar-rail-hover: #203129;
+  --vibe-sidebar-rail-text: #f3ecdd;
+  --vibe-surface: #fbf7ef;
+  --vibe-surface-muted: #eae1d0;
+  --vibe-surface-raised: #fffaf1;
+  --vibe-surface-hover: #e2d8c6;
+  --vibe-surface-selected: #e0d2b5;
+  --vibe-border: #d8cdbb;
+  --vibe-border-strong: #b9aa90;
+  --vibe-text: #173128;
+  --vibe-text-soft: #3f5c51;
+  --vibe-text-muted: #66766e;
+  --vibe-text-faint: #89958d;
+  --vibe-accent: #a87432;
+  --vibe-accent-hover: #8d5e25;
+  --vibe-accent-soft: #ddc79c;
+  --vibe-accent-surface: #f1e3c6;
+  --vibe-accent-contrast: #173128;
+  --vibe-gold: #a87432;
+  --vibe-gold-soft: #ddc79c;
+  --vibe-positive: #dc2626;
+  --vibe-negative: #16a34a;
+  --vibe-warning: #a16207;
+  --vibe-error: #b91c1c;
+  --vibe-chart-grid: #d8cdbb;
+  --vibe-chart-text: #66766e;
+  --vibe-chart-axis: #b9aa90;
+  --vibe-chart-up: #dc2626;
+  --vibe-chart-down: #16a34a;
+  --vibe-chart-series-1: #a87432;
+  --vibe-chart-series-2: #3f7667;
+  --vibe-chart-series-3: #8f6b50;
+  --vibe-chart-series-4: #77825c;
+  --vibe-chart-series-5: #a45e52;
+  --vibe-font-ui: "Manrope", "Avenir Next", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --vibe-font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --vibe-font-xs: 11px;
+  --vibe-font-sm: 12px;
+  --vibe-font-md: 13px;
+  --vibe-font-lg: 15px;
+  --vibe-font-xl: 24px;
+  --vibe-control-height: 36px;
+  --vibe-project-rail-width: 60px;
+  --vibe-project-panel-width: 182px;
+  --vibe-sidebar-width: calc(var(--vibe-project-rail-width) + var(--vibe-project-panel-width));
+  --vibe-toolbar-height: 48px;
+  --vibe-motion-fast: 120ms;
+  --background: var(--vibe-bg);
+  --foreground: var(--vibe-text);
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: Arial, Helvetica, sans-serif;
-  --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme]) {
-    --vibe-bg: #0f1714;
-    --vibe-surface: #16211d;
-    --vibe-surface-muted: #1d2a25;
-    --vibe-surface-raised: #22312b;
-    --vibe-border: #33463e;
-    --vibe-border-strong: #52675e;
-    --vibe-text: #edf3ef;
-    --vibe-text-soft: #c2cec8;
-    --vibe-text-muted: #8fa198;
-    --vibe-accent: #71c6a9;
-    --vibe-accent-hover: #8fd8be;
-    --vibe-accent-soft: #193e32;
-  }
+  --font-sans: var(--vibe-font-ui);
+  --font-mono: var(--vibe-font-mono);
 }
 
 :root[data-theme="dark"] {
   --vibe-bg: #0f1714;
-  --vibe-surface: #16211d;
-  --vibe-surface-muted: #1d2a25;
-  --vibe-surface-raised: #22312b;
-  --vibe-border: #33463e;
-  --vibe-border-strong: #52675e;
-  --vibe-text: #edf3ef;
-  --vibe-text-soft: #c2cec8;
-  --vibe-text-muted: #8fa198;
-  --vibe-accent: #71c6a9;
-  --vibe-accent-hover: #8fd8be;
-  --vibe-accent-soft: #193e32;
+  --vibe-sidebar: #121d18;
+  --vibe-surface: #16211c;
+  --vibe-surface-muted: #121d18;
+  --vibe-surface-raised: #1a2821;
+  --vibe-surface-hover: #203129;
+  --vibe-surface-selected: #2a382e;
+  --vibe-border: #2a3931;
+  --vibe-border-strong: #405146;
+  --vibe-text: #f3ecdd;
+  --vibe-text-soft: #cfc7b7;
+  --vibe-text-muted: #a8b4a5;
+  --vibe-text-faint: #78847a;
+  --vibe-accent: #c89a5a;
+  --vibe-accent-hover: #dab47d;
+  --vibe-accent-soft: #5a452c;
+  --vibe-accent-surface: #2c2a21;
+  --vibe-accent-contrast: #102019;
+  --vibe-gold: #c89a5a;
+  --vibe-gold-soft: #5a452c;
+  --vibe-positive: #f87171;
+  --vibe-negative: #4ade80;
+  --vibe-chart-grid: #2a3931;
+  --vibe-chart-text: #a8b4a5;
+  --vibe-chart-axis: #405146;
+  --vibe-chart-up: #f87171;
+  --vibe-chart-down: #4ade80;
+  --vibe-chart-series-1: #c89a5a;
+  --vibe-chart-series-2: #70a596;
+  --vibe-chart-series-3: #b67b64;
+  --vibe-chart-series-4: #9da96f;
+  --vibe-chart-series-5: #cf756b;
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: "Avenir Next", "PingFang SC", "Noto Sans CJK SC", "Microsoft YaHei", sans-serif;
+  font-family: var(--vibe-font-ui);
   letter-spacing: 0;
 }
 
@@ -86,6 +123,17 @@ textarea {
   color: var(--vibe-text);
   font-family: "Avenir Next", "DIN Alternate", "PingFang SC", "Noto Sans CJK SC", sans-serif;
   padding: clamp(1rem, 3vw, 2.5rem);
+}
+
+.newma-fund-mod {
+  min-height: 100vh;
+  padding: 1rem;
+  background: var(--vibe-bg, #f4efe3);
+  color: var(--vibe-text, #173128);
+}
+
+@media (min-width: 1024px) {
+  .newma-fund-mod { padding: 1.25rem 1.5rem; }
 }
 
 .fund-research-mod a { color: inherit; }

@@ -6,4 +6,11 @@ export const fundCategoryPresets = [
   { category: '混合型-偏股配置', label: '偏股混合', description: '股票为主，配置更灵活', mark: '05' },
   { category: '固收-中证全债参考', label: '稳健债券', description: '以债券收益和回撤控制为主', mark: '06' },
   { category: '货币-现金管理', label: '现金管理', description: '关注流动性和短期收益', mark: '07' },
+  { category: '主动权益-行业/消费主题', label: '消费主题', description: '关注消费行业的主动选股基金', mark: '08' },
+  { category: '指数增强-沪深300', label: '指数增强', description: '以沪深300为基准争取超额收益', mark: '09' },
+  { category: '指数-创业板指', label: '成长指数', description: '跟踪创业板代表性成长公司', mark: '10' },
+  { category: 'FOF-偏股配置', label: '偏股 FOF', description: '主要通过基金组合参与权益市场', mark: '11' },
+  { category: 'FOF-平衡配置', label: '平衡 FOF', description: '在权益与固收基金之间均衡配置', mark: '12' },
+  { category: 'FOF-偏债配置', label: '偏债 FOF', description: '以固收基金为主，兼顾权益增强', mark: '13' },
+  { category: 'QDII-人民币计价纳斯达克100指数', label: '纳指100 QDII', description: '比较跟踪误差、费率和规模', mark: '14' },
 ] as const

@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { backendApiBaseUrl } from '@/lib/backend-api'
 import { buildReportRiskLevelGatePolicy } from '@/lib/report-risk-level-gate-policy'
+import { analysisEvidenceMetadata } from '@/lib/analysis-evidence-metadata'
 
 const reportTypeLabel = (reportType: string | null | undefined) => {
   if (reportType === 'fund_evaluation_analysis') return '基金评价分析'
@@ -108,6 +109,7 @@ export async function GET(
       riskLevelGatePolicy,
       metadata: {
         ...generationParams,
+        ...analysisEvidenceMetadata(dataSources),
         dataSources,
         model: generationParams.model ?? generationParams.llmModel ?? '未知模型',
         llmModel: generationParams.model ?? generationParams.llmModel ?? '未知模型',

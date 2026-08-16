@@ -18,6 +18,7 @@ export type HoldingDeepResearchInput = {
   holdings: HoldingDeepResearchHolding[]
   previousHoldings?: HoldingDeepResearchHolding[]
   peerWindCode?: string | null
+  peerQuarter?: string | null
   peerHoldings?: HoldingDeepResearchHolding[]
   source?: string | null
 }
@@ -37,10 +38,22 @@ export type HoldingDeepResearchOutput = {
   heavyPositionChanges: Array<{ stockCode: string; stockName: string; change: number; direction: string }>
   similarity: {
     peerWindCode: string
+    quarter: string
     overlapWeight: number | null
     jaccardScore: number | null
-    commonHoldings: Array<{ stockCode: string; stockName: string; weight: number }>
+    cosineSimilarity: number | null
+    commonHoldings: Array<{
+      stockCode: string
+      stockName: string
+      weightA: number
+      weightB: number
+      normalizedWeightA: number
+      normalizedWeightB: number
+      overlapContribution: number
+    }>
     level: string
+    methodology: string
+    scope: string
   } | null
   concentrationWarnings: string[]
   missingDimensions: string[]
@@ -51,7 +64,9 @@ export type HoldingDeepResearchOutput = {
 }
 
 const toolName = 'holding-deep-research'
-const version = '1.0.0'
+const version = '1.1.0'
+const similarityMethodology = 'same_quarter_top10_normalized_overlap_v1'
+const similarityScope = '仅比较同一报告期前十大公开重仓股，并将各自前十大权重归一化；不是完整组合相关性。'
 
 function normalizeText(value: unknown) {
   return String(value ?? '').trim()
@@ -103,6 +118,16 @@ function holdingKey(holding: { stockCode: string; stockName: string }) {
   return holding.stockCode || holding.stockName
 }
 
+function normalizedTopTen(holdings: ReturnType<typeof normalizedHoldings>) {
+  const topTen = holdings.slice(0, 10)
+  const totalWeight = topTen.reduce((sum, holding) => sum + holding.weight, 0)
+  if (topTen.length < 5 || totalWeight <= 0) return []
+  return topTen.map((holding) => ({
+    ...holding,
+    normalizedWeight: holding.weight / totalWeight,
+  }))
+}
+
 function calculateTurnover(
   current: ReturnType<typeof normalizedHoldings>,
   previous: ReturnType<typeof normalizedHoldings>,
@@ -142,34 +167,54 @@ function similarity(
   current: ReturnType<typeof normalizedHoldings>,
   peer: ReturnType<typeof normalizedHoldings>,
   peerWindCode: string,
+  quarter: string,
+  peerQuarter: string,
 ) {
-  if (!peer.length || !current.length || !peerWindCode) return null
-  const currentMap = new Map(current.map((holding) => [holdingKey(holding), holding]))
-  const peerMap = new Map(peer.map((holding) => [holdingKey(holding), holding]))
+  if (!peerWindCode || !quarter || !peerQuarter || quarter !== peerQuarter) return null
+  const currentTopTen = normalizedTopTen(current)
+  const peerTopTen = normalizedTopTen(peer)
+  if (!currentTopTen.length || !peerTopTen.length) return null
+  const currentMap = new Map(currentTopTen.map((holding) => [holdingKey(holding), holding]))
+  const peerMap = new Map(peerTopTen.map((holding) => [holdingKey(holding), holding]))
   const commonKeys = Array.from(currentMap.keys()).filter((key) => peerMap.has(key))
-  const unionCount = new Set([...currentMap.keys(), ...peerMap.keys()]).size
+  const unionKeys = new Set([...currentMap.keys(), ...peerMap.keys()])
   const commonHoldings = commonKeys.map((key) => {
     const currentHolding = currentMap.get(key)!
     const peerHolding = peerMap.get(key)!
     return {
       stockCode: currentHolding.stockCode,
       stockName: currentHolding.stockName || peerHolding.stockName || currentHolding.stockCode,
-      weight: round4(Math.min(currentHolding.weight, peerHolding.weight)),
+      weightA: currentHolding.weight,
+      weightB: peerHolding.weight,
+      normalizedWeightA: round4(currentHolding.normalizedWeight),
+      normalizedWeightB: round4(peerHolding.normalizedWeight),
+      overlapContribution: round4(Math.min(currentHolding.normalizedWeight, peerHolding.normalizedWeight)),
     }
-  }).sort((left, right) => right.weight - left.weight)
-  const overlapWeight = round4(commonHoldings.reduce((sum, item) => sum + item.weight, 0))
-  const jaccardScore = unionCount > 0 ? round4(commonKeys.length / unionCount) : null
-  const level = overlapWeight >= 35 || (jaccardScore !== null && jaccardScore >= 0.5)
+  }).sort((left, right) => right.overlapContribution - left.overlapContribution)
+  const overlapWeight = round4(commonHoldings.reduce((sum, item) => sum + item.overlapContribution, 0))
+  const jaccardScore = unionKeys.size > 0 ? round4(commonKeys.length / unionKeys.size) : null
+  const dotProduct = Array.from(unionKeys).reduce(
+    (sum, key) => sum + (currentMap.get(key)?.normalizedWeight || 0) * (peerMap.get(key)?.normalizedWeight || 0),
+    0,
+  )
+  const currentNorm = Math.sqrt(currentTopTen.reduce((sum, holding) => sum + holding.normalizedWeight ** 2, 0))
+  const peerNorm = Math.sqrt(peerTopTen.reduce((sum, holding) => sum + holding.normalizedWeight ** 2, 0))
+  const cosineSimilarity = currentNorm > 0 && peerNorm > 0 ? round4(dotProduct / (currentNorm * peerNorm)) : null
+  const level = overlapWeight >= 0.55 || (jaccardScore !== null && jaccardScore >= 0.5)
     ? '高相似'
-    : overlapWeight >= 15 || (jaccardScore !== null && jaccardScore >= 0.25)
+    : overlapWeight >= 0.25 || (jaccardScore !== null && jaccardScore >= 0.25)
       ? '中相似'
       : '低相似'
   return {
     peerWindCode,
+    quarter,
     overlapWeight,
     jaccardScore,
+    cosineSimilarity,
     commonHoldings,
     level,
+    methodology: similarityMethodology,
+    scope: similarityScope,
   }
 }
 
@@ -206,7 +251,9 @@ export const holdingDeepResearchTool: ResearchTool<HoldingDeepResearchInput, Hol
     const styleTags = uniqueSorted(current.flatMap((holding) => holding.styleTags))
     const turnoverEstimate = calculateTurnover(current, previous)
     const changes = heavyPositionChanges(current, previous)
-    const similarityResult = similarity(current, peer, normalizeText(input.peerWindCode))
+    const quarter = normalizeText(input.quarter)
+    const peerQuarter = normalizeText(input.peerQuarter) || quarter
+    const similarityResult = similarity(current, peer, normalizeText(input.peerWindCode), quarter, peerQuarter)
     const concentrationWarnings = [
       topTenWeight !== null && topTenWeight >= 60 ? `前十大权重 ${topTenWeight}%，集中度偏高。` : '',
       topIndustryWeight !== null && topIndustryWeight >= 35 ? `第一行业 ${topIndustry} 权重 ${topIndustryWeight}%，行业集中度偏高。` : '',
@@ -218,7 +265,7 @@ export const holdingDeepResearchTool: ResearchTool<HoldingDeepResearchInput, Hol
       themeTags.length ? '' : '主题标签',
       styleTags.length ? '' : '风格标签',
       previous.length ? '' : '上一期持仓/换手估算',
-      similarityResult ? '' : '基金间持仓相似度',
+      similarityResult ? '' : '同期基金间持仓相似度',
     ].filter(Boolean)
     const output: HoldingDeepResearchOutput = {
       holdingReady,
@@ -237,8 +284,8 @@ export const holdingDeepResearchTool: ResearchTool<HoldingDeepResearchInput, Hol
       concentrationWarnings,
       missingDimensions,
       policy: {
-        hardBoundary: '持仓穿透、行业/主题/风格标签、换手或相似度证据缺失时，只能输出持仓补证清单，不输出持仓优势、分散性或替代性结论。',
-        requiredDimensions: ['可信持仓明细', '行业标签', '主题标签', '风格标签', '换手估算', '重仓变化', '基金间持仓相似度'],
+        hardBoundary: '持仓穿透、行业/主题/风格标签、换手或同期前十大重仓相似度证据缺失时，只能输出持仓补证清单，不输出持仓优势、分散性或替代性结论。',
+        requiredDimensions: ['可信持仓明细', '行业标签', '主题标签', '风格标签', '换手估算', '重仓变化', '同期基金间持仓相似度'],
       },
     }
     const hardBlocks = holdingReady ? [] : ['缺少至少 5 条可信持仓，不能生成持仓穿透或相似度研究结论。']

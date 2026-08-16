@@ -16,6 +16,7 @@ import {
   Send,
   ShieldCheck,
   Sparkles,
+  Tags,
 } from 'lucide-react'
 
 type FundOption = {
@@ -68,6 +69,23 @@ type LlmHealth = {
   retry_after_seconds?: number
 }
 
+type EvidenceSnapshot = {
+  assessment_summary?: {
+    status?: string
+    verdict?: string
+    peer_group?: string
+    score?: number | null
+    grade?: string
+    peer_rank?: number | null
+    peer_count?: number | null
+    style_evidence?: { status?: string; labels?: string[]; memo_labels?: string[]; scope?: string; quarter?: string }
+    attribution_evidence?: { status?: string; headline?: string; detail?: string; quarter?: string; coverage?: number | null; formal_barra_ready?: boolean; barra_descriptor_ready?: boolean }
+    research_evidence?: { status?: string; count?: number; fund_specific_count?: number; manager_level_count?: number; latest_title?: string; latest_date?: string; note?: string }
+  }
+  research_memos?: { count?: number; fund_specific_count?: number; manager_level_count?: number }
+  attribution?: { status?: string; quarter?: string; evidence_origin?: { label?: string; mode?: string } }
+}
+
 function formatDate(value?: string | null) {
   if (!value) return '时间待补'
   const date = new Date(value)
@@ -76,6 +94,140 @@ function formatDate(value?: string | null) {
 
 function analysisModeLabel(metadata?: Record<string, unknown>) {
   return metadata?.mode === 'llm_evaluation_evidence' ? '模型综合评价' : '本地证据评价'
+}
+
+function attributionEvidenceLabel(metadata?: Record<string, unknown>) {
+  const quarter = typeof metadata?.attribution_quarter === 'string' ? metadata.attribution_quarter : ''
+  if (metadata?.attribution_evidence_mode === 'saved_history') return `归因：${quarter || '当前季度'} 已保存结果`
+  if (metadata?.attribution_evidence_mode === 'live_calculation') return `归因：${quarter || '当前季度'} 现场计算`
+  if (metadata?.attribution_evidence_mode === 'timed_out') return `归因：${quarter || '当前季度'} 现场计算超时，本次未采用`
+  if (metadata?.attribution_evidence_mode === 'not_run') return `归因：${quarter || '当前季度'} 本次未运行`
+  return ''
+}
+
+function memoEvidenceLabel(metadata?: Record<string, unknown>) {
+  const fundCount = Number(metadata?.fund_specific_research_count || 0)
+  const managerCount = Number(metadata?.manager_level_research_count || 0)
+  if (fundCount > 0 && managerCount > 0) return `纪要：基金 ${fundCount} · 经理 ${managerCount}`
+  if (fundCount > 0) return `纪要：基金专属 ${fundCount}`
+  if (managerCount > 0) return `纪要：经理层 ${managerCount}`
+  return ''
+}
+
+function managerTenureEvidenceLabel(metadata?: Record<string, unknown>) {
+  const status = typeof metadata?.manager_tenure_coverage_status === 'string' ? metadata.manager_tenure_coverage_status : ''
+  const coverage = Number(metadata?.manager_tenure_coverage_ratio)
+  if (status === 'full_tenure') return '经理任期：完整覆盖'
+  if (status === 'partial_since_data_start') {
+    return `经理任期：本地覆盖${Number.isFinite(coverage) ? ` ${Math.round(coverage * 100)}%` : ''} · 不排名`
+  }
+  return ''
+}
+
+function multiPeriodEvidenceMeta(metadata?: Record<string, unknown>) {
+  const status = typeof metadata?.multi_period_status === 'string' ? metadata.multi_period_status : ''
+  const consistency = typeof metadata?.multi_period_consistency_label === 'string'
+    ? metadata.multi_period_consistency_label
+    : ''
+  if (status === 'long_term_ready') {
+    return {
+      label: `长期证据：近 3 年完整${consistency ? ` · ${consistency}` : ''}`,
+      className: 'bg-[#e4f0e9] text-[#24624c]',
+    }
+  }
+  if (status === 'short_term_only') {
+    return { label: '长期证据：近 3 年不足', className: 'bg-[#fff0d4] text-[#7b581c]' }
+  }
+  return null
+}
+
+function numberOrNull(value: unknown) {
+  const parsed = Number(value)
+  return value === null || value === undefined || value === '' || !Number.isFinite(parsed) ? null : parsed
+}
+
+function stringList(value: unknown) {
+  return Array.isArray(value) ? value.map(String).map((item) => item.trim()).filter(Boolean) : []
+}
+
+function evidenceFromMetadata(metadata?: Record<string, unknown> | null): EvidenceSnapshot | null {
+  if (!metadata) return null
+  const styleLabels = stringList(metadata.style_labels)
+  const memoLabels = stringList(metadata.memo_style_labels)
+  const score = numberOrNull(metadata.evaluation_score)
+  const rank = numberOrNull(metadata.peer_rank)
+  const peerCount = numberOrNull(metadata.peer_count)
+  const fundCount = numberOrNull(metadata.fund_specific_research_count) || 0
+  const managerCount = numberOrNull(metadata.manager_level_research_count) || 0
+  return {
+    assessment_summary: {
+      status: String(metadata.evaluation_status || ''),
+      verdict: String(metadata.evaluation_verdict || ''),
+      peer_group: String(metadata.peer_group || ''),
+      score,
+      grade: String(metadata.evaluation_grade || ''),
+      peer_rank: rank,
+      peer_count: peerCount,
+      style_evidence: {
+        status: String(metadata.style_evidence_status || ''),
+        scope: String(metadata.style_evidence_scope || ''),
+        quarter: String(metadata.style_evidence_quarter || ''),
+        labels: styleLabels,
+        memo_labels: memoLabels,
+      },
+      attribution_evidence: {
+        status: String(metadata.attribution_evidence_status || metadata.attribution_status || ''),
+        headline: String(metadata.attribution_evidence_headline || ''),
+        detail: String(metadata.attribution_evidence_detail || ''),
+        quarter: String(metadata.attribution_quarter || ''),
+        coverage: numberOrNull(metadata.attribution_disclosure_coverage),
+        formal_barra_ready: metadata.formal_barra_ready === true,
+        barra_descriptor_ready: metadata.barra_descriptor_ready === true,
+      },
+      research_evidence: {
+        status: String(metadata.research_evidence_status || ''),
+        count: fundCount + managerCount,
+        fund_specific_count: fundCount,
+        manager_level_count: managerCount,
+        note: String(metadata.research_evidence_note || ''),
+      },
+    },
+  }
+}
+
+function statusLabel(status?: string) {
+  if (status === 'ok' || status === 'available' || status === 'complete') return '证据完整'
+  if (status === 'partial' || status === 'partial_evidence') return '部分可用'
+  if (status === 'manager_level') return '仅经理层'
+  if (status === 'peer_percentile_ready' || status === 'quantitative') return '量化持仓'
+  if (status === 'not_requested' || status === 'not_run') return '未运行'
+  return status ? '证据不足' : '待读取'
+}
+
+function EvidenceSummary({ snapshot, loading, title }: { snapshot: EvidenceSnapshot | null; loading?: boolean; title: string }) {
+  if (loading) return <div className="mt-4 flex items-center gap-2 border-t border-[#dfe4df] pt-4 text-xs text-[#6f7b74]"><LoaderCircle className="h-4 w-4 animate-spin text-[#28745c]" />正在读取评价、归因和纪要证据</div>
+  if (!snapshot) return null
+  const assessment = snapshot.assessment_summary || {}
+  const style = assessment.style_evidence || {}
+  const attribution = assessment.attribution_evidence || {}
+  const research = assessment.research_evidence || {}
+  const fundMemos = Number(research.fund_specific_count ?? snapshot.research_memos?.fund_specific_count ?? 0)
+  const managerMemos = Number(research.manager_level_count ?? snapshot.research_memos?.manager_level_count ?? 0)
+  const labels = [...(style.labels || []), ...(style.memo_labels || [])].filter((label, index, all) => all.indexOf(label) === index)
+  const coverage = numberOrNull(attribution.coverage)
+  return (
+    <section className="mt-4 border-t border-[#dfe4df] pt-4">
+      <div className="flex flex-wrap items-center justify-between gap-2"><h3 className="text-xs font-bold text-[#25342c]">{title}</h3><span className="text-[10px] text-[#859089]">现场数据 · 不采用模拟结论</span></div>
+      <div className="mt-3 grid gap-px overflow-hidden border border-[#dfe4df] bg-[#dfe4df] sm:grid-cols-2 xl:grid-cols-4">
+        <div className="min-w-0 bg-[#fafbf9] p-3"><div className="flex items-center justify-between gap-2 text-[10px] text-[#738078]"><span>分类评价</span><BarChart3 className="h-3.5 w-3.5" /></div><strong className="mt-2 block truncate text-sm text-[#1f3028]">{assessment.peer_group || '同类组待确认'}</strong><p className="mt-1 text-[11px] text-[#647169]">{assessment.score != null ? `${Number(assessment.score).toFixed(1)} 分 · ${assessment.grade || '无等级'}` : statusLabel(assessment.status)}{assessment.peer_rank && assessment.peer_count ? ` · ${assessment.peer_rank}/${assessment.peer_count}` : ''}</p></div>
+        <div className="min-w-0 bg-[#fafbf9] p-3"><div className="flex items-center justify-between gap-2 text-[10px] text-[#738078]"><span>风格证据</span><Tags className="h-3.5 w-3.5" /></div><strong className="mt-2 block text-sm text-[#1f3028]">{statusLabel(style.status)}</strong><p className="mt-1 line-clamp-2 text-[11px] text-[#647169]">{labels.length ? labels.join(' · ') : '暂无可核验风格标签'}{style.quarter ? ` · ${style.quarter}` : ''}</p></div>
+        <div className="min-w-0 bg-[#fafbf9] p-3"><div className="flex items-center justify-between gap-2 text-[10px] text-[#738078]"><span>Barra / Brinson</span><ShieldCheck className="h-3.5 w-3.5" /></div><strong className="mt-2 block text-sm text-[#1f3028]">{attribution.headline || statusLabel(attribution.status)}</strong><p className="mt-1 line-clamp-2 text-[11px] text-[#647169]">{attribution.quarter || snapshot.attribution?.quarter || '季度待确认'}{coverage != null ? ` · 披露覆盖 ${(coverage * 100).toFixed(1)}%` : ''}{attribution.formal_barra_ready ? ' · 正式 Barra' : attribution.barra_descriptor_ready ? ' · 风格描述子' : ''}</p></div>
+        <div className="min-w-0 bg-[#fafbf9] p-3"><div className="flex items-center justify-between gap-2 text-[10px] text-[#738078]"><span>调研纪要</span><BookOpenText className="h-3.5 w-3.5" /></div><strong className="mt-2 block text-sm text-[#1f3028]">基金 {fundMemos} · 经理 {managerMemos}</strong><p className="mt-1 line-clamp-2 text-[11px] text-[#647169]">{research.latest_title || research.note || (managerMemos ? '经理层纪要不外推为本基金持仓' : '暂无相关纪要')}</p></div>
+      </div>
+      {assessment.verdict ? <p className="mt-3 text-xs leading-5 text-[#59675f]">{assessment.verdict}</p> : null}
+      {attribution.detail ? <p className="mt-1 text-[11px] leading-5 text-[#7a672f]">归因边界：{attribution.detail}</p> : null}
+    </section>
+  )
 }
 
 function historyFundName(item: AnalysisHistory) {
@@ -126,6 +278,8 @@ export default function FundAnalysisWorkspace({ initialFund = null }: { initialF
   const [history, setHistory] = useState<AnalysisHistory[]>([])
   const [historyLoading, setHistoryLoading] = useState(true)
   const [llmHealth, setLlmHealth] = useState<LlmHealth | null>(null)
+  const [evidenceSnapshot, setEvidenceSnapshot] = useState<EvidenceSnapshot | null>(null)
+  const [evidenceLoading, setEvidenceLoading] = useState(Boolean(initialFund))
 
   const loadHistory = useCallback(async () => {
     setHistoryLoading(true)
@@ -185,6 +339,29 @@ export default function FundAnalysisWorkspace({ initialFund = null }: { initialF
     return () => globalThis.clearTimeout(timer)
   }, [query, selectedFund])
 
+  useEffect(() => {
+    if (!selectedFund?.windCode) return
+    const controller = new AbortController()
+    const params = new URLSearchParams({ window: '1y', include_research: 'true', include_attribution: 'true', live_attribution: 'false' })
+    const timer = globalThis.setTimeout(() => {
+      fetch(`/api/funds/${encodeURIComponent(selectedFund.windCode)}/research-snapshot?${params.toString()}`, { cache: 'no-store', signal: controller.signal })
+        .then(async (response) => {
+          const payload = await response.json().catch(() => ({}))
+          if (!response.ok) throw new Error(payload.error || '证据快照不可用')
+          setEvidenceSnapshot(payload as EvidenceSnapshot)
+        })
+        .catch((snapshotError) => {
+          if (snapshotError instanceof DOMException && snapshotError.name === 'AbortError') return
+          setEvidenceSnapshot(null)
+        })
+        .finally(() => { if (!controller.signal.aborted) setEvidenceLoading(false) })
+    }, 0)
+    return () => {
+      globalThis.clearTimeout(timer)
+      controller.abort()
+    }
+  }, [selectedFund?.windCode])
+
   const progressLabels = ['读取基金与分类', '计算同类评价', '读取风险与归因', '检索调研纪要', '形成综合评价']
 
   async function runAnalysis(event: FormEvent) {
@@ -228,6 +405,8 @@ export default function FundAnalysisWorkspace({ initialFund = null }: { initialF
       const targetId = payload.targetId || fallbackTargetId
       setSelectedFund({ windCode: targetId, name: targetId, type: '' })
       setQuery(targetId)
+      setEvidenceSnapshot(null)
+      setEvidenceLoading(true)
       globalThis.scrollTo({ top: 0, behavior: 'smooth' })
     } catch (historyError) {
       setError(historyError instanceof Error ? historyError.message : '无法读取分析历史')
@@ -240,6 +419,7 @@ export default function FundAnalysisWorkspace({ initialFund = null }: { initialF
 
   const selectedManager = useMemo(() => selectedFund?.managers?.map((manager) => manager.name).filter(Boolean).join('、') || '', [selectedFund])
   const modelHealthCopy = healthCopy(llmHealth)
+  const resultMultiPeriodEvidence = multiPeriodEvidenceMeta(result?.metadata)
 
   return (
     <div className="space-y-7">
@@ -264,12 +444,12 @@ export default function FundAnalysisWorkspace({ initialFund = null }: { initialF
             <label className="block text-sm font-bold">选择基金</label>
             <div className="relative mt-3">
               <Search className="pointer-events-none absolute left-4 top-3.5 h-5 w-5 text-[#7d8882]" />
-              <input value={query} onChange={(event) => { setQuery(event.target.value); setSelectedFund(null) }} placeholder="输入基金名称或代码" className="h-12 w-full rounded-md border border-[#cfd6d0] bg-white pl-12 pr-4 text-sm outline-none focus:border-[#28745c]" />
+              <input value={query} onChange={(event) => { setQuery(event.target.value); setSelectedFund(null); setEvidenceSnapshot(null); setEvidenceLoading(false) }} placeholder="输入基金名称或代码" className="h-12 w-full rounded-md border border-[#cfd6d0] bg-white pl-12 pr-4 text-sm outline-none focus:border-[#28745c]" />
               {fundLoading ? <LoaderCircle className="absolute right-4 top-4 h-4 w-4 animate-spin text-[#28745c]" /> : null}
               {funds.length ? (
                 <div className="absolute inset-x-0 top-14 z-20 max-h-72 overflow-y-auto border border-[#cfd6d0] bg-white shadow-xl">
                   {funds.map((fund) => (
-                    <button key={fund.windCode} type="button" onClick={() => { setSelectedFund(fund); setQuery(`${fund.name} ${fund.windCode}`); setFunds([]) }} className="flex w-full items-center justify-between gap-4 border-b border-[#edf0ed] px-4 py-3 text-left text-sm hover:bg-[#f2f6f3]">
+                    <button key={fund.windCode} type="button" onClick={() => { setSelectedFund(fund); setQuery(`${fund.name} ${fund.windCode}`); setFunds([]); setEvidenceSnapshot(null); setEvidenceLoading(true) }} className="flex w-full items-center justify-between gap-4 border-b border-[#edf0ed] px-4 py-3 text-left text-sm hover:bg-[#f2f6f3]">
                       <span className="min-w-0"><strong className="block truncate">{fund.name || fund.windCode}</strong><small className="mt-1 block text-[#7a8580]">{fund.windCode} · {fund.type || '类别待确认'}</small></span>
                       <ArrowRight className="h-4 w-4 shrink-0 text-[#849088]" />
                     </button>
@@ -279,8 +459,9 @@ export default function FundAnalysisWorkspace({ initialFund = null }: { initialF
             </div>
 
             {selectedFund ? (
-              <div className="mt-3 flex flex-wrap gap-x-5 gap-y-1 rounded-md bg-[#edf4f0] px-4 py-3 text-xs text-[#315e4d]">
-                <span className="font-bold">{selectedFund.name}</span><span>{selectedFund.windCode}</span><span>{selectedFund.type || '类别待确认'}</span>{selectedManager ? <span>{selectedManager}</span> : null}
+              <div className="mt-3 rounded-md bg-[#edf4f0] px-4 py-3">
+                <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs text-[#315e4d]"><span className="font-bold">{selectedFund.name}</span><span>{selectedFund.windCode}</span><span>{selectedFund.type || '类别待确认'}</span>{selectedManager ? <span>{selectedManager}</span> : null}</div>
+                <EvidenceSummary snapshot={evidenceSnapshot} loading={evidenceLoading} title="本次分析将使用的证据" />
               </div>
             ) : null}
 
@@ -306,9 +487,10 @@ export default function FundAnalysisWorkspace({ initialFund = null }: { initialF
           {result ? (
             <article className="border border-[#dbe1dc] bg-white">
               <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#dfe4df] px-5 py-4 sm:px-7">
-                <div className="flex items-center gap-2 text-xs font-bold text-[#28745c]"><Sparkles className="h-4 w-4" />{analysisModeLabel(result.metadata)}</div>
+                <div className="flex flex-wrap items-center gap-2 text-xs font-bold text-[#28745c]"><Sparkles className="h-4 w-4" />{analysisModeLabel(result.metadata)}{resultMultiPeriodEvidence ? <span className={`rounded-sm px-2 py-1 text-[10px] ${resultMultiPeriodEvidence.className}`}>{resultMultiPeriodEvidence.label}</span> : null}{attributionEvidenceLabel(result.metadata) ? <span className="rounded-sm bg-[#edf4f0] px-2 py-1 text-[10px] text-[#47685a]">{attributionEvidenceLabel(result.metadata)}</span> : null}{managerTenureEvidenceLabel(result.metadata) ? <span className="rounded-sm bg-[#eef1f7] px-2 py-1 text-[10px] text-[#56627a]">{managerTenureEvidenceLabel(result.metadata)}</span> : null}{memoEvidenceLabel(result.metadata) ? <span className="rounded-sm bg-[#f2f0e7] px-2 py-1 text-[10px] text-[#756532]">{memoEvidenceLabel(result.metadata)}</span> : null}</div>
                 {result.id ? <span className="text-xs text-[#7a8580]">已保存到分析历史</span> : null}
               </div>
+              <div className="px-5 sm:px-7"><EvidenceSummary snapshot={evidenceFromMetadata(result.metadata)} title="本次分析实际使用的证据" /></div>
               <div className="px-5 py-6 sm:px-7 sm:py-8"><ReportBody content={result.report} /></div>
               {result.timeline?.revisions?.length ? (
                 <div className="border-t border-[#dfe4df] px-5 py-5 sm:px-7">
