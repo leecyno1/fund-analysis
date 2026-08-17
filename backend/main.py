@@ -29,7 +29,7 @@ import uuid
 import json
 
 from routes import funds, fund_companies, home, managers, scoring, reports, research_reports, research_memos, research_folders, screening, watchlists
-from routes import attribution, barra, brinson, export, data_sync, data_health, metrics, fund_pools, alerts, investment_analysis, fund_browser, market_indices, newma_desk, investment_theses, anomaly_scanner
+from routes import attribution, barra, brinson, export, data_sync, data_health, metrics, fund_pools, alerts, investment_analysis, fund_browser, market_indices, newma_desk, investment_theses, anomaly_scanner, fund_watches
 from service_registry import get_data_service, get_scoring_engine, get_db
 
 logging.basicConfig(
@@ -166,6 +166,7 @@ app.include_router(investment_analysis.router, tags=["高级投资分析"])
 app.include_router(newma_desk.router, tags=["Newma Desk"])
 app.include_router(investment_theses.router, tags=["投资论点"])
 app.include_router(anomaly_scanner.router, tags=["异常筛查"])
+app.include_router(fund_watches.router, tags=["观察项"])
 
 
 @app.get("/api/health")

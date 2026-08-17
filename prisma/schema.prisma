@@ -1404,3 +1404,30 @@ model InvestmentThesis {
   @@index([nextReviewDate])
   @@map("investment_theses")
 }
+
+// ============================================================
+// 观察项 (Fund Watches) — 任意基金+任意指标+阈值+夜扫
+// ============================================================
+enum WatchStatus {
+  active
+  triggered
+  dismissed
+}
+
+model FundWatch {
+  id             String      @id @default(uuid()) @db.Uuid
+  fundWindCode   String      @map("fund_wind_code")
+  metricField    String      @map("metric_field")
+  operator       String      @default(">=")
+  threshold      Float
+  note           String?
+  status         WatchStatus @default(active)
+  triggeredAt    DateTime?   @map("triggered_at") @db.Timestamptz
+  triggeredValue Float?      @map("triggered_value")
+  createdAt      DateTime    @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt      DateTime    @updatedAt @map("updated_at") @db.Timestamptz
+
+  @@index([fundWindCode])
+  @@index([status])
+  @@map("fund_watches")
+}
