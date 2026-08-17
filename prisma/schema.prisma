@@ -1400,6 +1400,7 @@ model InvestmentThesis {
   closeVerdict String? @map("close_verdict")
 
   queueItems ResearchQueueItem[]
+  postmortems DecisionPostmortem[]
 
   @@index([fundWindCode])
   @@index([state])
@@ -1466,4 +1467,32 @@ model ResearchQueueItem {
   @@index([fundWindCode])
   @@index([nextReviewDate])
   @@map("research_queue_items")
+}
+
+// ============================================================
+// 决策复盘 (Decision Post-mortems) — 论点关闭后强制复盘
+// ============================================================
+model DecisionPostmortem {
+  id                     String   @id @default(uuid()) @db.Uuid
+  thesisId               String   @map("thesis_id") @db.Uuid
+  fundWindCode           String   @map("fund_wind_code")
+  outcome                String
+  actualReturnPct        Float?   @map("actual_return_pct")
+  peerMedianReturnPct    Float?   @map("peer_median_return_pct")
+  excessReturnPct        Float?   @map("excess_return_pct")
+  reasoningVerdicts      Json     @default("[]") @map("reasoning_verdicts")
+  triggerFired           Boolean  @default(false) @map("trigger_fired")
+  triggerDetail          String?  @map("trigger_detail")
+  lessonLearned          String?  @map("lesson_learned")
+  decisionBias           String?  @map("decision_bias")
+  wouldRepeat            Boolean? @map("would_repeat")
+  reviewedAt             DateTime @default(now()) @map("reviewed_at") @db.Timestamptz
+  createdAt              DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  thesis InvestmentThesis @relation(fields: [thesisId], references: [id], onDelete: Cascade)
+
+  @@index([thesisId])
+  @@index([fundWindCode])
+  @@index([outcome])
+  @@map("decision_postmortems")
 }
