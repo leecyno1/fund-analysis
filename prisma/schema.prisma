@@ -1399,6 +1399,8 @@ model InvestmentThesis {
   closeReason  String? @map("close_reason")
   closeVerdict String? @map("close_verdict")
 
+  queueItems ResearchQueueItem[]
+
   @@index([fundWindCode])
   @@index([state])
   @@index([nextReviewDate])
@@ -1430,4 +1432,38 @@ model FundWatch {
   @@index([fundWindCode])
   @@index([status])
   @@map("fund_watches")
+}
+
+// ============================================================
+// 研究队列 (Research Queue) — 候选→研究→产出的工作流容器
+// ============================================================
+enum ResearchQueueStatus {
+  queued
+  researching
+  concluded
+  dropped
+}
+
+model ResearchQueueItem {
+  id              String              @id @default(uuid()) @db.Uuid
+  fundWindCode    String              @map("fund_wind_code")
+  status          ResearchQueueStatus @default(queued)
+  priority        Int                 @default(3)
+  source          String?
+  sourceRef       String?             @map("source_ref")
+  nextReviewDate  DateTime?           @map("next_review_date") @db.Date
+  outputCommitted Boolean             @default(false) @map("output_committed")
+  thesisId        String?             @map("thesis_id") @db.Uuid
+  conclusion      String?
+  concludedAt     DateTime?           @map("concluded_at") @db.Timestamptz
+  notes           String?
+  createdAt       DateTime            @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt       DateTime            @updatedAt @map("updated_at") @db.Timestamptz
+
+  thesis InvestmentThesis? @relation(fields: [thesisId], references: [id])
+
+  @@index([status])
+  @@index([fundWindCode])
+  @@index([nextReviewDate])
+  @@map("research_queue_items")
 }
