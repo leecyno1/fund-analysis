@@ -27,6 +27,7 @@ const staticChecks = [
   'scripts/company_research_foundation_smoke.mjs',
   'scripts/methodology_config_foundation_smoke.mjs',
   'scripts/methodology_mapping_repository_smoke.mjs',
+  'scripts/holding_style_drift_smoke.mjs',
   'scripts/methodology_seed_data_smoke.mjs',
   'scripts/methodology_database_resolution_smoke.mjs',
   'scripts/comparison_research_score_tool_smoke.mjs',
