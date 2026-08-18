@@ -7,6 +7,7 @@ import { ArrowLeft, BarChart3, Bot, Building2, CalendarRange, CircleAlert, Exter
 import { CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import type { CamelFund } from '@/lib/backend-api'
 import EvidenceTriptychStrip from './EvidenceTriptychStrip'
+import DecisionSupportPanel from './DecisionSupportPanel'
 import {
   asRecord,
   formatAsset,
@@ -599,6 +600,8 @@ export default function SimpleComparisonClient({ funds, alignedComparison, holdi
       ) : null}
 
       {comparable ? <EvidenceTriptychStrip funds={funds} /> : null}
+
+      {comparable ? <DecisionSupportPanel codes={selectedCodes} nameByCode={fundNameByCode} /> : null}
 
       {comparable ? (
         <section data-testid="multi-period-evidence" className="overflow-hidden border border-[#dbe1dc] bg-white">
