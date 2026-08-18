@@ -500,6 +500,7 @@ function PostmortemsPanel() {
   const [stats, setStats] = useState<PostmortemStats | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [showForm, setShowForm] = useState(false)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -532,6 +533,14 @@ function PostmortemsPanel() {
           <StatCell label="平均超额" value={stats.avg_excess_return_pct != null ? `${stats.avg_excess_return_pct.toFixed(1)}%` : '—'} />
         </div>
       ) : null}
+
+      <div className="flex justify-end">
+        <button type="button" onClick={() => setShowForm((v) => !v)} className="border border-[#c8d0ca] px-3 py-1.5 text-[11px] font-bold text-[#3d5347] hover:border-[#28745c]">
+          {showForm ? '收起' : '+ 新建复盘'}
+        </button>
+      </div>
+      {showForm ? <NewPostmortemForm onDone={() => { setShowForm(false); void load() }} /> : null}
+
       {error ? <ErrorNote text={error} /> : null}
       {loading ? <LoadingNote /> : postmortems.length === 0 ? (
         <EmptyNote text="暂无决策复盘。论点关闭后系统会要求完成结构化复盘，积累后可识别系统性决策偏差。" />
@@ -553,6 +562,86 @@ function PostmortemsPanel() {
         </div>
       )}
     </section>
+  )
+}
+
+function NewPostmortemForm({ onDone }: { onDone: () => void }) {
+  const [theses, setTheses] = useState<Array<{ id: string; title: string; fund_wind_code: string }>>([])
+  const [thesisId, setThesisId] = useState('')
+  const [outcome, setOutcome] = useState('validated')
+  const [actual, setActual] = useState('')
+  const [peerMedian, setPeerMedian] = useState('')
+  const [lesson, setLesson] = useState('')
+  const [bias, setBias] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [formError, setFormError] = useState('')
+
+  useEffect(() => {
+    void (async () => {
+      const res = await fetch('/api/theses?include_closed=true', { cache: 'no-store' })
+      const payload = await res.json().catch(() => ({}))
+      setTheses((payload.data || []).map((t: { id: string; title: string; fund_wind_code: string }) => ({ id: t.id, title: t.title, fund_wind_code: t.fund_wind_code })))
+    })()
+  }, [])
+
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault()
+    if (!thesisId) { setFormError('请选择一个论点'); return }
+    setSaving(true)
+    setFormError('')
+    const excess = actual !== '' && peerMedian !== '' ? Number(actual) - Number(peerMedian) : undefined
+    const response = await fetch('/api/postmortems', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        thesis_id: thesisId,
+        outcome,
+        actual_return_pct: actual !== '' ? Number(actual) : undefined,
+        peer_median_return_pct: peerMedian !== '' ? Number(peerMedian) : undefined,
+        excess_return_pct: excess,
+        lesson_learned: lesson || undefined,
+        decision_bias: bias || undefined,
+      }),
+    })
+    setSaving(false)
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}))
+      setFormError(payload.detail || '保存失败')
+      return
+    }
+    onDone()
+  }
+
+  const inputCls = 'h-8 w-full border border-[#cfd6d0] px-2 text-xs outline-none focus:border-[#28745c]'
+
+  return (
+    <form onSubmit={submit} className="grid gap-3 border border-[#d9dfda] bg-white p-4 sm:grid-cols-2">
+      <label className="sm:col-span-2 block text-[11px] text-[#4a5a52]">
+        关联论点
+        <select value={thesisId} onChange={(e) => setThesisId(e.target.value)} className={`${inputCls} mt-1`}>
+          <option value="">选择论点…</option>
+          {theses.map((t) => <option key={t.id} value={t.id}>{t.title}（{t.fund_wind_code}）</option>)}
+        </select>
+      </label>
+      <label className="block text-[11px] text-[#4a5a52]">
+        结果
+        <select value={outcome} onChange={(e) => setOutcome(e.target.value)} className={`${inputCls} mt-1`}>
+          <option value="validated">论点被证实</option>
+          <option value="invalidated">论点被证伪</option>
+          <option value="inconclusive">无法判断</option>
+        </select>
+      </label>
+      <div className="grid grid-cols-2 gap-2">
+        <label className="block text-[11px] text-[#4a5a52]">实际收益%<input value={actual} onChange={(e) => setActual(e.target.value)} type="number" step="0.1" className={`${inputCls} mt-1`} /></label>
+        <label className="block text-[11px] text-[#4a5a52]">同类中位%<input value={peerMedian} onChange={(e) => setPeerMedian(e.target.value)} type="number" step="0.1" className={`${inputCls} mt-1`} /></label>
+      </div>
+      <label className="block text-[11px] text-[#4a5a52]">教训<input value={lesson} onChange={(e) => setLesson(e.target.value)} className={`${inputCls} mt-1`} placeholder="这次学到了什么" /></label>
+      <label className="block text-[11px] text-[#4a5a52]">决策偏差<input value={bias} onChange={(e) => setBias(e.target.value)} className={`${inputCls} mt-1`} placeholder="如：过度依赖近1年收益" /></label>
+      {formError ? <div className="sm:col-span-2 text-[11px] text-[#8f2f21]">{formError}</div> : null}
+      <div className="sm:col-span-2 flex justify-end">
+        <button type="submit" disabled={saving} className="bg-[#173f35] px-4 py-1.5 text-xs font-bold text-white disabled:opacity-50">{saving ? '保存中…' : '保存复盘'}</button>
+      </div>
+    </form>
   )
 }
 
