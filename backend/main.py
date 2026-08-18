@@ -29,7 +29,7 @@ import uuid
 import json
 
 from routes import funds, fund_companies, home, managers, scoring, reports, research_reports, research_memos, research_folders, screening, watchlists
-from routes import attribution, barra, brinson, export, data_sync, data_health, metrics, fund_pools, alerts, investment_analysis, fund_browser, market_indices, newma_desk, investment_theses, anomaly_scanner, fund_watches, research_queue, decision_postmortems, research_decision_logs, research_signals
+from routes import attribution, barra, brinson, export, data_sync, data_health, metrics, fund_pools, alerts, investment_analysis, fund_browser, market_indices, newma_desk, investment_theses, anomaly_scanner, fund_watches, research_queue, decision_postmortems, research_decision_logs, research_signals, decision_support
 from service_registry import get_data_service, get_scoring_engine, get_db
 
 logging.basicConfig(
@@ -171,6 +171,7 @@ app.include_router(research_queue.router, tags=["研究队列"])
 app.include_router(decision_postmortems.router, tags=["决策复盘"])
 app.include_router(research_decision_logs.router, tags=["研究决策记录"])
 app.include_router(research_signals.router, tags=["研究信号雷达"])
+app.include_router(decision_support.router, tags=["决策支持"])
 
 
 @app.get("/api/health")
