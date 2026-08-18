@@ -26,7 +26,6 @@ function assertNotIncludes(content, forbidden, label) {
 
 const peerService = read('backend/services/peer_comparison_service.py')
 const detailClient = read('app/(dashboard)/funds/[id]/FundDetailClient.tsx')
-const syncPage = read('app/(dashboard)/sync/page.tsx')
 
 assertIncludes(peerService, 'MIN_VALID_PEERS = 5', 'peer percentile minimum sample gate')
 assertIncludes(peerService, 'len(valid) < self.MIN_VALID_PEERS', 'peer percentile refuses small valid sample')
@@ -57,11 +56,7 @@ assertIncludes(detailClient, '不能单独用于研究排序', 'fund detail bloc
 assertIncludes(detailClient, '至少还要补', 'fund detail shows actionable peer metric gap')
 assertIncludes(detailClient, 'peerSuggestedSyncCodes', 'fund detail reads suggested peer sync codes')
 assertIncludes(detailClient, '同步同类指标', 'fund detail exposes peer metric sync action')
-assertIncludes(detailClient, '/sync?codes=${encodeURIComponent(peerSuggestedSyncCodes.join', 'fund detail links to sync page with peer codes')
+assertIncludes(detailClient, '/evidence-coverage?codes=${encodeURIComponent(peerSuggestedSyncCodes.join', 'fund detail links to evidence coverage with peer codes')
 assertIncludes(detailClient, '不能用于正式研究排序', 'fund detail blocks formal buy-before ranking')
-
-assertIncludes(syncPage, "params.get('codes')", 'sync page reads codes query')
-assertIncludes(syncPage, 'setCodeInput(queryCodes)', 'sync page pre-fills codes from query')
-assertIncludes(syncPage, "params.get('purchasePlan')", 'sync page reads purchase plan query')
 
 console.log('OK peer percentile small-sample gate avoids false peer advantage')

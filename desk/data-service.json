@@ -10,7 +10,17 @@
     "fund.search": {
       "method": "POST",
       "path": "/fund-search",
-      "inputSchema": {"type": "object", "additionalProperties": true},
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "search": {"type": "string", "maxLength": 80},
+          "page": {"type": "integer", "minimum": 1},
+          "page_size": {"type": "integer", "minimum": 1, "maximum": 100},
+          "peer_group": {"type": "string", "maxLength": 120},
+          "availability": {"enum": ["all", "classified", "evaluated"]}
+        },
+        "additionalProperties": false
+      },
       "outputSchema": {"type": "object", "additionalProperties": true},
       "permission": "research.read"
     },

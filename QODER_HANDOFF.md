@@ -1,6 +1,8 @@
 # Qoder 项目交接
 
-更新时间：2026-08-16
+更新时间：2026-08-18
+
+2026-08-18 完成四代合并去重大重构（v2.0.0）：删除旧 `frontend/`、Wind 数据链路、一代 screening/sync 页面与对应 API；旧路由保留薄重定向；历史文档归档至 `docs/history/`。详见 `CHANGELOG.md` 与 `ARCHITECTURE.md`。
 
 ## 1. 项目定位
 
@@ -20,7 +22,7 @@ Newma Desk 只是可选宿主。独立应用和 Desk Adapter 共用业务页面�
 - 后端健康检查：`GET http://127.0.0.1:8005/api/health`
 - Desk 描述：`desk/suite.json`
 - Desk 发现：`GET /.well-known/newma-desk-suite.json`
-- 旧目录 `frontend/` 只用于迁移参考，不再是开发入口
+- 历史阶段文档已归档至 `docs/history/`，不作为现状依据
 - `3001` 属于 Orchestra，本项目不得占用
 
 启动顺序：
@@ -186,9 +188,8 @@ npm run smoke:fund-recommendations
 ## 10. Git 与仓库维护现状
 
 - 当前分支：`main`
-- GitHub：`origin`
-- Gitee：`gitee`
-- 当前工作树有大量尚未提交的历史改动和新增文件，交接时约 350 项。
+- GitHub：`origin`；Gitee：`gitee`
+- 工作树干净，主干即唯一开发基线（2026-08-18 四代合并重构已提交）。
 - 这些改动均视为用户资产，不得使用 `git reset --hard`、`git checkout -- .` 或批量删除。
 - 先阅读 `git status` 和按模块审查 diff，再按“核心业务、数据同步、Desk Adapter、文档”分批提交。
 - 不把 `.env*`、数据库目录、日志、Playwright 截图、IMA 密钥或本地知识库原文提交到远端。

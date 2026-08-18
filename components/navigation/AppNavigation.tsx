@@ -39,7 +39,7 @@ const navigationItems = [
     href: '/recommendations',
     icon: Tags,
     label: '基金推荐',
-    matches: ['/recommendations', '/screening', '/rankings'],
+    matches: ['/recommendations'],
   },
 ] as const
 

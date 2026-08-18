@@ -70,7 +70,7 @@ export const coreResearchModules: CoreResearchModule[] = [
   {
     id: 'data-ingestion',
     label: '数据接入',
-    href: '/sync',
+    href: '/evidence-coverage',
     purpose: '接入 Tushare、公开材料、上传文档和未来 OpenBB-style adapter。',
     layer: 'tool',
   },

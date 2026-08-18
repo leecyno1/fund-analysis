@@ -2341,7 +2341,7 @@ export default function FundDetailClient({ fundId, initialFund = null, initialIn
   const peerRequiredMoreFunds = fund.peerPercentiles?.peer_metric_gap?.required_more_funds ?? 0
   const peerSuggestedSyncCodes = fund.peerPercentiles?.peer_metric_gap?.suggested_sync_codes || []
   const peerMetricSyncHref = peerSuggestedSyncCodes.length
-    ? `/sync?codes=${encodeURIComponent(peerSuggestedSyncCodes.join(','))}&purchasePlan=${investorPurchasePlan}`
+    ? `/evidence-coverage?codes=${encodeURIComponent(peerSuggestedSyncCodes.join(','))}`
     : peerLensHref
   const peerSampleInsufficient = peerSampleStatus === 'insufficient_peer_sample'
     || (!!fund.peerPercentiles?.metrics && peerMetricEntries.every(([, metricItem]) => metricItem.sample_status === 'insufficient_peer_sample'))
@@ -3002,7 +3002,7 @@ export default function FundDetailClient({ fundId, initialFund = null, initialIn
       label: fund.navDate ? formatDateText(fund.navDate) : '待补',
       detail: '净值过旧会扭曲收益、回撤和持有体验回放起点。',
       action: '刷新真实净值',
-      href: '/sync',
+      href: '/evidence-coverage',
     },
     {
       key: 'sales-rule',

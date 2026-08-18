@@ -50,7 +50,6 @@ const staticChecks = [
   'scripts/dashboard_canonical_research_links_smoke.mjs',
   'scripts/active_pages_canonical_research_links_smoke.mjs',
   'scripts/dashboard_research_semantics_smoke.mjs',
-  'scripts/screening_methodology_integration_smoke.mjs',
   'scripts/manager_research_semantics_smoke.mjs',
   'scripts/comparison_research_semantics_smoke.mjs',
   'scripts/market_browser_smoke.mjs',

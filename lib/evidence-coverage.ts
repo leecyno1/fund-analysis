@@ -557,7 +557,7 @@ export async function getEvidenceCoverage(): Promise<EvidenceCoveragePayload> {
     dimension('risk_level', '风险等级来源背书', '研究复核', numberValue(row?.risk_level_ready), total, true, 'R1-R5 必须来自销售平台、基金合同或可追溯公告，且来源日期在 30 天研究复核窗口内；Tushare fund_basic 不计入覆盖。', materialEvidenceHref({ scope: 'market', focus: 'risk_level', queueMode: 'high_score_missing_risk', purchasePlan: 'sip' }), '补风险等级来源'),
     dimension('sip_rule', '定投规则', '研究复核', numberValue(row?.sip_rule_ready), total, true, '定投支持状态和定投起点用于研究方式假设与执行约束判断，必须有 30 天内来源背书。', materialEvidenceHref(), '补定投规则'),
     dimension('research_profile', '研究画像', '研究增强', numberValue(row?.research_profile_ready), total, false, '基准、同类池和风格标签用于避免跨类误比。', '/analysis', '进入基金研究'),
-    dimension('metric_snapshot', '滚动指标快照', '研究增强', numberValue(row?.metric_snapshot_ready), total, false, '滚动窗口指标支持持有体验与同类分位分析。', '/rankings', '看排行榜'),
+    dimension('metric_snapshot', '滚动指标快照', '研究增强', numberValue(row?.metric_snapshot_ready), total, false, '滚动窗口指标支持持有体验与同类分位分析。', '/analysis/comparison', '看同类横评'),
     dimension('report', '研究报告', '研究增强', numberValue(row?.report_ready), total, false, '已生成的本地研究报告可作为后续复核材料。', '/reports', '查看报告'),
   ]
 

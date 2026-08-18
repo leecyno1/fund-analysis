@@ -152,7 +152,7 @@ const getContextActions = (report: AnalysisReport, salesRuleGate: CurrentSalesRu
     const actionLinks = asRecord(asRecord(report.metadata?.dataSources).actionLinks)
     const comparison = stringValue(actionLinks.comparison)
     return [
-      { label: '回到研究清单', href: stringValue(actionLinks.pool) || '/pools', tone: 'emerald' },
+      { label: '回到研究清单', href: stringValue(actionLinks.pool) || '/market', tone: 'emerald' },
       { label: '补销售规则', href: appendReturnTo(stringValue(actionLinks.batchSalesRules) ? canonicalResearchHref(stringValue(actionLinks.batchSalesRules)) : materialEvidenceHref(), reportReturnHref), tone: 'amber' },
       ...(comparison ? [{ label: '重新打开对比', href: comparison, tone: 'blue' }] : []),
       { label: '重新下载短名单', href: `/api/market/research-lists/${encodeURIComponent(report.targetId)}/shortlist-report?format=markdown`, tone: 'slate', external: true },

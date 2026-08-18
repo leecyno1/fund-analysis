@@ -467,7 +467,7 @@ export default function ReportDetailPage() {
       value: rerunAction?.label || '复跑入口待补',
       detail: rerunAction?.note || '缺少复跑入口时，只能回到原页面手动重新生成。',
       actionLabel: rerunAction?.label || '去选基',
-      actionHref: rerunAction?.href || '/investor-selection',
+      actionHref: rerunAction?.href || '/market',
     },
   ]
   const checklistClass = (status: string) => {

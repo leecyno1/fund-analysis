@@ -19,7 +19,6 @@ function assertIncludes(content, expected, label) {
 }
 
 const route = read('app/api/reports/real-data/route.ts')
-const syncPage = read('app/(dashboard)/sync/page.tsx')
 const backendReports = read('backend/routes/reports.py')
 
 assertIncludes(route, '/api/data-sync/funds/', 'real data report route syncs Tushare data first')
@@ -48,21 +47,6 @@ assertIncludes(route, 'plannedAmount,', 'real data report route exposes planned 
 assertIncludes(route, 'currentSalesRuleGate', 'real data report route returns current sales-rule gate')
 assertIncludes(route, 'buyBeforeAction', 'real data report route returns buy-before next action')
 assertIncludes(route, '补证后再判断', 'real data report route blocks formal buy-before action when rules missing')
-
-assertIncludes(syncPage, '拉取真实数据并生成报告', 'sync page exposes real data report action')
-assertIncludes(syncPage, '/api/reports/real-data', 'sync page calls real data report API')
-assertIncludes(syncPage, 'purchasePlan,', 'sync page sends purchase plan into real data report API')
-assertIncludes(syncPage, 'plannedAmount: currentPlannedAmount()', 'sync page sends planned amount into real data report API')
-assertIncludes(syncPage, '研究口径', 'sync page shows research-plan scope')
-assertIncludes(syncPage, '计划金额', 'sync page shows planned amount scope')
-assertIncludes(syncPage, 'purchaseContextParams(parsedFundCodes)', 'sync page sales-rule links preserve purchase plan and amount')
-assertIncludes(syncPage, '真实数据研究报告结果', 'sync page renders real report result panel')
-assertIncludes(syncPage, '打开报告', 'sync page links saved reports')
-assertIncludes(syncPage, '查看本地研究报告', 'sync page links report library')
-assertIncludes(syncPage, 'real-data-report-sales-rule-gate', 'sync page renders real report sales-rule gate')
-assertIncludes(syncPage, 'real-data-report-buy-before-action', 'sync page renders buy-before next action')
-assertIncludes(syncPage, '报告已保存，但不能作为正式研究结论', 'sync page keeps hard gate after real report generation')
-assertIncludes(syncPage, '研究下一步', 'sync page explains next research action')
 
 assertIncludes(backendReports, 'purchase_plan: str = Query("sip"', 'backend fund report accepts purchase plan')
 assertIncludes(backendReports, 'planned_amount: Optional[float] = Query(None', 'backend fund report accepts planned amount')

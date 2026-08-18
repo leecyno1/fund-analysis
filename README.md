@@ -24,8 +24,6 @@ LLM 不可用时，AI 分析只生成基于真实评价、归因和纪要的规�
 
 `3001` 属于 Orchestra，本项目不得占用或发布到该端口。
 
-`frontend/` 是迁移前的旧独立前端，只保留作代码迁移参考，不再作为开发或部署入口。
-
 ## Desk 适配包
 
 - 描述文件：`desk/suite.json`
@@ -131,7 +129,7 @@ IMA 凭证可通过 `IMA_OPENAPI_CLIENTID`、`IMA_OPENAPI_APIKEY` 环境变量�
 docker compose up -d --build
 ```
 
-Docker 使用仓库根目录正式前端和 `backend/main.py`，不再构建旧 `frontend/`。
+Docker 使用仓库根目录 Next.js 应用和 `backend/main.py`。
 
 ## 数据原则
 

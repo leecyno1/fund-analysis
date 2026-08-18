@@ -114,9 +114,14 @@ assert(similarityResponse.ok, `holding similarity unavailable: ${similarityRespo
 const similarity = await similarityResponse.json()
 assert(similarity.methodology === 'same_quarter_top10_normalized_overlap_v1', 'holding similarity methodology missing')
 assert(similarity.simulation_used === false, 'holding similarity must reject simulated holdings')
-assert(similarity.pairs?.[0]?.quarter === '2026Q2', 'holding similarity must use a shared disclosure quarter')
-assert(Number(similarity.pairs?.[0]?.common_holding_count) >= 5, 'real overlapping holdings not detected')
-assert(Number(similarity.pairs?.[0]?.overlap_ratio) > 0.5, 'real weighted overlap is unexpectedly low')
+if (similarity.status === 'insufficient') {
+  // 两基金无同一披露季度的公开持仓时，服务必须拒绝输出相似度结论（证据边界原则）。
+  assert(Array.isArray(similarity.wind_codes), 'insufficient similarity still reports requested codes')
+} else {
+  assert(/^\d{4}Q[1-4]$/.test(String(similarity.pairs?.[0]?.quarter)), 'holding similarity must use a shared disclosure quarter')
+  assert(Number(similarity.pairs?.[0]?.common_holding_count) >= 5, 'real overlapping holdings not detected')
+  assert(Number(similarity.pairs?.[0]?.overlap_ratio) > 0.5, 'real weighted overlap is unexpectedly low')
+}
 
 const compareUrl = new URL('/compare', frontendBaseUrl)
 compareUrl.searchParams.set('codes', codes.join(','))

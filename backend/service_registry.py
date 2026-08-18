@@ -1,6 +1,6 @@
 """
 服务注册表 - 解决模块间循环引用
-支持 Tushare (默认) 和 Wind 作为数据源
+数据源：Tushare
 """
 import os
 import time
@@ -14,14 +14,12 @@ except ModuleNotFoundError:
 
 logger = logging.getLogger(__name__)
 
-# 数据源：Tushare (默认) 或 Wind
+# 数据源：Tushare
 DATA_SOURCE = os.environ.get("DATA_SOURCE", "tushare").lower()
 
 
-def init_services(wind_svc=None, scoring_eng=None, mongo_db=None, tushare_svc=None, pg_engine=None):
-    global _wind_service, _scoring_engine, _db, _tushare_service, _pg_engine
-    if wind_svc is not None:
-        _wind_service = wind_svc
+def init_services(scoring_eng=None, mongo_db=None, tushare_svc=None, pg_engine=None):
+    global _scoring_engine, _db, _tushare_service, _pg_engine
     if tushare_svc is not None:
         _tushare_service = tushare_svc
     if scoring_eng is not None:
@@ -32,7 +30,6 @@ def init_services(wind_svc=None, scoring_eng=None, mongo_db=None, tushare_svc=No
         _pg_engine = pg_engine
 
 
-_wind_service: Optional["WindDataService"] = None
 _tushare_service: Optional["TushareDataService"] = None
 _scoring_engine: Optional["FundScoringEngine"] = None
 _db = None
@@ -43,27 +40,13 @@ _pg_engine = None
 
 
 def get_data_service():
-    """获取当前数据服务（Tushare 优先）"""
-    global _tushare_service, _wind_service
+    """获取当前数据服务（Tushare）"""
+    global _tushare_service
 
-    if DATA_SOURCE == "wind":
-        if _wind_service is None:
-            from services.wind_service import WindDataService
-            _wind_service = WindDataService()
-        return _wind_service
-    else:
-        if _tushare_service is None:
-            from services.tushare_service import TushareDataService
-            _tushare_service = TushareDataService()
-        return _tushare_service
-
-
-def get_wind_service():
-    global _wind_service
-    if _wind_service is None:
-        from services.wind_service import WindDataService
-        _wind_service = WindDataService()
-    return _wind_service
+    if _tushare_service is None:
+        from services.tushare_service import TushareDataService
+        _tushare_service = TushareDataService()
+    return _tushare_service
 
 
 def get_tushare_service() -> "TushareDataService":

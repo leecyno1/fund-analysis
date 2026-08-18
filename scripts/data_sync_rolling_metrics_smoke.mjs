@@ -38,8 +38,6 @@ const classificationSyncShell = read('scripts/update_fund_classification.sh')
 const universeSyncShell = read('scripts/update_fund_universe.sh')
 const rankingMetricShell = read('scripts/update_fund_ranking_metrics.sh')
 const packageJson = read('package.json')
-const syncBff = read('app/api/sync/wind/route.ts')
-const syncPage = read('app/(dashboard)/sync/page.tsx')
 
 assertIncludes(dataSyncRoute, 'from services.rolling_metric_service import RollingMetricService', 'data sync imports rolling metric calculator')
 assertIncludes(dataSyncRoute, 'ROLLING_NAV_HISTORY_DAYS = 365 * 4', 'data sync covers the longest rolling metric window')
@@ -88,9 +86,5 @@ assertIncludes(packageJson, 'funds:sync-classification', 'package exposes classi
 assertIncludes(rankingMetricShell, 'sync_fund_ranking_metrics.py', 'ranking metric shell invokes Python sync')
 assertIncludes(packageJson, 'funds:update-ranking-metrics', 'package exposes ranking metric sync command')
 assertIncludes(packageJson, 'funds:backfill-peer-evaluation', 'package exposes peer evaluation coverage backfill')
-assertIncludes(syncBff, 'rollingMetrics: payload.rolling_metrics || null', 'sync BFF forwards rolling metric result')
-assertIncludes(syncBff, 'classificationIngestion: payload.classification_ingestion || null', 'sync BFF forwards standardized classification ingestion result')
-assertIncludes(syncPage, '滚动指标补证', 'sync page displays rolling metric evidence result')
-assertIncludes(syncPage, 'detail.rollingMetrics.windows.join', 'sync page displays rolling metric windows')
 
 console.log('OK real data sync persists rolling metrics for peer percentile evidence')

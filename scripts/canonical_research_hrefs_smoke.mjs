@@ -46,7 +46,6 @@ for (const file of [
 
 for (const file of [
   'app/(dashboard)/funds/page.tsx',
-  'app/(dashboard)/screening/page.tsx',
   'app/(dashboard)/market/MarketBrowserClient.tsx',
   'app/(dashboard)/analysis/comparison/page.tsx',
   'app/(dashboard)/managers/[id]/page.tsx',
@@ -65,7 +64,6 @@ for (const file of [
   'app/(dashboard)/analysis/[id]/AnalysisDetailClient.tsx',
   'components/analysis/ReportActionBar.tsx',
   'app/(dashboard)/managers/page.tsx',
-  'app/(dashboard)/sync/page.tsx',
 ]) {
   const content = read(file)
   assertNotIncludes(content, '/sales-rules', `${file} frontend material evidence href`)

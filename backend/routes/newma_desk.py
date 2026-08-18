@@ -15,7 +15,7 @@ class FundSearchRequest(BaseModel):
     page: int = Field(default=1, ge=1)
     page_size: int = Field(default=30, ge=1, le=100)
     peer_group: str = ""
-    availability: Literal["evaluated", "classified", "all"] = "evaluated"
+    availability: Literal["evaluated", "classified", "all"] = "all"
 
 
 class FundSymbolRequest(BaseModel):

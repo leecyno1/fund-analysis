@@ -19,7 +19,6 @@ function assertNotIncludes(content, forbidden, label) {
 }
 
 const repository = read('lib/research-platform/methodology-mapping-repository.ts')
-const screeningRoute = read('app/api/screening/route.ts')
 const reportLib = read('lib/research-review-report.ts')
 
 assertIncludes(repository, 'research_methodology_templates', 'repository reads methodology templates table')
@@ -35,7 +34,6 @@ assertIncludes(repository, 'DATABASE_URL', 'repository uses local database when 
 assertIncludes(repository, '方法论模板只决定研究口径', 'repository preserves methodology boundary')
 assertNotIncludes(repository, '投委会', 'repository must not add governance workflow')
 
-assertIncludes(screeningRoute, 'resolveMethodologyConfigFromData', 'screening uses methodology repository')
 assertIncludes(reportLib, 'resolveMethodologyConfigFromDataSync', 'report uses sync methodology repository fallback')
 
 console.log('OK methodology mapping repository provides data-first methodology resolution')

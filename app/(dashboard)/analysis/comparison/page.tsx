@@ -2141,9 +2141,6 @@ function ComparisonAnalysisPageContent() {
         <ArrowLeft className="mr-2 h-4 w-4" />
         返回
       </Link>
-      <Link href={canonicalResearchHref('/rankings')} className="ml-4 inline-flex items-center text-blue-600 hover:text-blue-800">
-        返回基金排行榜
-      </Link>
 
       <div className="overflow-hidden rounded-2xl bg-slate-950 shadow-xl">
         <div className="relative p-6 text-white md:p-8">

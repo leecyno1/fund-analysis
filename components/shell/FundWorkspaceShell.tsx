@@ -96,7 +96,7 @@ export default function FundWorkspaceShell({ children }: { children: ReactNode }
           </div>
 
           <div className={styles.railTools}>
-            <Link href="/sync" aria-label="数据与方法" title="数据与方法">
+            <Link href="/evidence-coverage" aria-label="数据与方法" title="数据与方法">
               <Database size={16} aria-hidden="true" />
             </Link>
           </div>

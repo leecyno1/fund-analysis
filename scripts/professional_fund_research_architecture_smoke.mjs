@@ -78,7 +78,7 @@ for (const activeNav of ['找基金', '调研库', 'AI 分析', '基金推荐'])
 for (const route of ['/discover', '/research', '/analysis', '/recommendations']) {
   assertIncludes(appNavigation, route, `primary navigation exposes ${route}`)
 }
-assertIncludes(dashboardLayout, 'AppNavigation', 'dashboard uses the simple shared navigation')
+assertIncludes(dashboardLayout, 'FundWorkspaceShell', 'dashboard uses the shared workspace shell')
 assertIncludes(simpleProductScope, '必须先确认基金类别，再进行同类比较', 'simple product scope preserves peer comparison boundary')
 assertIncludes(comparisonPage, 'peerGroupIds.length === 1', 'simple comparison enforces one professional peer group')
 assertIncludes(comparisonPage, '横向比较结论', 'simple comparison summarizes research priority for ordinary users')

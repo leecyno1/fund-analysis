@@ -31,12 +31,10 @@ function assertAllowsMinOne(content, label) {
 }
 
 const files = [
-  ['app/(dashboard)/sync/page.tsx', 'sync page'],
   ['app/(dashboard)/managers/page.tsx', 'manager list page'],
   ['app/(dashboard)/managers/[id]/page.tsx', 'manager detail page'],
   ['app/(dashboard)/analysis/manager/page.tsx', 'manager analysis page'],
   ['app/(dashboard)/analysis/fund/FundAnalysisClient.tsx', 'fund analysis page'],
-  ['app/(dashboard)/screening/page.tsx', 'screening page'],
   ['app/(dashboard)/market/MarketBrowserClient.tsx', 'market browser'],
 ]
 
@@ -50,13 +48,11 @@ for (const [relativePath, label] of files) {
 const managerList = read('app/(dashboard)/managers/page.tsx')
 const managerDetail = read('app/(dashboard)/managers/[id]/page.tsx')
 const managerAnalysis = read('app/(dashboard)/analysis/manager/page.tsx')
-const syncPage = read('app/(dashboard)/sync/page.tsx')
 const acceptance = read('scripts/fund_research_acceptance_smoke.mjs')
 
 assertIncludes(managerList, 'return Number.isFinite(amount) && amount > 0 ? String(Math.round(amount)) : defaultPlannedAmountForPlan(purchasePlan)', 'manager list preserves any positive planned amount')
 assertIncludes(managerDetail, 'return Number.isFinite(amount) && amount > 0 ? String(Math.round(amount)) : defaultPlannedAmountForPlan(purchasePlan)', 'manager detail preserves any positive planned amount')
 assertIncludes(managerAnalysis, 'return Number.isFinite(amount) && amount > 0 ? String(Math.round(amount)) : defaultPlannedAmountForPlan(purchasePlan)', 'manager analysis preserves any positive planned amount')
-assertIncludes(syncPage, 'return Number.isFinite(amount) && amount > 0', 'sync page preserves any positive planned amount')
 assertIncludes(acceptance, 'scripts/planned_amount_low_value_smoke.mjs', 'fund research acceptance includes low planned amount smoke')
 
 console.log('OK planned amount inputs preserve true low positive values across buy-before paths')

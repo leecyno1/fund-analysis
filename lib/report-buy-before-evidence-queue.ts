@@ -138,7 +138,7 @@ function buyBeforeQueueHref(category: string, codes: string[], purchasePlan: Rep
     params.set('autoReplay', '1')
     return appendReturnTo(`/analysis/comparison?${params.toString()}`, '/reports')
   }
-  if (category === 'peer_metrics' || category === 'manager_tenure') return appendReturnTo(`/sync?${params.toString()}`, '/reports')
+  if (category === 'peer_metrics' || category === 'manager_tenure') return appendReturnTo(`/evidence-coverage?${params.toString()}`, '/reports')
   if (category === 'holding_exposure' && codes[0]) return appendReturnTo(`/funds/${encodeURIComponent(codes[0])}?${params.toString()}`, '/reports')
   return appendReturnTo('/evidence-coverage', '/reports')
 }

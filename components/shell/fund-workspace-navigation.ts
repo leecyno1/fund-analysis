@@ -61,11 +61,11 @@ export const fundWorkspaceNavigation: readonly FundWorkspaceNavigationGroup[] = 
 ]
 
 export const fundWorkspaceDataNavigation: FundWorkspaceNavigationItem = {
-  href: '/sync',
+  href: '/evidence-coverage',
   label: '数据与方法',
   shortLabel: '数据',
   icon: Database,
-  matches: ['/sync', '/evidence-coverage'],
+  matches: ['/evidence-coverage'],
 }
 
 export function isFundWorkspaceItemActive(
