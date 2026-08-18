@@ -146,6 +146,52 @@ class DecisionPostmortemService:
             "total_with_returns": int(avg_rows[2]) if avg_rows else 0,
         }
 
+    def patterns(self, min_occurrences: int = 2) -> Dict[str, Any]:
+        """决策模式识别 (#14)：从复盘中识别系统性偏差。
+
+        当某一类偏差（decision_bias）累计达到 min_occurrences 次，或某类
+        outcome 占比过高时，输出模式提示。数据不足时返回空 patterns 并提示
+        需要更多复盘。
+        """
+        stats = self.stats()
+        by_bias = stats.get("by_bias") or {}
+        by_outcome = stats.get("by_outcome") or {}
+        total = sum(by_outcome.values())
+
+        patterns: List[Dict[str, Any]] = []
+        for bias, count in by_bias.items():
+            if count >= min_occurrences:
+                patterns.append({
+                    "pattern": "recurring_bias",
+                    "bias": bias,
+                    "occurrences": count,
+                    "message": f"你已 {count} 次识别出「{bias}」偏差，建议建立对应检查清单。",
+                })
+
+        invalidated = by_outcome.get("invalidated", 0)
+        if total >= 3 and invalidated / total >= 0.5:
+            patterns.append({
+                "pattern": "high_invalidation_rate",
+                "occurrences": invalidated,
+                "ratio": round(invalidated / total, 2),
+                "message": f"论点证伪率 {invalidated}/{total}，建议收紧入池门槛或加强反向证据。",
+            })
+
+        avg_excess = stats.get("avg_excess_return_pct")
+        if avg_excess is not None and stats.get("total_with_returns", 0) >= 3 and avg_excess < 0:
+            patterns.append({
+                "pattern": "negative_avg_excess",
+                "avg_excess_return_pct": avg_excess,
+                "message": f"平均超额收益 {avg_excess:.1f}% 为负，整体选择未跑赢同类中位。",
+            })
+
+        return {
+            "total_postmortems": total,
+            "sufficient": total >= min_occurrences,
+            "patterns": patterns,
+            "by_bias": by_bias,
+        }
+
     @staticmethod
     def _row(row) -> Optional[Dict[str, Any]]:
         if row is None:

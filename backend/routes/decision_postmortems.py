@@ -54,6 +54,15 @@ def postmortem_stats() -> Dict[str, Any]:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
+@router.get("/patterns")
+def postmortem_patterns(min_occurrences: int = Query(2, ge=1, le=10)) -> Dict[str, Any]:
+    """决策模式识别 (#14)：从复盘中识别系统性决策偏差。"""
+    try:
+        return _svc().patterns(min_occurrences=min_occurrences)
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
 @router.get("/{postmortem_id}")
 def get_postmortem(postmortem_id: str) -> Dict[str, Any]:
     result = _svc().get_postmortem(postmortem_id)
