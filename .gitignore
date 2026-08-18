@@ -65,3 +65,6 @@ __pycache__/
 frontend/test_report_*.json
 /.playwright-cli/
 /output/playwright/
+
+# 本地备份（每日 pg_dump）
+backups/

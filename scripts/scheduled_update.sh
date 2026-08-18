@@ -50,6 +50,12 @@ declare -a TASKS=(
   "research:sync-ima|daily|npm run research:sync-ima"
   "research:sync-manager-identities|daily|npm run research:sync-manager-identities"
 
+  "research:signals-scan|daily|curl -fsS --max-time 300 http://127.0.0.1:8005/api/research-signals/scan"
+  "anomalies:scan|daily|curl -fsS --max-time 300 http://127.0.0.1:8005/api/anomalies/scan"
+  "watches:scan|daily|curl -fsS --max-time 300 -X POST http://127.0.0.1:8005/api/watches/scan"
+
+  "ops:backup-postgres|daily|bash scripts/backup_postgres.sh"
+
   "funds:update-universe|weekly|npm run funds:update-universe"
   "funds:sync-manager-universe|weekly|npm run funds:sync-manager-universe"
   "funds:sync-manager-tenure|weekly|npm run funds:sync-manager-tenure"
@@ -130,6 +136,25 @@ lookup_task() {
   return 1
 }
 
+acquire_lock() {
+  # mkdir 原子非重入锁（macOS 无 flock）；持锁进程已死时视为陈旧锁并接管
+  local lock_dir="$1"
+  if mkdir "$lock_dir" 2>/dev/null; then
+    echo $$ > "$lock_dir/pid"
+    return 0
+  fi
+  local holder_pid
+  holder_pid="$(cat "$lock_dir/pid" 2>/dev/null || true)"
+  if [[ -n "$holder_pid" ]] && ! kill -0 "$holder_pid" 2>/dev/null; then
+    rm -rf "$lock_dir"
+    if mkdir "$lock_dir" 2>/dev/null; then
+      echo $$ > "$lock_dir/pid"
+      return 0
+    fi
+  fi
+  return 1
+}
+
 filter_bucket() {
   local bucket="$1"
   local out=()
@@ -160,7 +185,7 @@ run_task() {
   local bucket="${rest%%|*}"; local cmd="${rest#*|}"
 
   local task_log="$DAY_LOG_DIR/${id//[:\/ ]/_}.log"
-  local lock_file="$LOCK_ROOT/${id//[:\/ ]/_}.lock"
+  local lock_dir="$LOCK_ROOT/${id//[:\/ ]/_}.lockdir"
   local start_ts end_ts start_iso end_iso duration exit_code=0
 
   if [[ "$DRY_RUN" == "1" ]]; then
@@ -168,9 +193,8 @@ run_task() {
     return 0
   fi
 
-  # flock 非重入锁：同一任务并发只允许一个
-  exec 9>"$lock_file"
-  if ! flock -n 9; then
+  # mkdir 原子非重入锁：同一任务并发只允许一个
+  if ! acquire_lock "$lock_dir"; then
     echo "[skip] $id 已在运行（锁未释放），跳过。" | tee -a "$ALERT_LOG"
     _write_runbook "$id" "$bucket" "$cmd" "skipped_locked" 0 "$(now_iso)" "$(now_iso)" 0 "lock busy"
     return 0
@@ -203,6 +227,7 @@ run_task() {
   fi
 
   _write_runbook "$id" "$bucket" "$cmd" "$status" "$exit_code" "$start_iso" "$end_iso" "$duration" "$task_log"
+  rm -rf "$lock_dir"
   return "$exit_code"
 }
 
