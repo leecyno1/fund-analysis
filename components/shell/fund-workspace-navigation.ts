@@ -11,6 +11,7 @@ import {
   Database,
   GitCompareArrows,
   House,
+  Layers,
   Tags,
   Users,
   type LucideIcon,
@@ -52,6 +53,7 @@ export const fundWorkspaceNavigation: readonly FundWorkspaceNavigationGroup[] = 
     label: '我的',
     items: [
       { href: '/workbench', label: '研究工作台', shortLabel: '工作台', icon: ClipboardList, matches: ['/workbench'] },
+      { href: '/portfolio', label: '基金组合', shortLabel: '组合', icon: Layers, matches: ['/portfolio'] },
       { href: '/theses', label: '投资论点', shortLabel: '论点', icon: BookMarked, matches: ['/theses'] },
       { href: '/watchlist', label: '自选与候选', shortLabel: '自选', icon: Bookmark, matches: ['/watchlist'] },
       { href: '/analysis', label: 'AI 分析', shortLabel: 'AI', icon: Bot, matches: ['/analysis'] },

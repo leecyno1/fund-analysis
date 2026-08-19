@@ -9,10 +9,11 @@ const bannedPatterns = [
   { pattern: /governance/gi, label: 'governance' },
   { pattern: /investment_committee/gi, label: 'investment_committee' },
   { pattern: /ic_memo/gi, label: 'ic_memo' },
+  // 研究型组合构建（等权/自定义权重、穿透分析）已随 V3.0 边界演进成为合法研究模块；
+  // 但组合优化器、交易模拟与组合决策仍属越界，继续禁止。
   { pattern: /组合优化/g, label: '组合优化' },
   { pattern: /组合模拟/g, label: '组合模拟' },
   { pattern: /组合决策/g, label: '组合决策' },
-  { pattern: /api\/portfolio/gi, label: 'api/portfolio' },
   { pattern: /portfolio\/optimize/gi, label: 'portfolio/optimize' },
   { pattern: /投资决策/g, label: '投资决策' },
   { pattern: /投决/g, label: '投决' },

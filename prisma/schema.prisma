@@ -1496,3 +1496,84 @@ model DecisionPostmortem {
   @@index([outcome])
   @@map("decision_postmortems")
 }
+
+// ============================================================
+// 基金组合构建 (Portfolio Construction) — 研究型组合：目标配置、候选准入、等权/自定义权重
+// ============================================================
+enum PortfolioStatus {
+  draft
+  active
+  archived
+}
+
+enum PortfolioWeightSource {
+  equal
+  custom
+}
+
+model Portfolio {
+  id        String         @id @default(uuid()) @db.Uuid
+  name      String
+  objective String?
+  status    PortfolioStatus @default(draft)
+  createdAt DateTime        @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime        @updatedAt @map("updated_at") @db.Timestamptz
+
+  targets   PortfolioTarget[]
+  holdings  PortfolioHolding[]
+  snapshots PortfolioSnapshot[]
+
+  @@map("portfolios")
+}
+
+model PortfolioTarget {
+  id            String   @id @default(uuid()) @db.Uuid
+  portfolioId   String   @map("portfolio_id") @db.Uuid
+  peerGroupKey  String   @map("peer_group_key")
+  peerGroupName String?  @map("peer_group_name")
+  targetWeight  Decimal  @map("target_weight") @db.Decimal(8, 6)
+  note          String?
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  portfolio Portfolio @relation(fields: [portfolioId], references: [id], onDelete: Cascade)
+
+  @@index([portfolioId])
+  @@map("portfolio_targets")
+}
+
+model PortfolioHolding {
+  id           String                @id @default(uuid()) @db.Uuid
+  portfolioId  String                @map("portfolio_id") @db.Uuid
+  windCode     String                @map("wind_code")
+  weight       Decimal?              @db.Decimal(8, 6)
+  weightSource PortfolioWeightSource? @map("weight_source")
+  note         String?
+  addedAt      DateTime              @default(now()) @map("added_at") @db.Timestamptz
+  updatedAt    DateTime              @updatedAt @map("updated_at") @db.Timestamptz
+
+  portfolio Portfolio @relation(fields: [portfolioId], references: [id], onDelete: Cascade)
+
+  @@unique([portfolioId, windCode])
+  @@index([portfolioId])
+  @@index([windCode])
+  @@map("portfolio_holdings")
+}
+
+model PortfolioSnapshot {
+  id                String   @id @default(uuid()) @db.Uuid
+  portfolioId       String   @map("portfolio_id") @db.Uuid
+  snapshotDate      DateTime @map("snapshot_date") @db.Date
+  holdingCount      Int      @map("holding_count")
+  totalWeight       Decimal  @map("total_weight") @db.Decimal(8, 6)
+  styleAggregate    Json     @default("{}") @map("style_aggregate")
+  overlapMatrix     Json     @default("{}") @map("overlap_matrix")
+  correlationMatrix Json     @default("{}") @map("correlation_matrix")
+  coverage          Json     @default("{}")
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  portfolio Portfolio @relation(fields: [portfolioId], references: [id], onDelete: Cascade)
+
+  @@index([portfolioId])
+  @@index([snapshotDate])
+  @@map("portfolio_snapshots")
+}
