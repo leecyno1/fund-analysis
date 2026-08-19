@@ -52,4 +52,31 @@ assertIncludes(mainPy, 'app.include_router(portfolio.router', 'backend registers
 assertIncludes(client, 'api/portfolios', 'frontend calls portfolio API')
 assertIncludes(navigation, "href: '/portfolio'", 'workspace navigation exposes portfolio entry')
 
-console.log('OK portfolio construction keeps research boundary: admission gate, equal/custom weights only, overlap/style/correlation penetration with coverage disclosure')
+// M5 基础回测：解释性回看、样本不足拒答、基准对比、不做优化
+assertIncludes(routes, '/backtest', 'backtest endpoint')
+assertIncludes(service, 'def backtest(', 'backtest service method')
+assertIncludes(service, 'insufficient_sample', 'backtest rejects insufficient samples')
+assertIncludes(service, '不是优化或选基依据', 'backtest is explanatory not optimizing')
+assertIncludes(service, '_load_benchmark_series', 'benchmark series from fund_nav.benchmark_nav')
+assertIncludes(service, 'def _performance_metrics(', 'backtest performance metrics')
+assertIncludes(client, '运行回测', 'frontend backtest panel')
+
+// M5 组合监控：目标偏离 + 风格漂移 + 再平衡提示，不自动执行
+assertIncludes(routes, '/monitor', 'monitor endpoint')
+assertIncludes(service, 'def monitor(', 'monitor service method')
+assertIncludes(service, 'REBALANCE_THRESHOLD = 0.05', 'rebalance threshold constant')
+assertIncludes(service, '不自动执行任何申赎动作', 'monitor never auto-executes')
+assertIncludes(service, '_holding_peer_group', 'monitor aggregates holdings by peer group')
+assertIncludes(client, '运行监控', 'frontend monitor panel')
+
+// M5 交易清单：研究输出，不落库、不执行
+assertIncludes(routes, '/trade-list', 'trade list endpoint')
+assertIncludes(service, 'def trade_list(', 'trade list service method')
+assertIncludes(service, '仅供专业用户自行决策', 'trade list boundary wording')
+assertIncludes(service, '不执行任何交易', 'trade list never executes')
+assertIncludes(client, '生成清单', 'frontend trade list panel')
+
+// ADR-0004 定位演进与边界
+assertIncludes(read('docs/adr/0004-research-portfolio-and-trade-list-boundary.md'), '专业基金研究工作台', 'ADR-0004 positioning')
+
+console.log('OK portfolio construction keeps research boundary: admission gate, equal/custom weights only, overlap/style/correlation penetration with coverage disclosure, explanatory backtest, monitor alerts, trade list as research output')

@@ -51,6 +51,11 @@ class WeightsSet(BaseModel):
     source: str = Field(default="custom")
 
 
+class TradeListRequest(BaseModel):
+    current_positions: List[Dict[str, Any]] = Field(default_factory=list)
+    total_amount: Optional[float] = None
+
+
 @router.get("")
 def list_portfolios(status: Optional[str] = Query(None)) -> Dict[str, Any]:
     try:
@@ -140,3 +145,41 @@ def analyze_portfolio(portfolio_id: str) -> Dict[str, Any]:
         return _svc().analyze(portfolio_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/{portfolio_id}/backtest")
+def backtest_portfolio(
+    portfolio_id: str,
+    lookback_days: int = Query(365, ge=60, le=1500),
+    benchmark_wind_code: Optional[str] = Query(None, max_length=24),
+    save_snapshot: bool = Query(False),
+) -> Dict[str, Any]:
+    try:
+        return _svc().backtest(
+            portfolio_id,
+            lookback_days=lookback_days,
+            benchmark_wind_code=benchmark_wind_code,
+            save_snapshot=save_snapshot,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/{portfolio_id}/monitor")
+def monitor_portfolio(portfolio_id: str) -> Dict[str, Any]:
+    try:
+        return _svc().monitor(portfolio_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/{portfolio_id}/trade-list")
+def build_trade_list(portfolio_id: str, payload: TradeListRequest) -> Dict[str, Any]:
+    try:
+        return _svc().trade_list(
+            portfolio_id,
+            current_positions=payload.current_positions,
+            total_amount=payload.total_amount,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc

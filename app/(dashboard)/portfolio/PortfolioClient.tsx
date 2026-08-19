@@ -3,8 +3,11 @@
 import { useCallback, useEffect, useState } from 'react'
 import {
   BadgeCheck,
+  ClipboardList,
   GitCompareArrows,
+  HeartPulse,
   Layers,
+  LineChart,
   LoaderCircle,
   Plus,
   RefreshCw,
@@ -86,6 +89,76 @@ type Analysis = {
   boundary: string
 }
 
+type PerfMetrics = {
+  cumulative_return: number
+  annualized_return: number
+  annualized_volatility: number
+  max_drawdown: number
+  sample_days: number
+  start_date: string | null
+  end_date: string | null
+}
+
+type Backtest = {
+  status: string
+  reason?: string
+  weights_basis?: string
+  sample?: { days: number; start_date: string; end_date: string; lookback_days: number }
+  metrics?: PerfMetrics
+  curve?: Array<{ date: string; value: number }>
+  benchmark?: {
+    source: string
+    status: string
+    basis_note?: string
+    metrics?: PerfMetrics
+    excess_return?: number
+  }
+  boundary?: string
+}
+
+type Monitor = {
+  status: string
+  summary?: string
+  rebalance_threshold?: number
+  rebalance_needed?: boolean
+  target_deviations?: Array<{
+    peer_group_key: string
+    peer_group_name: string | null
+    target_weight: number
+    actual_weight: number
+    deviation: number
+    needs_rebalance: boolean
+  }>
+  style_drifts?: Array<{
+    wind_code: string
+    fund_name: string | null
+    status: string
+    level: string | null
+    label: string | null
+    note: string
+  }>
+  drift_alerts?: Array<{ wind_code: string; level: string | null; label: string | null }>
+  boundary?: string
+}
+
+type TradeList = {
+  status: string
+  total_amount?: number | null
+  items?: Array<{
+    wind_code: string
+    fund_name: string | null
+    action: string
+    current_weight: number
+    target_weight: number
+    weight_delta: number
+    amount: number | null
+    shares: number | null
+    latest_nav: number | null
+    nav_date: string | null
+  }>
+  boundary?: string
+}
+
 const card = 'rounded-xl border border-[#d9ded9] bg-white p-4 shadow-sm'
 const label = 'text-xs font-semibold text-[#5c6b61]'
 const button = 'rounded-lg border border-[#c8d4cb] bg-white px-3 py-1.5 text-sm text-[#1f2d26] transition hover:bg-[#eef3ef] disabled:opacity-50'
@@ -95,6 +168,21 @@ function pct(value: number | string | null | undefined): string {
   const num = Number(value)
   if (!Number.isFinite(num)) return '—'
   return `${(num * 100).toFixed(1)}%`
+}
+
+function Sparkline({ series, color, height = 96 }: { series: number[]; color: string; height?: number }) {
+  if (series.length < 2) return null
+  const min = Math.min(...series)
+  const max = Math.max(...series)
+  const range = max - min || 1
+  const points = series
+    .map((value, index) => `${(index / (series.length - 1)) * 100},${100 - ((value - min) / range) * 100}`)
+    .join(' ')
+  return (
+    <svg viewBox="0 0 100 100" preserveAspectRatio="none" style={{ height }} className="w-full">
+      <polyline points={points} fill="none" stroke={color} strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
+    </svg>
+  )
 }
 
 export default function PortfolioClient() {
@@ -108,6 +196,15 @@ export default function PortfolioClient() {
   const [newName, setNewName] = useState('')
   const [addCode, setAddCode] = useState('')
   const [weightDraft, setWeightDraft] = useState<Record<string, string>>({})
+  const [backtest, setBacktest] = useState<Backtest | null>(null)
+  const [backtestLookback, setBacktestLookback] = useState(365)
+  const [backtestLoading, setBacktestLoading] = useState(false)
+  const [monitor, setMonitor] = useState<Monitor | null>(null)
+  const [monitorLoading, setMonitorLoading] = useState(false)
+  const [tradeList, setTradeList] = useState<TradeList | null>(null)
+  const [tradeInput, setTradeInput] = useState('')
+  const [tradeAmount, setTradeAmount] = useState('')
+  const [tradeLoading, setTradeLoading] = useState(false)
 
   const loadPortfolios = useCallback(async () => {
     setLoading(true)
@@ -254,6 +351,61 @@ export default function PortfolioClient() {
   const overlapPairs = analysis?.overlap?.pairs || []
   const correlationPairs = analysis?.correlation?.pairs || []
   const styleFactors = analysis?.style_aggregate?.factors || []
+
+  const runBacktest = async () => {
+    if (!selectedId) return
+    setBacktestLoading(true)
+    try {
+      const response = await fetch(`/api/portfolios/${selectedId}/backtest?lookback_days=${backtestLookback}`, { cache: 'no-store' })
+      setBacktest(response.ok ? await response.json() : null)
+    } catch (exc) {
+      setError(`回测失败: ${exc}`)
+    } finally {
+      setBacktestLoading(false)
+    }
+  }
+
+  const runMonitor = async () => {
+    if (!selectedId) return
+    setMonitorLoading(true)
+    try {
+      const response = await fetch(`/api/portfolios/${selectedId}/monitor`, { cache: 'no-store' })
+      setMonitor(response.ok ? await response.json() : null)
+    } catch (exc) {
+      setError(`监控失败: ${exc}`)
+    } finally {
+      setMonitorLoading(false)
+    }
+  }
+
+  const generateTradeList = async () => {
+    if (!selectedId) return
+    const currentPositions = tradeInput
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => {
+        const parts = line.split(/[,\s，]+/)
+        return { wind_code: (parts[0] || '').toUpperCase(), weight: parts[1] != null ? Number(parts[1]) / 100 : undefined }
+      })
+      .filter((item) => item.wind_code)
+    setTradeLoading(true)
+    try {
+      const response = await fetch(`/api/portfolios/${selectedId}/trade-list`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          current_positions: currentPositions,
+          total_amount: Number(tradeAmount) || null,
+        }),
+      })
+      setTradeList(response.ok ? await response.json() : null)
+    } catch (exc) {
+      setError(`交易清单生成失败: ${exc}`)
+    } finally {
+      setTradeLoading(false)
+    }
+  }
 
   return (
     <div className="mx-auto max-w-7xl space-y-4 p-4 md:p-6">
@@ -521,6 +673,214 @@ export default function PortfolioClient() {
                 )}
 
                 <p className="mt-4 border-t border-[#f0f4f1] pt-2 text-xs text-[#748079]">{analysis?.boundary}</p>
+              </div>
+
+              <div className={card}>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <h3 className="flex items-center gap-1.5 font-semibold text-[#1f2d26]">
+                    <LineChart className="h-4 w-4 text-[#28745c]" aria-hidden="true" />
+                    基础回测（当前权重回看历史）
+                  </h3>
+                  <div className="flex items-center gap-2">
+                    <select
+                      value={backtestLookback}
+                      onChange={(event) => setBacktestLookback(Number(event.target.value))}
+                      className="rounded-lg border border-[#c8d4cb] px-2 py-1.5 text-sm"
+                      aria-label="回看窗口"
+                    >
+                      <option value={365}>回看 365 天</option>
+                      <option value={730}>回看 730 天</option>
+                    </select>
+                    <button type="button" className={primaryButton} onClick={runBacktest} disabled={backtestLoading || !detail.holdings.length}>
+                      {backtestLoading ? (
+                        <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden="true" />
+                      ) : (
+                        '运行回测'
+                      )}
+                    </button>
+                  </div>
+                </div>
+                {!backtest ? (
+                  <p className="mt-2 text-sm text-[#748079]">以当前权重合成历史组合净值，输出累计收益/年化/最大回撤/波动，并与分类映射基准对比。样本不足时会明确拒答。</p>
+                ) : backtest.status !== 'available' ? (
+                  <p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">{backtest.reason}</p>
+                ) : (
+                  <div className="mt-3 space-y-3">
+                    <p className="text-xs text-[#748079]">
+                      样本 {backtest.sample?.days} 天（{backtest.sample?.start_date} → {backtest.sample?.end_date}）；{backtest.weights_basis}
+                    </p>
+                    <div className="grid gap-x-6 gap-y-1 text-sm sm:grid-cols-2">
+                      {[
+                        ['累计收益', backtest.metrics?.cumulative_return != null ? pct(backtest.metrics.cumulative_return) : '—'],
+                        ['年化收益', backtest.metrics?.annualized_return != null ? pct(backtest.metrics.annualized_return) : '—'],
+                        ['最大回撤', backtest.metrics?.max_drawdown != null ? pct(backtest.metrics.max_drawdown) : '—'],
+                        ['年化波动', backtest.metrics?.annualized_volatility != null ? pct(backtest.metrics.annualized_volatility) : '—'],
+                        ...(backtest.benchmark?.status === 'available'
+                          ? ([
+                              ['基准累计（' + backtest.benchmark.source + '）', pct(backtest.benchmark.metrics?.cumulative_return)],
+                              ['相对基准超额', pct(backtest.benchmark.excess_return)],
+                            ] as Array<[string, string]>)
+                          : []),
+                      ].map(([key, value]) => (
+                        <div key={key} className="flex items-baseline justify-between border-b border-[#f0f4f1] py-1">
+                          <span className="text-[#3d5347]">{key}</span>
+                          <span className="font-medium text-[#1f2d26]">{value}</span>
+                        </div>
+                      ))}
+                    </div>
+                    <div>
+                      <h4 className={label}>组合净值曲线（归一化）</h4>
+                      <Sparkline series={(backtest.curve || []).map((point) => point.value)} color="#28745c" />
+                      <p className="mt-1 text-xs text-[#748079]">
+                        起点归一为 1；样本期内共 {(backtest.curve || []).length} 个交易日。{backtest.benchmark?.basis_note || ''}
+                      </p>
+                    </div>
+                  </div>
+                )}
+                {backtest?.boundary ? (
+                  <p className="mt-3 border-t border-[#f0f4f1] pt-2 text-xs text-[#748079]">{backtest.boundary}</p>
+                ) : null}
+              </div>
+
+              <div className={card}>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <h3 className="flex items-center gap-1.5 font-semibold text-[#1f2d26]">
+                    <HeartPulse className="h-4 w-4 text-[#28745c]" aria-hidden="true" />
+                    组合监控
+                  </h3>
+                  <button type="button" className={primaryButton} onClick={runMonitor} disabled={monitorLoading || !detail.holdings.length}>
+                    {monitorLoading ? (
+                      <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden="true" />
+                    ) : (
+                      '运行监控'
+                    )}
+                  </button>
+                </div>
+                {!monitor ? (
+                  <p className="mt-2 text-sm text-[#748079]">检查目标配置偏离（同类组权重对比，阈值 5%）与成分风格漂移信号，输出再平衡研究提示。</p>
+                ) : (
+                  <div className="mt-3 space-y-3">
+                    <p className={`rounded-lg px-3 py-2 text-sm ${monitor.rebalance_needed ? 'bg-amber-50 text-amber-800' : 'bg-emerald-50 text-emerald-900'}`}>
+                      {monitor.summary}
+                    </p>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="border-b border-[#e4e9e5] text-left text-xs text-[#748079]">
+                            <th className="py-1.5 pr-3">同类组</th>
+                            <th className="py-1.5 pr-3">目标</th>
+                            <th className="py-1.5 pr-3">实际</th>
+                            <th className="py-1.5 pr-3">偏离</th>
+                            <th className="py-1.5">再平衡提示</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {(monitor.target_deviations || []).map((item) => (
+                            <tr key={item.peer_group_key} className="border-b border-[#f0f4f1]">
+                              <td className="py-1.5 pr-3">{item.peer_group_name || item.peer_group_key}</td>
+                              <td className="py-1.5 pr-3">{pct(item.target_weight)}</td>
+                              <td className="py-1.5 pr-3">{pct(item.actual_weight)}</td>
+                              <td className={`py-1.5 pr-3 ${item.deviation < 0 ? 'text-[#a05a52]' : ''}`}>{pct(item.deviation)}</td>
+                              <td className="py-1.5">{item.needs_rebalance ? '偏离超阈值' : '—'}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    <div>
+                      <h4 className={label}>成分风格漂移</h4>
+                      <ul className="mt-1 space-y-1 text-sm">
+                        {(monitor.style_drifts || []).map((drift) => (
+                          <li key={drift.wind_code} className="flex flex-wrap items-baseline gap-2 border-b border-[#f0f4f1] py-1">
+                            <span className="font-medium">{drift.wind_code}</span>
+                            <span className="text-xs text-[#748079]">{drift.fund_name || ''}</span>
+                            <span className={`ml-auto text-xs ${drift.level === 'high' ? 'text-[#a05a52] font-semibold' : drift.level === 'medium' ? 'text-amber-700' : 'text-[#748079]'}`}>
+                              {drift.label || drift.status}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  </div>
+                )}
+                {monitor?.boundary ? (
+                  <p className="mt-3 border-t border-[#f0f4f1] pt-2 text-xs text-[#748079]">{monitor.boundary}</p>
+                ) : null}
+              </div>
+
+              <div className={card}>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <h3 className="flex items-center gap-1.5 font-semibold text-[#1f2d26]">
+                    <ClipboardList className="h-4 w-4 text-[#28745c]" aria-hidden="true" />
+                    交易清单（研究输出）
+                  </h3>
+                </div>
+                <p className="mt-2 text-sm text-[#748079]">
+                  输入当前实际持仓（每行「代码 权重%」，权重可省略），生成从当前持仓到目标组合的申赎建议清单。仅供专业用户自行决策。
+                </p>
+                <div className="mt-3 grid gap-3 md:grid-cols-[1fr_180px]">
+                  <textarea
+                    value={tradeInput}
+                    onChange={(event) => setTradeInput(event.target.value)}
+                    placeholder={'588000.SH 60\n510310.SH 40'}
+                    rows={4}
+                    className="w-full rounded-lg border border-[#c8d4cb] px-2 py-1.5 text-sm"
+                    aria-label="当前持仓"
+                  />
+                  <div className="space-y-2">
+                    <input
+                      value={tradeAmount}
+                      onChange={(event) => setTradeAmount(event.target.value)}
+                      placeholder="总投资金额（元）可选"
+                      inputMode="decimal"
+                      className="w-full rounded-lg border border-[#c8d4cb] px-2 py-1.5 text-sm"
+                      aria-label="总投资金额"
+                    />
+                    <button type="button" className={`${primaryButton} w-full`} onClick={generateTradeList} disabled={tradeLoading || !detail.holdings.length || !tradeInput.trim()}>
+                      {tradeLoading ? (
+                        <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden="true" />
+                      ) : (
+                        '生成清单'
+                      )}
+                    </button>
+                  </div>
+                </div>
+                {tradeList?.items?.length ? (
+                  <div className="mt-3 overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-[#e4e9e5] text-left text-xs text-[#748079]">
+                          <th className="py-1.5 pr-3">方向</th>
+                          <th className="py-1.5 pr-3">基金</th>
+                          <th className="py-1.5 pr-3">当前 → 目标</th>
+                          <th className="py-1.5 pr-3">金额</th>
+                          <th className="py-1.5 pr-3">份额（参考）</th>
+                          <th className="py-1.5">净值日</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {tradeList.items.map((item) => (
+                          <tr key={item.wind_code} className="border-b border-[#f0f4f1]">
+                            <td className={`py-1.5 pr-3 font-medium ${item.action === '申购' ? 'text-emerald-800' : 'text-[#a05a52]'}`}>{item.action}</td>
+                            <td className="py-1.5 pr-3">
+                              <span className="font-medium">{item.wind_code}</span>
+                              <span className="ml-2 text-xs text-[#748079]">{item.fund_name || ''}</span>
+                            </td>
+                            <td className="py-1.5 pr-3">{pct(item.current_weight)} → {pct(item.target_weight)}</td>
+                            <td className="py-1.5 pr-3">{item.amount != null ? item.amount.toLocaleString('zh-CN') + ' 元' : '—'}</td>
+                            <td className="py-1.5 pr-3">{item.shares != null ? item.shares.toLocaleString('zh-CN') : '—'}</td>
+                            <td className="py-1.5 text-xs text-[#748079]">{item.nav_date || '—'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : tradeList ? (
+                  <p className="mt-3 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-900">当前持仓与目标组合已一致，无需申赎调整。</p>
+                ) : null}
+                {tradeList?.boundary ? (
+                  <p className="mt-3 border-t border-[#f0f4f1] pt-2 text-xs text-[#748079]">{tradeList.boundary}</p>
+                ) : null}
               </div>
             </>
           )}

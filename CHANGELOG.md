@@ -2,6 +2,20 @@
 
 本项目的重要变更记录。历史版本（1.0.0 及以前的阶段总结）见 `docs/history/CHANGELOG.md`。
 
+## [2.1.0] - 2026-08-19
+
+### Added — 上线迭代 M1/M2/M4/M5（设计见 `docs/plans/2026-08-19-final-launch-iteration-design.md`）
+
+- **M1 调度通电与本机生产化**：`scheduled_update.sh` 修复 macOS 无 flock 的根因（mkdir 原子锁 + PID 陈旧检测）；新增 `backup_postgres.sh` 每日备份（自动匹配 PG 大版本）；launchd 常驻模板（backend 8005 / frontend 3000，KeepAlive 自愈，工作日 18:15 / 周日 20:00 调度）。
+- **M2 评价数据攻坚**：`save_evaluation_snapshots.py` 每日评价快照积累（连续性优先选基，已入 30+ 只）；风格快照 359 条、持仓覆盖 394 基金季度；风格漂移链路首次真实产出。
+- **M4 组合构建 MVP**：Portfolio/Target/Holding/Snapshot 四表迁移；准入推荐就绪校验、等权/自定义权重（单只 ≤40%）、三合一穿透（重仓股重叠/风格暴露加权聚合/净值相关性）；`/portfolio` 构建器页面 + 8 转发路由。
+- **M5 基础回测 + 组合监控 + 交易清单 + ADR-0004**：以当前权重回看历史的解释性回测（累计/年化/回撤/波动 + 分类映射基准对比 + 样本不足拒答 + SVG 净值曲线）；组合监控（同类组目标偏离阈值 5% + 成分风格漂移 + 再平衡提示）；交易清单（目标 vs 当前持仓差异 → 申赎建议研究输出，不落库不执行）；`ADR-0004` 定位演进（选基工具 → 专业基金研究工作台，交易清单属研究输出边界）。
+
+### Changed
+
+- `fund_research_scope_smoke` 禁令语义演进：移除对 `api/portfolio` 的全局禁止，保留组合优化/模拟/决策与投资决策禁令（与 ADR-0004 对齐）。
+- `portfolio_construction_smoke` 扩展覆盖 M5 回测/监控/清单边界断言；总验收 67 项全绿。
+
 ## [2.0.0] - 2026-08-18
 
 ### Removed — 四代合并去重
