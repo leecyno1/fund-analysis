@@ -56,6 +56,10 @@ class TradeListRequest(BaseModel):
     total_amount: Optional[float] = None
 
 
+class TargetsUpdateRequest(BaseModel):
+    targets: List[Dict[str, Any]] = Field(default_factory=list)
+
+
 @router.get("")
 def list_portfolios(status: Optional[str] = Query(None)) -> Dict[str, Any]:
     try:
@@ -171,6 +175,15 @@ def monitor_portfolio(portfolio_id: str) -> Dict[str, Any]:
         return _svc().monitor(portfolio_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.put("/{portfolio_id}/targets")
+def update_portfolio_targets(portfolio_id: str, payload: TargetsUpdateRequest) -> Dict[str, Any]:
+    """配置目标同类组权重（监控偏离判定与再平衡提示依赖此配置）"""
+    try:
+        return _svc().update_portfolio(portfolio_id, targets=payload.targets)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/{portfolio_id}/trade-list")

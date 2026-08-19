@@ -201,6 +201,10 @@ export default function PortfolioClient() {
   const [backtestLoading, setBacktestLoading] = useState(false)
   const [monitor, setMonitor] = useState<Monitor | null>(null)
   const [monitorLoading, setMonitorLoading] = useState(false)
+  const [targetsEditing, setTargetsEditing] = useState(false)
+  const [targetRows, setTargetRows] = useState<Array<{ key: string; name: string; weight: string }>>([])
+  const [targetsSaving, setTargetsSaving] = useState(false)
+  const [targetsError, setTargetsError] = useState('')
   const [tradeList, setTradeList] = useState<TradeList | null>(null)
   const [tradeInput, setTradeInput] = useState('')
   const [tradeAmount, setTradeAmount] = useState('')
@@ -251,6 +255,62 @@ export default function PortfolioClient() {
       setLoading(false)
     }
   }, [])
+
+  const beginTargetsEdit = () => {
+    const rows: Array<{ key: string; name: string; weight: string }> = (detail?.targets || []).map((item) => ({
+      key: item.peer_group_key,
+      name: item.peer_group_name || '',
+      weight: item.target_weight != null && Number(item.target_weight) > 0 ? (Number(item.target_weight) * 100).toFixed(1) : '',
+    }))
+    // 监控披露的实际分组（尚未配置目标的）也预填，便于直接补权重
+    const known = new Set(rows.map((row) => row.key))
+    for (const item of monitor?.target_deviations || []) {
+      if (!known.has(item.peer_group_key)) {
+        rows.push({ key: item.peer_group_key, name: item.peer_group_name || '', weight: '' })
+      }
+    }
+    setTargetRows(rows)
+    setTargetsError('')
+    setTargetsEditing(true)
+  }
+
+  const saveTargets = async () => {
+    if (!detail) return
+    setTargetsSaving(true)
+    setTargetsError('')
+    try {
+      const targets = targetRows
+        .filter((row) => row.key.trim() && row.weight.trim())
+        .map((row) => ({
+          peer_group_key: row.key.trim(),
+          peer_group_name: row.name.trim() || null,
+          target_weight: Number(row.weight) / 100,
+        }))
+      if (targets.some((item) => !(item.target_weight > 0))) {
+        throw new Error('目标权重必须为正数（百分比）')
+      }
+      const total = targets.reduce((sum, item) => sum + item.target_weight, 0)
+      if (targets.length && Math.abs(total - 1) > 0.005) {
+        throw new Error(`权重合计需为 100%（当前 ${(total * 100).toFixed(1)}%）`)
+      }
+      const response = await fetch(`/api/portfolios/${detail.id}/targets`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ targets }),
+      })
+      const payload = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(payload.detail || payload.error || '保存失败')
+      setTargetsEditing(false)
+      await loadDetail(detail.id)
+      if (monitor) {
+        await runMonitor()
+      }
+    } catch (exc) {
+      setTargetsError(exc instanceof Error ? exc.message : String(exc))
+    } finally {
+      setTargetsSaving(false)
+    }
+  }
 
   useEffect(() => {
     void loadPortfolios()
@@ -495,26 +555,151 @@ export default function PortfolioClient() {
                     )}
                   </div>
                 </div>
-                {detail.targets.length ? (
-                  <div className="mt-3 overflow-x-auto">
+                {targetsEditing ? (
+                  <div className="mt-3">
                     <table className="w-full text-sm">
                       <thead>
                         <tr className="border-b border-[#e4e9e5] text-left text-xs text-[#748079]">
-                          <th className="py-1.5 pr-3">目标同类组</th>
-                          <th className="py-1.5">目标权重</th>
+                          <th className="py-1.5 pr-2">同类组 key</th>
+                          <th className="py-1.5 pr-2">显示名称</th>
+                          <th className="py-1.5 pr-2 w-28">目标权重 %</th>
+                          <th className="py-1.5 w-10"></th>
                         </tr>
                       </thead>
                       <tbody>
-                        {detail.targets.map((target) => (
-                          <tr key={target.peer_group_key} className="border-b border-[#f0f4f1]">
-                            <td className="py-1.5 pr-3">{target.peer_group_name || target.peer_group_key}</td>
-                            <td className="py-1.5">{pct(target.target_weight)}</td>
-                          </tr>
-                        ))}
+                        {targetRows.map((row, index) => {
+                          return (
+                            <tr key={`${row.key}-${index}`} className="border-b border-[#f0f4f1]">
+                              <td className="py-1.5 pr-2">
+                                <input
+                                  value={row.key}
+                                  onChange={(event) => {
+                                    const next = [...targetRows]
+                                    next[index] = { ...row, key: event.target.value }
+                                    setTargetRows(next)
+                                  }}
+                                  className="w-full rounded border border-[#d5ded8] px-2 py-1 text-sm"
+                                  placeholder="如 混合型-偏股配置"
+                                />
+                              </td>
+                              <td className="py-1.5 pr-2">
+                                <input
+                                  value={row.name}
+                                  onChange={(event) => {
+                                    const next = [...targetRows]
+                                    next[index] = { ...row, name: event.target.value }
+                                    setTargetRows(next)
+                                  }}
+                                  className="w-full rounded border border-[#d5ded8] px-2 py-1 text-sm"
+                                  placeholder="显示名称（可空）"
+                                />
+                              </td>
+                              <td className="py-1.5 pr-2">
+                                <input
+                                  value={row.weight}
+                                  onChange={(event) => {
+                                    const next = [...targetRows]
+                                    next[index] = { ...row, weight: event.target.value }
+                                    setTargetRows(next)
+                                  }}
+                                  className="w-24 rounded border border-[#d5ded8] px-2 py-1 text-sm"
+                                  placeholder="如 30"
+                                  inputMode="decimal"
+                                />
+                              </td>
+                              <td className="py-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() => setTargetRows(targetRows.filter((_, i) => i !== index))}
+                                  className="text-xs text-[#a05a52] hover:underline"
+                                  aria-label="删除此行"
+                                >
+                                  删除
+                                </button>
+                              </td>
+                            </tr>
+                          )
+                        })}
                       </tbody>
                     </table>
+                    <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-[#68766f]">
+                      <span>
+                        合计：
+                        <strong className="mx-1 text-[#1f2d26]">
+                          {targetRows.reduce((sum, item) => sum + (Number(item.weight) || 0), 0).toFixed(1)}%
+                        </strong>
+                        （需为 100%；留空行保存时忽略；清空全部保存 = 移除目标配置）
+                      </span>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setTargetRows([...targetRows, { key: '', name: '', weight: '' }])}
+                          className="rounded border border-[#a8bcb2] px-2 py-1 text-xs font-bold text-[#285d4b] hover:bg-[#edf4f0]"
+                        >
+                          添加一行
+                        </button>
+                        <button
+                          type="button"
+                          disabled={targetsSaving}
+                          onClick={() => void saveTargets()}
+                          className="rounded bg-[#173f35] px-3 py-1 text-xs font-bold text-white hover:bg-[#28624e] disabled:opacity-60"
+                        >
+                          {targetsSaving ? '保存中…' : '保存目标配置'}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={targetsSaving}
+                          onClick={() => setTargetsEditing(false)}
+                          className="rounded border border-[#a8bcb2] px-2 py-1 text-xs font-bold text-[#5c6b61] hover:bg-[#f2f5f3]"
+                        >
+                          取消
+                        </button>
+                      </div>
+                    </div>
+                    {targetsError ? <p className="mt-2 text-xs text-[#a05a52]">{targetsError}</p> : null}
                   </div>
-                ) : null}
+                ) : detail.targets.length ? (
+                  <div className="mt-3">
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="border-b border-[#e4e9e5] text-left text-xs text-[#748079]">
+                            <th className="py-1.5 pr-3">目标同类组</th>
+                            <th className="py-1.5">目标权重</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {detail.targets.map((target) => (
+                            <tr key={target.peer_group_key} className="border-b border-[#f0f4f1]">
+                              <td className="py-1.5 pr-3">{target.peer_group_name || target.peer_group_key}</td>
+                              <td className="py-1.5">{pct(target.target_weight)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={beginTargetsEdit}
+                      className="mt-2 text-xs font-bold text-[#28745c] hover:underline"
+                    >
+                      修改目标配置
+                    </button>
+                  </div>
+                ) : (
+                  <div className="mt-3">
+                    <p className="text-xs text-[#748079]">
+                      未配置目标同类组权重——监控只披露实际分组权重，不做再平衡判定。
+                    </p>
+                    <button
+                      type="button"
+                      onClick={beginTargetsEdit}
+                      className="mt-2 rounded border border-[#a8bcb2] px-2.5 py-1 text-xs font-bold text-[#285d4b] hover:bg-[#edf4f0]"
+                    >
+                      配置目标权重
+                    </button>
+                  </div>
+                )}
               </div>
 
               <div className={card}>

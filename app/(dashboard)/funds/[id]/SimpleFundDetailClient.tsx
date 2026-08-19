@@ -53,6 +53,7 @@ import FundPeriodPerformancePanel, { type FundPeriodPerformanceSnapshot } from '
 import FundShareClassPanel, { type FundShareClassSnapshot } from './FundShareClassPanel'
 import FundManagerHistoryPanel, { type FundManagerHistorySnapshot } from './FundManagerHistoryPanel'
 import FundManagerTenurePerformancePanel, { type FundManagerTenurePerformance } from './FundManagerTenurePerformancePanel'
+import GenerateFundReportButton from './GenerateFundReportButton'
 
 export type FundNavPoint = {
   date: string
@@ -1521,7 +1522,10 @@ export default function SimpleFundDetailClient({ fund, nav, evaluationWindows, e
   return (
     <div className="space-y-7">
       <section className="border-b border-[#dce1dc] pb-7">
-        <Link href="/discover" className="inline-flex items-center gap-2 text-xs font-bold text-[#28745c]"><ArrowLeft className="h-4 w-4" />返回找基金</Link>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <Link href="/discover" className="inline-flex items-center gap-2 text-xs font-bold text-[#28745c]"><ArrowLeft className="h-4 w-4" />返回找基金</Link>
+          <GenerateFundReportButton windCode={fund.windCode} />
+        </div>
         <div className="mt-5 grid gap-6 xl:grid-cols-[minmax(0,1fr)_auto] xl:items-end">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2 text-xs text-[#66726c]">

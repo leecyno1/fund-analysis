@@ -48,6 +48,21 @@ export async function proxyPatch(basePath: string, request: Request) {
   }
 }
 
+export async function proxyPut(basePath: string, request: Request) {
+  const body = await request.json().catch(() => ({}))
+  try {
+    const response = await fetch(`${backendApiBaseUrl}${basePath}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+    const payload = await response.json().catch(() => ({}))
+    return NextResponse.json(payload, { status: response.status })
+  } catch (error) {
+    return NextResponse.json({ error: (error as Error).message || 'backend unavailable' }, { status: 503 })
+  }
+}
+
 export async function proxyDelete(basePath: string) {
   try {
     const response = await fetch(`${backendApiBaseUrl}${basePath}`, { method: 'DELETE' })
