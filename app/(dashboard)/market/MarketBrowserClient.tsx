@@ -1010,12 +1010,7 @@ export default function MarketBrowserClient({
         <section className="overflow-hidden rounded-[28px] border border-slate-900/10 bg-[#10221b] text-white shadow-[0_24px_80px_rgba(15,23,42,0.12)]">
           <div className="grid gap-6 p-6 lg:grid-cols-[1.4fr_0.8fr] lg:p-8">
             <div>
-              <div className="mb-3 flex flex-wrap items-center gap-2 text-xs font-semibold uppercase tracking-[0.18em] text-emerald-200">
-                <span>Fund research terminal</span><span className="h-1 w-1 rounded-full bg-emerald-300" /><span>{profileLabel[riskProfile]}</span>
-              </div>
-              <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">选基金工作台</h1>
-              <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-300">基金排行与快速筛选优先，路径保持清晰：榜单 → 筛选 → 对比 → 详情。所有排序只给研究线索，正式路径由材料核验、适当性、金额门禁与研究证据共同约束。</p>
-              <div className="mt-5 flex flex-wrap gap-2">
+              <div className="flex flex-wrap gap-2">
                 <button type="button" onClick={() => void saveCurrentPageToPool()} className="rounded-full bg-emerald-300 px-4 py-2 text-sm font-semibold text-slate-950 hover:bg-emerald-200">当前页前 {Math.min(BATCH_CANDIDATE_LIMIT, displayFunds.length)} 只加入观察池</button>
                 <button type="button" onClick={() => setShowResearchReview((value) => !value)} className="inline-flex items-center gap-2 rounded-full bg-white/10 px-4 py-2 text-sm font-semibold ring-1 ring-white/15 hover:bg-white/15">研究复核提示（可展开）<ChevronDown className={`h-4 w-4 transition ${showResearchReview ? 'rotate-180' : ''}`} /></button>
               </div>

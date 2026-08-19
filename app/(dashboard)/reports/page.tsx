@@ -840,13 +840,7 @@ export default function ReportsPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">本地基金研究报告</h1>
-          <p className="mt-1 text-sm text-gray-500">
-            统一查看基金研究、研究复核、横向比较和研究短名单报告；缺口继续显式暴露。
-          </p>
-        </div>
+      <div className="flex items-center justify-end">
         <div className="flex flex-wrap gap-2">
           <Link
             href="/investor-selection"

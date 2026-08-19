@@ -5,7 +5,6 @@ import Link from 'next/link'
 import {
   AlertCircle,
   CheckCircle2,
-  ClipboardCheck,
   Copy,
   DatabaseZap,
   Download,
@@ -512,16 +511,7 @@ export default function EvidenceCoverageClient() {
   return (
     <div className="space-y-6">
       <SchedulerAndPendingPanel />
-      <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-start">
-        <div>
-          <div className="flex items-center gap-2">
-            <ClipboardCheck className="h-6 w-6 text-blue-600" />
-            <h1 className="text-2xl font-bold text-gray-900">基金证据覆盖率</h1>
-          </div>
-          <p className="mt-1 max-w-3xl text-sm text-gray-500">
-            只检查基金研究链路：基础字段、净值绩效、风险、经理、销售规则和研究复核适当性证据；缺口不补文案，直接暴露。
-          </p>
-        </div>
+      <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-start lg:justify-end">
         <button
           type="button"
           onClick={() => void fetchCoverage()}

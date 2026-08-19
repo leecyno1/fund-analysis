@@ -397,14 +397,6 @@ export default function SemanticSearchPage() {
       </Link>
 
       <div className="bg-white rounded-lg shadow p-6">
-        <div className="flex items-center mb-4">
-          <Sparkles className="w-6 h-6 text-purple-600 mr-2" />
-          <h1 className="text-2xl font-bold text-gray-900">报告搜索</h1>
-        </div>
-        <p className="text-sm text-gray-600 mb-6">
-          在本地生成报告和上传调研报告中检索关键词、摘要、标签和要点
-        </p>
-
         <form onSubmit={handleSearch} className="space-y-4">
           <div className="relative">
             <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-5 h-5" />

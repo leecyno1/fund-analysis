@@ -5,7 +5,6 @@ import Link from 'next/link'
 import {
   AlertCircle,
   CheckCircle2,
-  ClipboardCheck,
   Filter,
   LoaderCircle,
   RefreshCw,
@@ -175,17 +174,6 @@ export default function PendingReviewClient() {
 
   return (
     <div className="space-y-6">
-      <header className="border border-[#d9dfda] bg-[#173f35] px-6 py-6 text-white">
-        <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-[0.12em] text-[#a9d6c4]">
-          <ClipboardCheck className="h-4 w-4" />
-          待确认收件箱
-        </div>
-        <h1 className="mt-3 text-2xl font-bold sm:text-3xl">人工复核 · LLM 建议不自动落库</h1>
-        <p className="mt-3 max-w-2xl text-sm leading-6 text-[#d4e5dd]">
-          经理身份、基金归属、分类、风格标签、通用标签共 {items.length} 项待人工确认。批量确认仅覆盖非 LLM 来源、置信度不低于门槛的候选。
-        </p>
-      </header>
-
       <section className="border border-[#d9dfda] bg-white p-5">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2 text-sm font-bold text-[#28624e]">

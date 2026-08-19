@@ -78,8 +78,6 @@ export default function UploadReportPage() {
       </Link>
 
       <div className="bg-white rounded-lg shadow p-6">
-        <h1 className="text-2xl font-bold text-gray-900 mb-6">上传调研报告</h1>
-
         <form onSubmit={handleSubmit} className="space-y-6">
           {/* 文件上传 */}
           <div>

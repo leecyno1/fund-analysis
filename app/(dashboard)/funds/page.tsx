@@ -416,20 +416,16 @@ export default function FundsPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">基金列表</h1>
-          <p className="mt-1 text-sm text-gray-500">查看基金基础信息，并继续进入详情、基金研究或全市场筛选入口。</p>
-          {!loading && funds.length === 0 && !errorMessage ? (
-            <button
-              type="button"
-              onClick={() => void fetchFunds()}
-              className="mt-3 inline-flex rounded-lg border border-blue-200 px-3 py-2 text-sm text-blue-700 hover:bg-blue-50"
-            >
-              加载基金列表
-            </button>
-          ) : null}
-        </div>
+      <div className="flex items-start justify-end gap-4">
+        {!loading && funds.length === 0 && !errorMessage ? (
+          <button
+            type="button"
+            onClick={() => void fetchFunds()}
+            className="inline-flex rounded-lg border border-blue-200 px-3 py-2 text-sm text-blue-700 hover:bg-blue-50"
+          >
+            加载基金列表
+          </button>
+        ) : null}
         <Link href={marketHref} className="inline-flex items-center gap-2 rounded-lg bg-blue-50 px-4 py-2 text-sm font-medium text-blue-700 hover:bg-blue-100">
           <Globe2 className="h-4 w-4" /> 前往全市场浏览器
         </Link>

@@ -19,7 +19,7 @@ if (payload.product_scope?.investment_decision !== 'excluded') throw new Error('
 if (payload.product_scope?.sales_rules !== 'excluded') throw new Error('sales rule scope leaked')
 
 const page = await requireResponse('/managers?category=fixed_income&evidence=research_ready')
-for (const required of ['基金经理优选', '代表基金', '量化摘要', '最新经理观点', '调研+量化']) {
+for (const required of ['当前结果', '代表基金', '量化摘要', '最新经理观点', '调研+量化']) {
   if (!page.includes(required)) throw new Error(`manager browser page missing: ${required}`)
 }
 for (const forbidden of ['计划金额', '风险偏好', '销售规则', '经理综合收益榜']) {

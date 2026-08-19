@@ -32,7 +32,7 @@ for (const required of [
   "期限",
   "categoryDisplayName",
   "selectBondDimension",
-  "三步选出值得继续看的基金",
+  "评价一只基金",
   "推荐方案",
   "已选条件",
   "selectRecommendedPlan",

@@ -22,8 +22,8 @@ const managerDetail = read('app/(dashboard)/managers/[id]/page.tsx')
 const reportsPage = read('app/(dashboard)/reports/page.tsx')
 
 for (const expected of [
-  '基金经理优选',
-  '先按基金类别找经理',
+  '当前结果',
+  '所选类别',
   '专业分类',
   '任期指标',
   '调研纪要',

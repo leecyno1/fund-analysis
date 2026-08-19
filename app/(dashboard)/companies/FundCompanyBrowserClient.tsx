@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { useCallback, useState } from 'react'
-import { ArrowRight, Building2, Database, Layers3, Search, UsersRound } from 'lucide-react'
+import { ArrowRight, Database, Layers3, Search, UsersRound } from 'lucide-react'
 
 export type FundCompanySummary = {
   company: string
@@ -66,11 +66,6 @@ export default function FundCompanyBrowserClient({ initialCompanies, initialSumm
     <div className="space-y-7">
       <section className="border-b border-[#dce1dc] pb-7">
         <div className="flex flex-col gap-6 xl:flex-row xl:items-end xl:justify-between">
-          <div className="max-w-3xl">
-            <div className="flex items-center gap-2 text-xs font-bold uppercase text-[#28745c]"><Building2 className="h-4 w-4" />基金公司浏览器</div>
-            <h1 className="mt-3 text-3xl font-bold leading-tight text-[#18231e] sm:text-4xl">先看平台能力，再挑具体基金</h1>
-            <p className="mt-3 text-sm leading-7 text-[#65716b] sm:text-base">查看每家公司在本地基金库中的产品覆盖、经理关联和已同步业绩样本。公司维度用于缩小范围，最终仍应回到同类基金评价。</p>
-          </div>
           <div className="grid grid-cols-2 gap-px overflow-hidden border border-[#d7ddd8] bg-[#d7ddd8] text-sm sm:grid-cols-4">
             <div className="bg-white px-4 py-3"><strong className="block text-lg">{Number(initialSummary.company_count || 0).toLocaleString('zh-CN')}</strong><span className="text-xs text-[#758079]">基金公司</span></div>
             <div className="bg-white px-4 py-3"><strong className="block text-lg">{Number(initialSummary.fund_count || 0).toLocaleString('zh-CN')}</strong><span className="text-xs text-[#758079]">基金份额</span></div>

@@ -11,7 +11,6 @@ import {
   Check,
   CircleAlert,
   Database,
-  GitCompareArrows,
   Search,
   ShieldCheck,
   Sparkles,
@@ -445,17 +444,11 @@ export default function ManagerComparisonClient({
       <section className="relative overflow-hidden border border-[#cfd8d1] bg-[#173f35] px-6 py-8 text-white sm:px-8 sm:py-10">
         <div className="absolute -right-24 -top-28 h-80 w-80 rounded-full border border-white/10" />
         <div className="absolute -right-4 top-16 h-48 w-48 rounded-full border border-white/10" />
-        <div className="relative grid gap-7 xl:grid-cols-[minmax(0,1fr)_380px] xl:items-end">
-          <div className="max-w-3xl">
-            <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-[0.16em] text-[#a9d0bf]"><GitCompareArrows className="h-4 w-4" />Manager comparison</div>
-            <h1 className="mt-4 text-4xl font-bold tracking-tight sm:text-5xl">基金经理对比</h1>
-            <p className="mt-5 max-w-2xl text-sm leading-7 text-[#dbe7e1]">选 2–4 位经理，在相同专业分类下各选一只代表产品，用共同交易日重算收益和风险。不做跨类别经理总分。</p>
-          </div>
-          <div className="grid grid-cols-2 gap-px overflow-hidden border border-white/20 bg-white/20 text-[#18231e]">
+        <div className="relative flex justify-end">
+          <div className="grid grid-cols-2 gap-px overflow-hidden border border-white/20 bg-white/20 text-[#18231e] sm:grid-cols-4">
             <div className="bg-[#f7f5ed] px-5 py-4"><strong className="block text-2xl">{managerIds.length} / 4</strong><span className="text-[11px] text-[#68756e]">已选经理</span></div>
             <div className="bg-[#f7f5ed] px-5 py-4"><strong className="block text-2xl">{commonCategories.length}</strong><span className="text-[11px] text-[#68756e]">共同分类</span></div>
             <div className="bg-[#f7f5ed] px-5 py-4"><strong className="block text-2xl">{commonPeriod?.observation_count || 0}</strong><span className="text-[11px] text-[#68756e]">共同交易日</span></div>
-            <div className="bg-[#f7f5ed] px-5 py-4"><strong className="block text-2xl">0</strong><span className="text-[11px] text-[#68756e]">模拟数据</span></div>
           </div>
         </div>
       </section>

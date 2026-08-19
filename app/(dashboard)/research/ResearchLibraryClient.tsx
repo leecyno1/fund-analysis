@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
-  BookOpenText,
   CalendarDays,
   Check,
   CheckCircle2,
@@ -631,12 +630,6 @@ export default function ResearchLibraryClient({ initialQuery = '' }: { initialQu
 
   return (
     <div className="space-y-7">
-      <header className="border-b border-[#dce1dc] pb-6">
-        <div className="flex items-center gap-2 text-xs font-bold text-[#28745c]"><BookOpenText className="h-4 w-4" />基金经理纪要库</div>
-        <h1 className="mt-2 text-3xl font-bold leading-tight text-[#18231e]">基金经理研究库</h1>
-        <p className="mt-2 max-w-3xl text-sm leading-6 text-[#65716b]">按基金经理归集调研纪要，确认身份、关联基金与长期风格证据。观点主题只用于检索，不直接进入基金评分。</p>
-      </header>
-
       <section className="grid gap-px overflow-hidden border-y border-[#dbe1dc] bg-[#dbe1dc] sm:grid-cols-4" aria-label="调研库概况">
         {[
           ['纪要', total, '已进入本地研究库'],

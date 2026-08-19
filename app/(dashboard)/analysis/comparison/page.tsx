@@ -2146,17 +2146,7 @@ function ComparisonAnalysisPageContent() {
         <div className="relative p-6 text-white md:p-8">
           <div className="absolute right-0 top-0 h-40 w-40 rounded-full bg-blue-500/20 blur-3xl" />
           <div className="absolute bottom-0 left-1/3 h-32 w-32 rounded-full bg-emerald-500/10 blur-3xl" />
-          <div className="relative flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
-            <div>
-              <div className="inline-flex items-center gap-2 rounded-full bg-white/10 px-3 py-1 text-xs text-blue-100 ring-1 ring-white/10">
-                <GitCompare className="h-3.5 w-3.5" />
-                同类分位 · 对比矩阵
-              </div>
-              <h1 className="mt-4 text-3xl font-bold tracking-tight">基金对比矩阵</h1>
-              <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-300">
-                不只比较绝对收益，也比较每只基金在各自同类池中的相对位置；跨类型基金对比时，优先看同类分位。
-              </p>
-            </div>
+          <div className="relative flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-end">
             <div className="grid grid-cols-3 gap-3 text-center">
               <div className="rounded-xl bg-white/10 px-4 py-3 ring-1 ring-white/10">
                 <BarChart3 className="mx-auto h-5 w-5 text-blue-200" />

@@ -81,9 +81,8 @@ for (const forbiddenTradingCopy of forbiddenTradingCopyPatterns) {
 }
 
 assertIncludes(marketClient, 'loadCandidatePoolContext', 'market browser candidate pool status')
-assertIncludes(marketClient, '选基金工作台', 'market browser has selection-first title')
-assertIncludes(marketClient, '基金排行与快速筛选', 'market browser exposes ranking and quick screener first')
-assertIncludes(marketClient, '榜单 → 筛选 → 对比 → 详情', 'market browser explains selection path')
+assertIncludes(marketClient, '加入观察池', 'market browser keeps selection-first action')
+assertIncludes(marketClient, '全市场样本', 'market browser exposes market-wide sample stats')
 assertIncludes(marketClient, '研究复核提示（可展开）', 'market browser folds evidence repair workflow behind screener')
 assertIncludes(marketClient, '基金排行', 'market browser table is positioned as fund ranking')
 assertIncludes(marketClient, '数据待补', 'market browser avoids misleading zero score when metrics are missing')

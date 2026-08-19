@@ -6,7 +6,6 @@ import {
   ArrowLeft,
   BarChart3,
   BookOpenCheck,
-  ChartNoAxesCombined,
   CircleAlert,
   Database,
   LoaderCircle,
@@ -239,11 +238,6 @@ export default function AttributionWorkspace({
       <section className="border-b border-[#dce1dc] pb-7">
         <Link href="/analysis" className="inline-flex items-center gap-2 text-xs font-bold text-[#28745c]"><ArrowLeft className="h-4 w-4" />返回 AI 分析</Link>
         <div className="mt-5 grid gap-5 lg:grid-cols-[minmax(0,1fr)_24rem] lg:items-end">
-          <div>
-            <div className="flex items-center gap-2 text-xs font-bold text-[#28745c]"><ChartNoAxesCombined className="h-4 w-4" />业绩归因</div>
-            <h1 className="mt-3 text-3xl font-bold text-[#18231e] sm:text-4xl">收益和风险到底来自哪里</h1>
-            <p className="mt-3 max-w-3xl text-sm leading-7 text-[#65716b]">Barra 解释风格与风险暴露，Brinson 解释行业配置和选择效应。净值行为分析只作为补充，不冒充正式模型。</p>
-          </div>
           <div className="grid grid-cols-3 gap-px overflow-hidden border border-[#dbe1dc] bg-[#dbe1dc] text-center text-[11px]">
             <div className="bg-white p-3"><BarChart3 className="mx-auto h-4 w-4 text-[#28745c]" /><span className="mt-2 block">Barra</span></div>
             <div className="bg-white p-3"><ShieldCheck className="mx-auto h-4 w-4 text-[#28745c]" /><span className="mt-2 block">Brinson</span></div>

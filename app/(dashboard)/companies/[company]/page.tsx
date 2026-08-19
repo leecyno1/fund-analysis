@@ -4,7 +4,6 @@ import {
   ArrowLeft,
   ArrowRight,
   BarChart3,
-  Building2,
   CheckCircle2,
   CircleAlert,
   Database,
@@ -119,10 +118,8 @@ export default async function FundCompanyDetailPage({ params }: { params: Promis
         <div className="absolute -right-4 top-10 h-40 w-40 rounded-full border border-white/10" />
         <div className="relative grid gap-8 xl:grid-cols-[minmax(0,1fr)_auto] xl:items-end">
           <div className="max-w-3xl">
-            <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-[0.16em] text-[#a9d0bf]"><Building2 className="h-4 w-4" />基金公司研究入口</div>
-            <h1 className="mt-4 text-4xl font-bold tracking-tight sm:text-5xl">{shortName}</h1>
+            <h1 className="text-4xl font-bold tracking-tight sm:text-5xl">{shortName}</h1>
             <p className="mt-2 text-sm text-[#c6d8d0]">{String(summary.company || companyName)}</p>
-            <p className="mt-5 max-w-2xl text-sm leading-7 text-[#dbe7e1]">回答三个选基问题：这家公司覆盖哪些专业类别、每类先看哪只基金、谁在管理代表产品。公司本身不输出综合评分。</p>
           </div>
           <div className="grid grid-cols-2 gap-px overflow-hidden border border-white/20 bg-white/20 text-[#18231e] sm:grid-cols-4">
             <div className="bg-[#f7f5ed] px-4 py-4"><strong className="block text-xl">{Number(summary.fund_count || 0).toLocaleString('zh-CN')}</strong><span className="text-[11px] text-[#68756e]">基金份额</span></div>

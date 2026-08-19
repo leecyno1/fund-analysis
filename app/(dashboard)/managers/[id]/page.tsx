@@ -14,7 +14,6 @@ import {
   Quote,
   ShieldCheck,
   Tag,
-  UserRound,
 } from 'lucide-react'
 import { backendApiBaseUrl } from '@/lib/backend-api'
 import { materialEvidenceHref, reviewEventsHref } from '@/lib/research-platform/routes'
@@ -231,10 +230,8 @@ export default async function ManagerDetailPage({ params }: { params: Promise<{ 
         <div className="absolute -right-4 top-10 h-40 w-40 rounded-full border border-white/10" />
         <div className="relative grid gap-8 xl:grid-cols-[minmax(0,1fr)_auto] xl:items-end">
           <div className="max-w-3xl">
-            <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-[0.16em] text-[#a9d0bf]"><UserRound className="h-4 w-4" />基金经理研究</div>
-            <h1 className="mt-4 text-4xl font-bold tracking-tight sm:text-5xl">{managerName}</h1>
+            <h1 className="text-4xl font-bold tracking-tight sm:text-5xl">{managerName}</h1>
             <p className="mt-2 text-sm text-[#c6d8d0]">{company || '基金公司待补'} · {textValue(manager.education) || '学历待补'}</p>
-            <p className="mt-5 max-w-2xl text-sm leading-7 text-[#dbe7e1]">先看经理正在管理什么类别，再看每只基金任期内的收益与风险，最后用调研纪要理解投资框架。不同类别基金不合并排名，也不输出经理综合分。</p>
           </div>
           <div className="grid grid-cols-2 gap-px overflow-hidden border border-white/20 bg-white/20 text-[#18231e] sm:grid-cols-4">
             <div className="bg-[#f7f5ed] px-4 py-4"><strong className="block text-xl">{formatYears(manager.management_years)}</strong><span className="text-[11px] text-[#68756e]">管理年限</span></div>

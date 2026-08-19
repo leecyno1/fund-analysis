@@ -483,13 +483,8 @@ export default function SimpleComparisonClient({ funds, alignedComparison, holdi
     <div className="space-y-7">
       <section className="border-b border-[#dce1dc] pb-7">
         <Link href="/discover" className="inline-flex items-center gap-2 text-xs font-bold text-[#28745c]"><ArrowLeft className="h-4 w-4" />返回基金浏览器</Link>
-        <div className="mt-5 flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
-          <div className="max-w-3xl">
-            <div className="flex items-center gap-2 text-xs font-bold uppercase text-[#28745c]"><GitCompareArrows className="h-4 w-4" />基金比较</div>
-            <h1 className="mt-3 text-3xl font-bold leading-tight text-[#18231e] sm:text-4xl">只在同类基金之间比较</h1>
-            <p className="mt-3 text-sm leading-7 text-[#65716b] sm:text-base">先用专业分类确认同类组，再比较净值、收益和风险。量化结果用于研究，不生成买卖或仓位建议。</p>
-          </div>
-          <div className="text-sm text-[#66726c]">已选 {funds.length} / 6 只</div>
+        <div className="mt-5 flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-end">
+          <div className="text-sm text-[#66726c]">已选 {funds.length} / 6 只 · 仅同类比较</div>
         </div>
       </section>
 

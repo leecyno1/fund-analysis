@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
-import { ArrowLeft, Sparkles, Users, Loader2 } from 'lucide-react'
+import { ArrowLeft, Sparkles, Loader2 } from 'lucide-react'
 import ReportActionBar from '@/components/analysis/ReportActionBar'
 
 type PurchasePlan = 'lump_sum' | 'sip'
@@ -139,16 +139,6 @@ export default function ManagerAnalysisPage() {
       </Link>
 
       <div className="bg-white rounded-lg shadow p-6">
-        <div className="flex items-center mb-6">
-          <div className="p-3 bg-green-100 rounded-lg mr-4">
-            <Users className="w-6 h-6 text-green-600" />
-          </div>
-          <div>
-            <h1 className="text-2xl font-bold text-gray-900">基金经理分析</h1>
-            <p className="text-sm text-gray-500">基于数据和调研材料评估基金经理</p>
-          </div>
-        </div>
-
         <div className="space-y-4">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">

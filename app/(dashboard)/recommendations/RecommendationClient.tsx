@@ -282,12 +282,7 @@ export default function RecommendationClient({ initialFunds, initialCategories, 
 
   return (
     <div className="space-y-7">
-      <section className="grid gap-7 border-b border-[#dce1dc] pb-8 lg:grid-cols-[minmax(0,1fr)_22rem] lg:items-end">
-        <div className="max-w-3xl">
-          <div className="flex items-center gap-2 text-xs font-bold uppercase text-[#28745c]"><Tags className="h-4 w-4" />基金推荐</div>
-          <h1 className="mt-3 text-3xl font-bold leading-tight text-[#18231e] sm:text-4xl">先选基金类别，再看同类候选</h1>
-          <p className="mt-3 text-sm leading-7 text-[#65716b] sm:text-base">系统检查完整同类组，只保留分类和关键证据齐全的基金，再按该类别自己的评价方法给出最多十只候选。</p>
-        </div>
+      <section className="border-b border-[#dce1dc] pb-6">
         <div className="border-l-4 border-[#d7b46a] bg-[#fff9eb] px-4 py-3 text-xs leading-6 text-[#755722]">
           候选组用于缩小研究范围，不跨类比较，不代表收益承诺或买卖建议。
         </div>

@@ -90,7 +90,6 @@ export default function WatchlistClient() {
     return members.filter((member) => `${member.name} ${member.windCode} ${professionalPeerGroup(member)} ${styleLabel(member)}`.toLowerCase().includes(normalized))
   }, [keyword, members])
 
-  const selectedGroup = watchlists.find((item) => String(item.id) === selectedId)
   const compareHref = `/compare?${new URLSearchParams({ codes: selectedCodes.join(',') }).toString()}`
 
   async function createGroup() {
@@ -164,21 +163,6 @@ export default function WatchlistClient() {
 
   return (
     <div className="space-y-7">
-      <section className="overflow-hidden border border-[#d9dfda] bg-[#173f35] text-white">
-        <div className="grid gap-8 px-6 py-8 lg:grid-cols-[minmax(0,1fr)_20rem] lg:px-9 lg:py-10">
-          <div>
-            <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-[0.12em] text-[#a9d6c4]"><Bookmark className="h-4 w-4" />我的自选</div>
-            <h1 className="mt-4 max-w-2xl text-3xl font-bold leading-tight sm:text-4xl">把看中的基金放在一起，再慢慢比较</h1>
-            <p className="mt-4 max-w-2xl text-sm leading-7 text-[#d4e5dd]">按用途建立分组，保留收藏理由。收益、回撤和评分只在同类基金之间比较。</p>
-          </div>
-          <div className="border border-white/15 bg-white/8 p-5">
-            <div className="text-xs text-[#b8d7ca]">当前分组</div>
-            <div className="mt-2 text-2xl font-bold">{selectedGroup?.name || '我的自选'}</div>
-            <div className="mt-6 flex items-end justify-between"><span className="text-xs text-[#b8d7ca]">已收藏</span><strong className="text-4xl">{members.length}</strong></div>
-          </div>
-        </div>
-      </section>
-
       <section className="grid gap-5 lg:grid-cols-[17rem_minmax(0,1fr)]">
         <aside className="h-fit border border-[#dbe1dc] bg-white p-4">
           <div className="flex items-center justify-between"><h2 className="font-bold">自选分组</h2><FolderPlus className="h-4 w-4 text-[#28745c]" /></div>

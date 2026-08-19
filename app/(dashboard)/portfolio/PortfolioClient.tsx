@@ -6,7 +6,6 @@ import {
   ClipboardList,
   GitCompareArrows,
   HeartPulse,
-  Layers,
   LineChart,
   LoaderCircle,
   Plus,
@@ -409,16 +408,7 @@ export default function PortfolioClient() {
 
   return (
     <div className="mx-auto max-w-7xl space-y-4 p-4 md:p-6">
-      <header className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="flex items-center gap-2 text-xl font-bold text-[#1f2d26]">
-            <Layers className="h-5 w-5 text-[#28745c]" aria-hidden="true" />
-            基金组合
-          </h1>
-          <p className="mt-1 text-sm text-[#5c6b61]">
-            研究型组合：目标配置 → 推荐就绪候选 → 等权/自定义权重 → 持仓穿透。不执行交易，不构成投资建议。
-          </p>
-        </div>
+      <header className="flex flex-wrap items-center justify-end gap-3">
         <button type="button" className={button} onClick={() => (selectedId ? loadDetail(selectedId) : loadPortfolios())}>
           <RefreshCw className="mr-1 inline h-4 w-4" aria-hidden="true" />
           刷新

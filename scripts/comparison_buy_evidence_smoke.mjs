@@ -239,7 +239,7 @@ assertIncludes(shareClassLib, 'buildShareClassInfoByCode', 'shared share class u
 
 const comparisonPage = read('app/(dashboard)/compare/SimpleComparisonClient.tsx')
 const analysisWorkspace = read('app/(dashboard)/analysis/FundAnalysisWorkspace.tsx')
-assertIncludes(comparisonPage, '只在同类基金之间比较', 'simple comparison keeps peer-group boundary')
+assertIncludes(comparisonPage, '仅同类比较', 'simple comparison keeps peer-group boundary')
 assertIncludes(comparisonPage, 'peerGroupIds.length === 1', 'simple comparison validates the professional peer group')
 assertIncludes(analysisWorkspace, 'fund_evaluation_analysis', 'analysis history is limited to on-demand fund evaluation records')
 

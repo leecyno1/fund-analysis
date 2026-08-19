@@ -192,21 +192,10 @@ export default async function ManagersPage({ searchParams }: { searchParams: Sea
       <section className="relative overflow-hidden border border-[#cfd8d1] bg-[#173f35] px-6 py-8 text-white sm:px-8 sm:py-10">
         <div className="absolute -right-20 -top-24 h-72 w-72 rounded-full border border-white/10" />
         <div className="absolute -right-2 top-14 h-44 w-44 rounded-full border border-white/10" />
-        <div className="relative grid gap-7 xl:grid-cols-[minmax(0,1fr)_360px] xl:items-end">
-          <div className="max-w-3xl">
-            <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-[0.16em] text-[#a9d0bf]">
-              <UserRoundSearch className="h-4 w-4" />Fund manager browser
-            </div>
-            <h1 className="mt-4 text-4xl font-bold tracking-tight sm:text-5xl">基金经理优选</h1>
-            <p className="mt-5 max-w-2xl text-sm leading-7 text-[#dbe7e1]">
-              先按基金类别找经理，再把代表基金的量化表现、经理调研纪要和长期画像放在一起看。不同类别不做收益总榜，数据不足就明确显示。
-            </p>
-          </div>
+        <div className="relative flex justify-end">
           <div className="grid grid-cols-2 gap-px overflow-hidden border border-white/20 bg-white/20 text-[#18231e]">
             <div className="bg-[#f7f5ed] px-5 py-4"><strong className="block text-2xl">{data.total}</strong><span className="text-[11px] text-[#68756e]">当前结果</span></div>
             <div className="bg-[#f7f5ed] px-5 py-4"><strong className="block text-2xl">{currentLabel}</strong><span className="text-[11px] text-[#68756e]">所选类别</span></div>
-            <div className="bg-[#f7f5ed] px-5 py-4"><strong className="block text-2xl">分类</strong><span className="text-[11px] text-[#68756e]">先分类再评价</span></div>
-            <div className="bg-[#f7f5ed] px-5 py-4"><strong className="block text-2xl">证据</strong><span className="text-[11px] text-[#68756e]">缺失就明确显示</span></div>
           </div>
         </div>
       </section>

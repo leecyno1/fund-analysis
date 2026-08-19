@@ -530,11 +530,6 @@ export default function FundDiscoverClient({ initialFunds, initialCategories, in
     <div className="space-y-7">
       <section className="border-b border-[#dce1dc] pb-7">
         <div className="flex flex-col gap-6 xl:flex-row xl:items-end xl:justify-between">
-          <div className="max-w-3xl">
-            <p className="text-xs font-bold uppercase text-[#28745c]">基金浏览器</p>
-            <h1 className="mt-3 text-3xl font-bold leading-tight text-[#18231e] sm:text-4xl">三步选出值得继续看的基金</h1>
-            <p className="mt-3 text-sm leading-7 text-[#65716b] sm:text-base">先选用途，再看同类表现，最后加入比较。不同类别不会混在一个排行榜里。</p>
-          </div>
           <div className="flex items-center gap-3 text-sm text-[#65716b]">
             <Link href="/evaluation" className="rounded-sm border border-[#9fc4b4] bg-white px-3 py-2 font-bold text-[#245c49] hover:bg-[#edf5f1]">评价一只基金</Link>
             <span className="rounded-sm bg-[#e7eee9] px-3 py-2 font-semibold text-[#245c49]">{total.toLocaleString('zh-CN')} 只基金</span>

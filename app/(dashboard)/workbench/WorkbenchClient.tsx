@@ -5,7 +5,6 @@ import { useCallback, useEffect, useState } from 'react'
 import {
   AlertTriangle,
   BookMarked,
-  ClipboardList,
   Eye,
   FlaskConical,
   ListChecks,
@@ -29,14 +28,6 @@ export default function WorkbenchClient() {
 
   return (
     <div className="space-y-4">
-      <header className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <ClipboardList className="h-4 w-4 text-[#4a7c64]" />
-          <h1 className="text-lg font-bold text-[#1f2d26]">研究工作台</h1>
-          <span className="text-xs text-[#748079]">候选 → 研究 → 论点 → 观察 → 复盘 的完整工作流</span>
-        </div>
-      </header>
-
       <nav className="flex items-center gap-1 overflow-x-auto border-b border-[#eaedea] text-xs">
         {TABS.map((t) => {
           const Icon = t.icon

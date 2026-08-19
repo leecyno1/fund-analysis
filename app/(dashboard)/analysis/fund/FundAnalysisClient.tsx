@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import Link from 'next/link'
-import { ArrowLeft, Sparkles, TrendingUp, Loader2 } from 'lucide-react'
+import { ArrowLeft, Sparkles, Loader2 } from 'lucide-react'
 import ReportActionBar from '@/components/analysis/ReportActionBar'
 
 type PurchasePlan = 'lump_sum' | 'sip'
@@ -119,16 +119,6 @@ export default function FundAnalysisClient({
       </Link>
 
       <div className="bg-white rounded-lg shadow p-6">
-        <div className="flex items-center mb-6">
-          <div className="p-3 bg-blue-100 rounded-lg mr-4">
-            <TrendingUp className="w-6 h-6 text-blue-600" />
-          </div>
-          <div>
-            <h1 className="text-2xl font-bold text-gray-900">基金研究备忘录</h1>
-            <p className="text-sm text-gray-500">生成带证据表、事实、推断和反证的基金研究底稿</p>
-          </div>
-        </div>
-
         <div className="space-y-4">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">

@@ -85,12 +85,7 @@ export default function ThesesClient() {
 
   return (
     <div className="space-y-4">
-      <header className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <BookMarked className="h-4 w-4 text-[#4a7c64]" />
-          <h1 className="text-lg font-bold text-[#1f2d26]">投资论点</h1>
-          <span className="text-xs text-[#748079]">研究结论的容器 — 为什么买、何时卖、有效期</span>
-        </div>
+      <header className="flex items-center justify-end">
         <div className="flex gap-2">
           <button type="button" onClick={() => void load()} className="inline-flex items-center gap-1 border border-[#c8d0ca] px-3 py-1.5 text-xs hover:border-[#28745c]">
             <RefreshCw className="h-3.5 w-3.5" />刷新

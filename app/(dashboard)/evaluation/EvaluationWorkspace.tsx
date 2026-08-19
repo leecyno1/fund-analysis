@@ -488,11 +488,6 @@ export default function EvaluationWorkspace({ initialRecentHistory }: { initialR
         <Link href="/discover" className="inline-flex items-center gap-2 text-xs font-bold text-[#28745c]">
           <ArrowLeft className="h-4 w-4" />返回找基金
         </Link>
-        <div className="mt-5 max-w-3xl">
-          <p className="text-xs font-bold uppercase tracking-[0.16em] text-[#28745c]">基金评价中心</p>
-          <h1 className="mt-3 text-3xl font-bold leading-tight text-[#18231e] sm:text-4xl">选一只基金，看清它在同类中的位置</h1>
-          <p className="mt-3 text-sm leading-7 text-[#65716b] sm:text-base">系统自动识别基金类别并匹配评价方法。每次评价都会保存，方便以后复核。</p>
-        </div>
       </section>
 
       {error ? <div className="border border-[#e4c37e] bg-[#fff8e6] px-5 py-4 text-sm text-[#77551c]">{error}</div> : null}
