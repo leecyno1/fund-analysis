@@ -273,7 +273,11 @@ export default async function ManagersPage({ searchParams }: { searchParams: Sea
                       {researchReady ? <span className="bg-[#fff5df] px-2.5 py-1 text-[11px] font-bold text-[#82662c]">有调研纪要</span> : null}
                       {manager.current_fund_count === 0 && researchReady ? <span className="bg-[#eef0f3] px-2.5 py-1 text-[11px] font-bold text-[#59616d]">历史经理 · 当前无在管</span> : null}
                     </div>
-                    <h2 className="mt-3 text-2xl font-bold text-[#1f2d26]">{manager.name || '姓名待补'}</h2>
+                    <h2 className="mt-3 text-2xl font-bold text-[#1f2d26]">
+                      <Link href={managerDetailHref} className="hover:text-[#28745c] hover:underline">
+                        {manager.name || '姓名待补'}
+                      </Link>
+                    </h2>
                     <p className="mt-1 flex items-center gap-1.5 text-sm text-[#68766f]"><Building2 className="h-3.5 w-3.5" />{manager.company || '基金公司待补'}</p>
                   </div>
                   <div className="text-right">

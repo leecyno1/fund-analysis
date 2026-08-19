@@ -19,6 +19,7 @@ import { backendApiBaseUrl } from '@/lib/backend-api'
 import { materialEvidenceHref, reviewEventsHref } from '@/lib/research-platform/routes'
 import FundManagerCareerChart from './FundManagerCareerChart'
 import ManagerViewpointTimeline from './ManagerViewpointTimeline'
+import GenerateManagerReportButton from './GenerateManagerReportButton'
 
 export const dynamic = 'force-dynamic'
 
@@ -213,6 +214,7 @@ export default async function ManagerDetailPage({ params }: { params: Promise<{ 
           <ArrowLeft className="h-4 w-4" />返回基金经理
         </Link>
         <div className="flex flex-wrap gap-2">
+          <GenerateManagerReportButton managerId={managerId} />
           <Link href={managerReviewEventsHref} className="inline-flex items-center gap-2 border border-[#d7b46a] bg-[#fff9eb] px-4 py-2 text-xs font-bold text-[#755722] hover:bg-[#fff3d6]">
             <CircleAlert className="h-4 w-4" />复查事件
           </Link>

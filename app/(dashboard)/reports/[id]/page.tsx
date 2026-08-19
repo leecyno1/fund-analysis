@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useParams } from 'next/navigation'
 import Link from 'next/link'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import { AlertTriangle, ArrowLeft, Calendar, CheckCircle2, Copy, Download, FileText, Layers, RefreshCw, ShieldCheck, Tag, User } from 'lucide-react'
 import { buildBuyBeforeEvidenceQueue } from '@/lib/report-buy-before-evidence-queue'
 import { canonicalResearchHref, materialEvidenceHref } from '@/lib/research-platform/routes'
@@ -1261,10 +1263,8 @@ export default function ReportDetailPage() {
       {/* 完整内容 */}
       <div className="bg-white rounded-lg shadow p-6">
         <h2 className="text-lg font-semibold text-gray-900 mb-3">完整内容</h2>
-        <div className="prose max-w-none">
-          <pre className="whitespace-pre-wrap text-sm text-gray-700 leading-relaxed font-sans">
-            {report.content}
-          </pre>
+        <div className="report-markdown prose max-w-none text-sm text-gray-700 leading-relaxed font-sans">
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>{report.content || ''}</ReactMarkdown>
         </div>
       </div>
     </div>
