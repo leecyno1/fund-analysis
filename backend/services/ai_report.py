@@ -4,6 +4,7 @@
 import os
 import json
 import logging
+import re
 import urllib.error
 import urllib.request
 from typing import Dict, Any, List, Optional
@@ -421,7 +422,7 @@ class ClaudeReportGenerator:
                 {"role": "user", "content": prompt},
             ],
             "temperature": 0.2,
-            "max_tokens": 4096,
+            "max_tokens": 8192,
         }
         if json_object:
             payload["response_format"] = {"type": "json_object"}
@@ -439,6 +440,12 @@ class ClaudeReportGenerator:
             with urllib.request.urlopen(request, timeout=timeout) as response:
                 data = json.loads(response.read().decode("utf-8"))
             content = data["choices"][0]["message"]["content"]
+            # 剥离思考型模型（如 MiniMax-M3）的 <think>…</think> 推理段，只保留正式报告
+            if isinstance(content, str) and "</think>" in content:
+                content = re.sub(r"^\s*<think>[\s\S]*?</think>\s*", "", content)
+                if not content.strip() and isinstance(data["choices"][0]["message"].get("reasoning_content"), str):
+                    # 极端情况：正文全在思考段时拒绝输出（避免空报告）
+                    raise ValueError("模型仅返回思考段，无正式内容")
             guard.record_success(self.runtime_key)
             return content
         except urllib.error.HTTPError as error:

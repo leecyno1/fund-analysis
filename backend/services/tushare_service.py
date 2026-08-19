@@ -1305,10 +1305,74 @@ class TushareDataService:
             logger.error(f"Tushare get_manager_tenures error for {manager_id}: {e}")
             return []
 
+    def _local_manager_profile(self, manager_id: str) -> Optional[Dict[str, Any]]:
+        """本地 managers/manager_fund_tenures 表优先：避免 Tushare fund_manager
+        错行（曾把邹立虎查成王亚伟）与慢查询；company 取真实管理人而非托管行。"""
+        try:
+            from backend.database import get_engine
+        except ImportError:
+            from database import get_engine
+        from sqlalchemy import text
+
+        parts = str(manager_id or "").split("|")
+        name = parts[0] if parts else str(manager_id or "")
+        engine = get_engine()
+        with engine.connect() as conn:
+            row = conn.execute(
+                text(
+                    "SELECT wind_code, name, company, education, work_years, management_years "
+                    "FROM managers WHERE wind_code = :mid OR name = :name LIMIT 1"
+                ),
+                {"mid": str(manager_id or ""), "name": name},
+            ).fetchone()
+            if not row:
+                return None
+            wind_code = str(row[0] or manager_id)
+            tenure_rows = conn.execute(
+                text(
+                    "SELECT fund_code, fund_name, start_date, end_date "
+                    "FROM manager_fund_tenures WHERE manager_id = :mid ORDER BY start_date"
+                ),
+                {"mid": wind_code},
+            ).fetchall()
+        fund_history = [
+            {
+                "wind_code": str(t[0]),
+                "fund_name": str(t[1] or t[0]),
+                "start_date": str(t[2] or ""),
+                "end_date": str(t[3] or "") if t[3] else "",
+            }
+            for t in tenure_rows
+        ]
+        begin_date = min((f["start_date"] for f in fund_history if f["start_date"]), default="")
+        tenure_years = 0
+        if begin_date and len(begin_date) >= 4:
+            try:
+                tenure_years = datetime.now().year - int(begin_date[:4])
+            except (ValueError, TypeError):
+                tenure_years = 0
+        return {
+            "manager_id": manager_id,
+            "name": str(row[1] or name),
+            "gender": parts[1] if len(parts) >= 2 else "",
+            "education": str(row[3] or (parts[2] if len(parts) >= 3 else "")),
+            "company": str(row[2] or ""),
+            "tenure_years": int(row[5] or tenure_years or 0),
+            "begin_date": begin_date,
+            "birth_year": None,
+            "fund_count": len(fund_history),
+            "current_funds": [f["wind_code"] for f in fund_history if not f["end_date"]],
+            "fund_history": fund_history,
+        }
+
     def get_manager_info(self, manager_id: str) -> Dict[str, Any]:
-        """获取基金经理个人信息（优化：使用 manager_id 直接查询，避免全量缓存刷新）"""
+        """获取基金经理个人信息（本地库优先，避免 Tushare 实时查询错行）"""
         if self.mock_mode:
             return self._mock_manager_info(manager_id)
+
+        local = self._local_manager_profile(manager_id)
+        if local:
+            return local
 
         try:
             # manager_id 格式: "name|gender|edu"
@@ -1413,9 +1477,22 @@ class TushareDataService:
         }
 
     def get_manager_funds(self, manager_id: str) -> List[Dict]:
-        """获取经理管理的基金列表"""
+        """获取经理管理的基金列表（本地任期表优先）"""
         if self.mock_mode:
             return self._mock_manager_funds(manager_id)
+
+        local = self._local_manager_profile(manager_id)
+        if local:
+            funds = []
+            for item in local.get("fund_history") or []:
+                funds.append({
+                    "wind_code": item["wind_code"],
+                    "name": item["fund_name"],
+                    "type": "",
+                    "since": item["start_date"],
+                    "to_date": item["end_date"],
+                })
+            return funds
 
         try:
             df = self.pro.fund_manager(manager_id=manager_id)
