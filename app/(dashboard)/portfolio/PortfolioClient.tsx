@@ -164,6 +164,7 @@ const button = 'rounded-lg border border-[#c8d4cb] bg-white px-3 py-1.5 text-sm 
 const primaryButton = 'rounded-lg bg-[#28745c] px-3 py-1.5 text-sm font-medium text-white transition hover:bg-[#1f5d49] disabled:opacity-50'
 
 function pct(value: number | string | null | undefined): string {
+  if (value == null) return '—'
   const num = Number(value)
   if (!Number.isFinite(num)) return '—'
   return `${(num * 100).toFixed(1)}%`
@@ -568,7 +569,7 @@ export default function PortfolioClient() {
                             {item.evaluation?.overall_score != null ? (
                               <span>{item.evaluation.overall_score}</span>
                             ) : (
-                              <span className="text-xs text-[#748079]">暂无快照</span>
+                              <span className="text-xs text-[#748079]">暂无快照（每日积累，实时评分见推荐页）</span>
                             )}
                           </td>
                           <td className="py-1.5">
@@ -710,7 +711,9 @@ export default function PortfolioClient() {
                               ['基准累计（' + backtest.benchmark.source + '）', pct(backtest.benchmark.metrics?.cumulative_return)],
                               ['相对基准超额', pct(backtest.benchmark.excess_return)],
                             ] as Array<[string, string]>)
-                          : []),
+                          : [
+                              ['基准对比', '数据不足（持仓无分类映射基准净值）'],
+                            ] as Array<[string, string]>),
                       ].map(([key, value]) => (
                         <div key={key} className="flex items-baseline justify-between border-b border-[#f0f4f1] py-1">
                           <span className="text-[#3d5347]">{key}</span>
@@ -770,7 +773,7 @@ export default function PortfolioClient() {
                               <td className="py-1.5 pr-3">{item.peer_group_name || item.peer_group_key}</td>
                               <td className="py-1.5 pr-3">{pct(item.target_weight)}</td>
                               <td className="py-1.5 pr-3">{pct(item.actual_weight)}</td>
-                              <td className={`py-1.5 pr-3 ${item.deviation < 0 ? 'text-[#a05a52]' : ''}`}>{pct(item.deviation)}</td>
+                              <td className={`py-1.5 pr-3 ${item.deviation != null && item.deviation < 0 ? 'text-[#a05a52]' : ''}`}>{item.deviation != null ? pct(item.deviation) : '—'}</td>
                               <td className="py-1.5">{item.needs_rebalance ? '偏离超阈值' : '—'}</td>
                             </tr>
                           ))}

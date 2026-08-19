@@ -30,10 +30,21 @@ from database import get_engine  # noqa: E402
 
 
 def pick_candidates(limit: int) -> List[str]:
-    """优先延续已有快照的基金（保证时序连续），余额度给最近有指标的新基金。"""
+    """选基优先级：组合持仓 > 已有快照基金（保证时序连续）> 最近有指标的新基金。
+
+ 组合持仓优先：保证组合页评价摘要尽快可用（否则用户在推荐页看到评分、
+ 组合页却长期显示暂无快照）。"""
     from sqlalchemy import text
 
     engine = get_engine()
+    holdings_query = text(
+        """
+        SELECT DISTINCT h.wind_code
+        FROM portfolio_holdings h
+        JOIN portfolios p ON p.id = h.portfolio_id
+        WHERE p.status IN ('draft', 'active')
+        """
+    )
     continuity_query = text(
         """
         SELECT wind_code
@@ -44,34 +55,42 @@ def pick_candidates(limit: int) -> List[str]:
         """
     )
     with engine.connect() as conn:
+        holdings = [
+            str(row[0]).strip().upper()
+            for row in conn.execute(holdings_query).fetchall()
+            if row[0]
+        ]
         continuity = [
             str(row[0]).strip().upper()
             for row in conn.execute(continuity_query, {"limit": limit}).fetchall()
             if row[0]
         ]
         remaining = limit - len(continuity)
-        if remaining <= 0:
-            return continuity
-        exclude = list({code for code in continuity if code})
-        fresh_query = text(
-            """
-            SELECT target_id
-            FROM metric_snapshots
-            WHERE target_type = 'fund'
-              AND target_id NOT IN (SELECT wind_code FROM fund_evaluation_snapshots)
-            GROUP BY target_id
-            ORDER BY MAX(as_of_date) DESC, target_id
-            LIMIT :limit
-            """
-        )
-        fresh = [
-            str(row[0]).strip().upper()
-            for row in conn.execute(fresh_query, {"limit": remaining}).fetchall()
-            if row[0]
-        ]
-    # 去重目防：continuity 里不应与 fresh 重叠，但保守合并
-    seen = set(exclude)
-    ordered = continuity + [code for code in fresh if code not in seen]
+        fresh: List[str] = []
+        if remaining > 0:
+            fresh_query = text(
+                """
+                SELECT target_id
+                FROM metric_snapshots
+                WHERE target_type = 'fund'
+                  AND target_id NOT IN (SELECT wind_code FROM fund_evaluation_snapshots)
+                GROUP BY target_id
+                ORDER BY MAX(as_of_date) DESC, target_id
+                LIMIT :limit
+                """
+            )
+            fresh = [
+                str(row[0]).strip().upper()
+                for row in conn.execute(fresh_query, {"limit": remaining}).fetchall()
+                if row[0]
+            ]
+    # 去重自防：三级列表间不应重叠，但保守合并（组合持仓最优先）
+    seen: set = set()
+    ordered: List[str] = []
+    for code in holdings + continuity + fresh:
+        if code and code not in seen:
+            seen.add(code)
+            ordered.append(code)
     return ordered[:limit]
 
 

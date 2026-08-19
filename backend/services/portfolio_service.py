@@ -269,13 +269,28 @@ class PortfolioService:
         curve = self._equity_curve(portfolio_returns)
         metrics = self._performance_metrics(portfolio_returns, common_days)
 
-        # 基准：默认取权重最大持仓基金自带的分类映射基准净值
+        # 基准：优先指定代码 → 权重最大持仓 → 组合内任一有分类映射基准净值的成分（降级链）
         benchmark_source = None
         if benchmark_wind_code:
             benchmark_source = str(benchmark_wind_code).strip().upper()
         else:
             benchmark_source = max(weights, key=lambda code: weights.get(code, 0.0))
         benchmark_series = self._load_benchmark_series(benchmark_source, common_days[0], common_days[-1])
+        if len(benchmark_series) < CORRELATION_MIN_DAYS:
+            # 权重最大持仓无基准净值时，降级尝试组合内其他成分，避免基准静默缺失
+            fallback_source = None
+            fallback_series: Dict[str, float] = {}
+            for code in sorted(weights, key=lambda c: weights.get(c, 0.0), reverse=True):
+                if code == benchmark_source:
+                    continue
+                candidate_series = self._load_benchmark_series(code, common_days[0], common_days[-1])
+                if len(candidate_series) >= CORRELATION_MIN_DAYS:
+                    fallback_source = code
+                    fallback_series = candidate_series
+                    break
+            if fallback_source:
+                benchmark_source = fallback_source
+                benchmark_series = fallback_series
 
         benchmark_block: Dict[str, Any] = {"source": benchmark_source, "status": "insufficient"}
         if len(benchmark_series) >= CORRELATION_MIN_DAYS:
@@ -330,7 +345,7 @@ class PortfolioService:
         targets = portfolio["targets"]
         weights = self._effective_weights(holdings)
 
-        # 1) 按同类组聚合实际权重 vs 目标权重
+        # 1) 按同类组聚合实际权重 vs 目标权重（未配置目标时只披露实际权重，不做偏离判定）
         group_weights: Dict[str, float] = {}
         group_names: Dict[str, str] = {}
         for item in holdings:
@@ -338,29 +353,41 @@ class PortfolioService:
             group_weights[group] = group_weights.get(group, 0.0) + weights.get(item["wind_code"], 0.0)
             if group not in group_names:
                 name = self._peer_group_name(group)
-                group_names[group] = name or group
+                group_names[group] = name or ("未分类（待补评价/风格快照）" if group == "unclassified" else group)
         deviations = []
-        for target in targets:
-            key = str(target.get("peer_group_key") or "")
-            target_weight = float(target.get("target_weight") or 0)
-            actual = group_weights.pop(key, 0.0)
-            deviations.append({
-                "peer_group_key": key,
-                "peer_group_name": target.get("peer_group_name") or group_names.get(key, key),
-                "target_weight": target_weight,
-                "actual_weight": round(actual, 6),
-                "deviation": round(actual - target_weight, 6),
-                "needs_rebalance": abs(actual - target_weight) > REBALANCE_THRESHOLD,
-            })
-        for key, actual in group_weights.items():
-            deviations.append({
-                "peer_group_key": key,
-                "peer_group_name": group_names.get(key, key),
-                "target_weight": 0.0,
-                "actual_weight": round(actual, 6),
-                "deviation": round(actual, 6),
-                "needs_rebalance": actual > REBALANCE_THRESHOLD,
-            })
+        if targets:
+            for target in targets:
+                key = str(target.get("peer_group_key") or "")
+                target_weight = float(target.get("target_weight") or 0)
+                actual = group_weights.pop(key, 0.0)
+                deviations.append({
+                    "peer_group_key": key,
+                    "peer_group_name": target.get("peer_group_name") or group_names.get(key, key),
+                    "target_weight": target_weight,
+                    "actual_weight": round(actual, 6),
+                    "deviation": round(actual - target_weight, 6),
+                    "needs_rebalance": abs(actual - target_weight) > REBALANCE_THRESHOLD,
+                })
+            for key, actual in group_weights.items():
+                deviations.append({
+                    "peer_group_key": key,
+                    "peer_group_name": group_names.get(key, key),
+                    "target_weight": 0.0,
+                    "actual_weight": round(actual, 6),
+                    "deviation": round(actual, 6),
+                    "needs_rebalance": actual > REBALANCE_THRESHOLD,
+                })
+        else:
+            # 未配置目标同类组权重：不能把目标当 0% 判偏离，只披露实际分组权重
+            for key, actual in group_weights.items():
+                deviations.append({
+                    "peer_group_key": key,
+                    "peer_group_name": group_names.get(key, key),
+                    "target_weight": None,
+                    "actual_weight": round(actual, 6),
+                    "deviation": None,
+                    "needs_rebalance": False,
+                })
 
         # 2) 成分基金风格漂移
         drift_service = HoldingStyleDriftService()
@@ -376,19 +403,24 @@ class PortfolioService:
                 "note": (drift.get("note") or "")[:120],
             })
 
-        rebalance_needed = any(item["needs_rebalance"] for item in deviations)
+        rebalance_needed = bool(targets) and any(item["needs_rebalance"] for item in deviations)
         drift_alerts = [item for item in drift_items if item.get("level") in ("high", "medium")]
+        if not targets:
+            deviation_summary = "未配置目标同类组权重，暂不做再平衡判定（仅披露实际分组权重）；"
+        else:
+            deviation_summary = "需要再平衡：" if rebalance_needed else "权重基本贴合目标；"
         return {
             "status": "available",
             "portfolio_id": portfolio_id,
             "name": portfolio["name"],
+            "target_configured": bool(targets),
             "target_deviations": deviations,
             "rebalance_threshold": REBALANCE_THRESHOLD,
             "rebalance_needed": rebalance_needed,
             "style_drifts": drift_items,
             "drift_alerts": drift_alerts,
             "summary": (
-                ("需要再平衡：" if rebalance_needed else "权重基本贴合目标；")
+                deviation_summary
                 + (f"{len(drift_alerts)} 只成分出现风格漂移信号。" if drift_alerts else "成分风格未见明显漂移。")
             ),
             "boundary": "监控为研究提示，不自动执行任何申赎动作。",
