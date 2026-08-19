@@ -28,6 +28,10 @@ if [[ -z "$PG_DUMP" ]]; then
   [[ -z "$PG_DUMP" ]] && PG_DUMP="$(command -v pg_dump)"
 fi
 
+# pg_restore 与 pg_dump 同目录（用于备份内容自检）
+PG_RESTORE="$(dirname "$PG_DUMP")/pg_restore"
+[[ -x "$PG_RESTORE" ]] || PG_RESTORE="$(command -v pg_restore)"
+
 mkdir -p "$BACKUP_DIR"
 
 if [[ "${1:-}" != "--prune" ]]; then
@@ -36,6 +40,16 @@ if [[ "${1:-}" != "--prune" ]]; then
 
   # -Fc 自定义压缩格式；-d 显式指定库名；连接串走本地 socket，无需密码
   if "$PG_DUMP" -Fc -d "$DB_NAME" -f "$TARGET"; then
+    # 内容自检：dump 清单必须含关键表数据，防止静默产出不完整备份
+    # （2026-08-19 曾出现 dump 内容为旧时点状态的异常，此检查即为此后验）
+    TOC="$($PG_RESTORE -l "$TARGET" 2>/dev/null || true)"
+    for required_table in funds fund_nav portfolios; do
+      if ! grep -q "TABLE DATA public ${required_table}" <<<"$TOC"; then
+        echo "backup FAILED: dump 缺少关键表 ${required_table}，疑似不完整" >&2
+        rm -f "$TARGET"
+        exit 1
+      fi
+    done
     SIZE_BYTES="$(stat -f %z "$TARGET" 2>/dev/null || stat -c %s "$TARGET")"
     echo "backup OK: $TARGET ($(( SIZE_BYTES / 1024 / 1024 )) MB)"
   else
