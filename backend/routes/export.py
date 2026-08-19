@@ -30,7 +30,7 @@ def generate_excel(funds: list) -> io.BytesIO:
 
         # 表头
         headers = [
-            "基金代码", "基金名称", "基金类型", "今年以来收益",
+            "基金代码", "基金名称", "基金类型",
             "近1年收益", "近3年收益", "夏普比率", "最大回撤",
             "成立以来收益", "综合评分"
         ]
@@ -45,13 +45,12 @@ def generate_excel(funds: list) -> io.BytesIO:
             ws.cell(row=row, column=1, value=fund.get("wind_code", ""))
             ws.cell(row=row, column=2, value=fund.get("name", ""))
             ws.cell(row=row, column=3, value=fund.get("type", ""))
-            ws.cell(row=row, column=4, value=fund.get("ytd_return"))
-            ws.cell(row=row, column=5, value=fund.get("return_1y"))
-            ws.cell(row=row, column=6, value=fund.get("return_3y"))
-            ws.cell(row=row, column=7, value=fund.get("sharpe_ratio"))
-            ws.cell(row=row, column=8, value=fund.get("max_drawdown"))
-            ws.cell(row=row, column=9, value=fund.get("return_since inception"))
-            ws.cell(row=row, column=10, value=fund.get("overall_score"))
+            ws.cell(row=row, column=4, value=fund.get("return_1y"))
+            ws.cell(row=row, column=5, value=fund.get("return_3y"))
+            ws.cell(row=row, column=6, value=fund.get("sharpe_ratio"))
+            ws.cell(row=row, column=7, value=fund.get("max_drawdown"))
+            ws.cell(row=row, column=8, value=fund.get("return_since_inception"))
+            ws.cell(row=row, column=9, value=fund.get("overall_score"))
 
         # 自动列宽
         for col in ws.columns:
@@ -81,7 +80,7 @@ def generate_csv(funds: list) -> io.BytesIO:
 
     # 表头
     headers = [
-        "基金代码", "基金名称", "基金类型", "今年以来收益",
+        "基金代码", "基金名称", "基金类型",
         "近1年收益", "近3年收益", "夏普比率", "最大回撤",
         "成立以来收益", "综合评分"
     ]
@@ -93,7 +92,6 @@ def generate_csv(funds: list) -> io.BytesIO:
             fund.get("wind_code", ""),
             fund.get("name", ""),
             fund.get("type", ""),
-            fund.get("ytd_return"),
             fund.get("return_1y"),
             fund.get("return_3y"),
             fund.get("sharpe_ratio"),
@@ -107,7 +105,7 @@ def generate_csv(funds: list) -> io.BytesIO:
 
 
 @router.get("/funds")
-async def export_funds(
+def export_funds(
     format: str = Query("excel", description="导出格式: excel/csv"),
     fund_type: Optional[str] = Query(None, description="基金类型筛选"),
     keyword: Optional[str] = Query(None, description="搜索关键词"),
@@ -119,64 +117,90 @@ async def export_funds(
 
     限制：
     - 单次最多导出 5000 条记录
-    - 使用流式写入防止内存溢出
+    - 指标一律读本地 metric_snapshots 面板，不实时调用外部数据源
+      （历史版本逐基金调 Tushare 会打爆频率限额并阻塞事件循环，已废弃）
     """
-    from service_registry import get_data_service, get_scoring_engine
+    from service_registry import get_scoring_engine
     from repositories import get_fund_repo
+    from database import get_engine
+    from sqlalchemy import text
 
     # 限制导出数量
     if limit > 5000:
         raise HTTPException(status_code=400, detail="单次导出最多 5000 条记录")
 
-    data_svc = get_data_service()
     scoring_engine = get_scoring_engine()
     fund_repo = get_fund_repo()
 
-    # 获取基金数据
-    try:
-        db_result = fund_repo.list_funds(fund_type=fund_type, keyword=keyword, page=1, page_size=limit)
-        if db_result.get("total", 0) > 0:
-            db_funds = db_result["funds"]
-        else:
-            # 降级到 Tushare
-            db_funds = []
-    except Exception as e:
-        logger.warning(f"DB query failed, falling back to Tushare: {e}")
-        db_funds = []
+    # 获取基金数据（仅本地库；不再降级外部数据源）
+    db_result = fund_repo.list_funds(fund_type=fund_type, keyword=keyword, page=1, page_size=limit)
+    db_funds = db_result.get("funds", []) if db_result.get("total", 0) > 0 else []
 
-    # 如果数据库没有数据，从 Tushare 获取
-    if len(db_funds) == 0:
-        # 获取所有基金基础信息
-        all_funds = data_svc.get_all_funds()
-        db_funds = all_funds[:limit]
+    # 批量读本地指标面板（每基金每指标取最新 as_of）
+    metric_rows: dict = {}
+    if db_funds:
+        codes = [f.get("wind_code") for f in db_funds if f.get("wind_code")]
+        engine = get_engine()
+        with engine.connect() as conn:
+            rows = conn.execute(
+                text(
+                    """
+                    SELECT DISTINCT ON (target_id, metric_name, metric_window)
+                           target_id, metric_name, metric_window, metric_value
+                    FROM metric_snapshots
+                    WHERE target_type = 'fund'
+                      AND target_id = ANY(:codes)
+                      AND (
+                        (metric_name = 'annualized_return' AND metric_window IN ('1y', '3y'))
+                        OR metric_name IN ('sharpe_ratio', 'max_drawdown', 'annualized_volatility',
+                                           'sortino_ratio', 'calmar_ratio', 'information_ratio', 'total_return')
+                      )
+                    ORDER BY target_id, metric_name, metric_window, as_of_date DESC
+                    """
+                ),
+                {"codes": codes},
+            ).fetchall()
+        for target_id, metric_name, metric_window, metric_value in rows:
+            metric_rows.setdefault(target_id, {})[(metric_name, metric_window)] = (
+                float(metric_value) if metric_value is not None else None
+            )
+
+    def pick(code: str, metric_name: str, *windows: str):
+        metrics = metric_rows.get(code, {})
+        for window in windows or (None,):
+            value = metrics.get((metric_name, window))
+            if value is not None:
+                return value
+        return None
 
     funds = []
     for f in db_funds:
         wind_code = f.get("wind_code", "")
         if not wind_code:
             continue
-        # 获取业绩和风险数据用于评分
-        perf = {}
-        risk = {}
-        try:
-            perf = data_svc.get_fund_performance(wind_code) or {}
-        except Exception:
-            pass
-        try:
-            risk = data_svc.get_fund_risk_metrics(wind_code) or {}
-        except Exception:
-            pass
+        perf = {
+            "annualized_return_1y": pick(wind_code, "annualized_return", "1y"),
+            "annualized_return_3y": pick(wind_code, "annualized_return", "3y"),
+            "total_return": pick(wind_code, "total_return"),
+        }
+        risk = {
+            "max_drawdown": pick(wind_code, "max_drawdown", "1y", "3y"),
+            "annualized_volatility_1y": pick(wind_code, "annualized_volatility", "1y", "3y"),
+            "sharpe_ratio": pick(wind_code, "sharpe_ratio", "1y", "3y"),
+            "sortino": pick(wind_code, "sortino_ratio", "1y", "3y"),
+            "calmar_ratio": pick(wind_code, "calmar_ratio", "1y", "3y"),
+            "information_ratio": pick(wind_code, "information_ratio", "1y", "3y"),
+        }
         scoring = scoring_engine.score_fund(perf, risk, {})
         funds.append({
             "wind_code": wind_code,
             "name": f.get("name", ""),
             "type": f.get("type", ""),
-            "ytd_return": perf.get("ytd_return", perf.get("annualized_return_ytd")),
-            "return_1y": perf.get("annualized_return_1y"),
-            "return_3y": perf.get("annualized_return_3y"),
-            "sharpe_ratio": risk.get("sharpe_ratio", perf.get("sharpe_ratio")),
-            "max_drawdown": risk.get("max_drawdown", perf.get("max_drawdown")),
-            "return_since_inception": perf.get("return_since_inception", perf.get("total_return")),
+            "return_1y": perf["annualized_return_1y"],
+            "return_3y": perf["annualized_return_3y"],
+            "sharpe_ratio": risk["sharpe_ratio"],
+            "max_drawdown": risk["max_drawdown"],
+            "return_since_inception": perf["total_return"],
             "overall_score": scoring.get("overall_score"),
         })
 

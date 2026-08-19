@@ -130,7 +130,31 @@ async function columnExists(tableName: string, columnName: string) {
   return Boolean(rows[0]?.exists)
 }
 
+// 覆盖率聚合需对全量基金逐行执行多个相关子查询（约 60-90 秒），
+// 且数据每日才变化一次：加 5 分钟 TTL 缓存 + 并发去重（inflight 复用）。
+const EVIDENCE_COVERAGE_CACHE_TTL_MS = 5 * 60 * 1000
+let evidenceCoverageCache: { data: EvidenceCoveragePayload; expiresAt: number } | null = null
+let evidenceCoverageInflight: Promise<EvidenceCoveragePayload> | null = null
+
 export async function getEvidenceCoverage(): Promise<EvidenceCoveragePayload> {
+  if (evidenceCoverageCache && evidenceCoverageCache.expiresAt > Date.now()) {
+    return evidenceCoverageCache.data
+  }
+  if (evidenceCoverageInflight) {
+    return evidenceCoverageInflight
+  }
+  evidenceCoverageInflight = computeEvidenceCoverage()
+    .then((data) => {
+      evidenceCoverageCache = { data, expiresAt: Date.now() + EVIDENCE_COVERAGE_CACHE_TTL_MS }
+      return data
+    })
+    .finally(() => {
+      evidenceCoverageInflight = null
+    })
+  return evidenceCoverageInflight
+}
+
+async function computeEvidenceCoverage(): Promise<EvidenceCoveragePayload> {
   const [
     hasFundNav,
     hasManagers,

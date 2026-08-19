@@ -89,6 +89,10 @@ class FundScoringEngine:
         ScoreDimension.STYLE: 0.10,
     }
 
+    def get_scoring_rules(self) -> list:
+        """返回全部评分规则（供 /api/scoring/rules 等只读端点使用）。"""
+        return list(self.ALL_RULES)
+
     def score_fund(self, performance_data: Dict, risk_data: Dict, style_data: Dict) -> Dict[str, Any]:
         """
         对基金进行综合评分
