@@ -982,7 +982,7 @@ class FundClassificationIngestionService:
                     "code": code,
                     "name": matched_rule["benchmark_name"],
                     "weight": float(weight),
-                    "asset": "fixed_income" if code in {"H11001.CSI", "H11009.CSI"} else "equity",
+                    "asset": "fixed_income" if code in {"H11001.CSI", "H11009.CSI", "000012.SH"} else "equity",
                 })
                 continue
             if "恒生指数" in normalized_name and "恒生中国企业" not in normalized_name:

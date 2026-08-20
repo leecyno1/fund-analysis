@@ -733,6 +733,12 @@ class FundClassificationCatalog:
             "benchmark_name": "中证综合债",
             "peer_group_key": "peer-fixed-income-csi-composite-bond",
         },
+        {
+            "aliases": ["上证国债指数", "上海证券交易所国债指数", "中国国债指数"],
+            "benchmark_code": "000012.SH",
+            "benchmark_name": "上证国债",
+            "peer_group_key": "peer-fixed-income-sse-treasury",
+        },
     ]
 
     @classmethod

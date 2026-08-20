@@ -199,9 +199,9 @@ class FundClassificationRepo:
                   AND (bm.effective_to IS NULL OR bm.effective_to >= :as_of_date)
                 ORDER BY
                     (bm.peer_group_id = peer.peer_group_id) DESC NULLS LAST,
+                    bm.updated_at DESC,
                     bm.confidence DESC NULLS LAST,
-                    bm.effective_from DESC NULLS LAST,
-                    bm.updated_at DESC
+                    bm.effective_from DESC NULLS LAST
                 LIMIT 1
             ) benchmark ON TRUE
         """
