@@ -38,7 +38,7 @@ assert(suite.manifest.schemaVersion === '1.1', 'Manifest must use version 1.1')
 assert(suite.manifest.compatibility.level === 3, 'Suite pages must keep Level 3 Context')
 assert(suite.manifest.navigation.directory?.id === suite.id, 'Suite must remain one complete Desk project')
 assert(suite.manifest.navigation.project?.id === 'fund-research', 'Suite must use the standard fund-research domain')
-assert(suite.pages.length === 5, 'Suite must expose five focused pages')
+assert(suite.pages.length === 6, 'Suite must expose six focused pages')
 assert(suite.pages.find((page) => page.id === 'fund-recommendations')?.name === '基金推荐', 'Suite must use the current recommendation name')
 
 const expectedPages = [
@@ -47,6 +47,7 @@ const expectedPages = [
   ['fund-ai-analysis', '/mod/fund-research/analysis'],
   ['fund-recommendations', '/mod/fund-research/recommendations'],
   ['fund-attribution', '/mod/fund-research/advanced'],
+  ['fund-portfolio', '/mod/fund-research/portfolio'],
 ]
 assert(JSON.stringify(suite.pages.map((page) => [page.id, page.route])) === JSON.stringify(expectedPages), 'Suite page catalog drifted')
 
@@ -117,7 +118,7 @@ const eventPayload = bridge.buildFundSelectionEventPayload({ symbol: ' 000390.of
 assert(eventPayload.symbol === '000390.OF', 'Fund event symbol must be normalized')
 assert(eventPayload.assetType === 'fund' && eventPayload.market === 'CN', 'Fund event must follow security.selected')
 
-for (const phrase of ['message.source !== window.parent', 'message.origin !== parentOrigin', 'vibedesk:context-request', 'vibedesk:action-request']) {
+for (const phrase of ['window.location.ancestorOrigins', 'message.source !== window.parent', 'message.origin !== parentOrigin', 'vibedesk:context-request', 'vibedesk:action-request']) {
   assert(bridgeSource.includes(phrase), `Bridge contract missing: ${phrase}`)
 }
 

@@ -125,6 +125,17 @@ textarea {
   padding: clamp(1rem, 3vw, 2.5rem);
 }
 
+/* Keep the standalone fund app unchanged, but map legacy Tailwind white cards
+ * to the active Desk surface when embedded. */
+html.vibedesk-embedded .bg-white {
+  background-color: var(--vibe-surface-raised) !important;
+}
+
+html.vibedesk-embedded [class~="bg-[#f7f9f7]"],
+html.vibedesk-embedded [class~="bg-[#fafbfa]"] {
+  background-color: var(--vibe-surface-raised) !important;
+}
+
 .newma-fund-mod {
   min-height: 100vh;
   padding: 1rem;

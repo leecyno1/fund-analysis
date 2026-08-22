@@ -10,6 +10,7 @@ import ResearchLibraryPage from '@/app/(dashboard)/research/page'
 import AnalysisPage from '@/app/(dashboard)/analysis/page'
 import RecommendationsPage from '@/app/(dashboard)/recommendations/page'
 import PerformanceAttributionPage from '@/app/(dashboard)/analysis/advanced/page'
+import PortfolioPage from '@/app/(dashboard)/portfolio/page'
 import FundDetailPage from '@/app/(dashboard)/funds/[id]/page'
 import FundResearchDeskModule from './FundResearchDeskModule'
 
@@ -64,6 +65,9 @@ async function renderWorkspace(
     return RecommendationsPage({
       searchParams: Promise.resolve({ category: query.category }),
     })
+  }
+  if (workspace === 'portfolio') {
+    return PortfolioPage()
   }
   return PerformanceAttributionPage({
     searchParams: Promise.resolve({

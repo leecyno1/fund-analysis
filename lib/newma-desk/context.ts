@@ -6,6 +6,7 @@ export const FUND_RESEARCH_WORKSPACE_IDS = [
   'analysis',
   'recommendations',
   'advanced',
+  'portfolio',
 ] as const
 
 export type FundResearchWorkspaceId = (typeof FUND_RESEARCH_WORKSPACE_IDS)[number]
@@ -142,6 +143,21 @@ export const fundResearchWorkspaces: FundResearchWorkspace[] = [
       { id: 'fund.research.snapshot', label: '读取基金研究快照', inputSchema: fundSymbolSchema },
     ],
   },
+  {
+    id: 'portfolio',
+    modId: 'fund-portfolio',
+    title: '基金组合',
+    shortTitle: '基金组合',
+    purpose: '构建研究型基金组合，设置目标权重，检查组合风险、回测表现、偏离监控和交易清单。',
+    primaryHref: '/portfolio',
+    primaryLabel: '打开基金组合',
+    capabilities: [
+      { name: '目标配置', purpose: '按同类基金组设置目标权重并校验合计', evidence: '组合目标配置与权重校验' },
+      { name: '组合分析', purpose: '查看重叠、风格暴露和相关性', evidence: '真实基金持仓、净值与同类评价' },
+      { name: '回测监控', purpose: '回测历史风险收益并识别目标偏离', evidence: '基金净值序列、实际权重与监控快照' },
+    ],
+    actions: [],
+  },
 ]
 
 export function isFundResearchWorkspace(value: string): value is FundResearchWorkspaceId {
@@ -180,7 +196,7 @@ export function buildFundResearchPageContext(input: {
       summary: {
         workspace: input.workspace.id,
         capabilities: input.workspace.capabilities,
-        productScope: 'browse-research-evaluate-attribute-recommend',
+        productScope: 'browse-research-evaluate-attribute-recommend-compose',
         restrictions: ['no-trading', 'no-suitability', 'no-investment-decision'],
       },
     },

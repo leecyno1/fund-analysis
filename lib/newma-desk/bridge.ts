@@ -232,6 +232,7 @@ export function createNewmaDeskBridge(options: {
 }): NewmaDeskBridge {
   const embedded = window.self !== window.top
   const parentOrigin = safeHttpOrigin(options.parentOrigin)
+    ?? safeHttpOrigin(window.location.ancestorOrigins?.[0])
     ?? safeHttpOrigin(document.referrer)
   const eventListeners = new Set<EventListener>()
   const pendingActions = new Map<string, PendingAction>()
@@ -243,6 +244,7 @@ export function createNewmaDeskBridge(options: {
     resolveReady = resolve
   })
 
+  document.documentElement.classList.toggle('vibedesk-embedded', embedded)
   applyStandaloneEnvironment()
 
   const post = (message: unknown) => {

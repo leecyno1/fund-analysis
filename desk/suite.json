@@ -2,11 +2,11 @@
   "schemaVersion": "1.0",
   "id": "professional-fund-research-suite",
   "name": "基金选择助手",
-  "description": "独立运行的基金浏览、评价、调研、归因和候选推荐项目，可作为一个完整项目接入 Newma Desk。",
-  "version": "0.5.0",
+  "description": "独立运行的基金浏览、评价、调研、归因、候选推荐和组合配置项目，可作为一个完整项目接入 Newma Desk。",
+  "version": "0.6.0",
   "publisher": "leecyno1",
   "upstream": "https://github.com/leecyno1/fund-analysis",
-  "tags": ["基金浏览", "基金评价", "基金分类", "业绩归因", "基金推荐"],
+  "tags": ["基金浏览", "基金评价", "基金分类", "业绩归因", "基金推荐", "基金组合"],
   "runtime": {
     "type": "external",
     "baseUrlEnv": "NEWMA_DESK_FUND_RESEARCH_WEB_URL",
@@ -196,6 +196,14 @@
       "tags": ["Barra", "Brinson", "业绩归因"],
       "route": "/mod/fund-research/advanced",
       "navigation": { "itemOrder": 50, "label": "业绩归因" }
+    },
+    {
+      "id": "fund-portfolio",
+      "name": "基金组合",
+      "description": "设置组合目标权重，分析基金重叠、风格暴露、历史回测、偏离监控和交易清单。",
+      "tags": ["基金组合", "资产配置", "回测", "风险监控"],
+      "route": "/mod/fund-research/portfolio",
+      "navigation": { "itemOrder": 60, "label": "基金组合" }
     }
   ]
 }

@@ -292,7 +292,14 @@ class PortfolioService:
                 benchmark_source = fallback_source
                 benchmark_series = fallback_series
 
-        benchmark_block: Dict[str, Any] = {"source": benchmark_source, "status": "insufficient"}
+        benchmark_metadata = self._load_benchmark_metadata(benchmark_source)
+        benchmark_block: Dict[str, Any] = {
+            "source": benchmark_source,
+            "source_fund_code": benchmark_source,
+            "code": benchmark_metadata.get("code"),
+            "name": benchmark_metadata.get("name"),
+            "status": "insufficient",
+        }
         if len(benchmark_series) >= CORRELATION_MIN_DAYS:
             bench_days = sorted(benchmark_series.keys())
             bench_returns = [
@@ -303,7 +310,10 @@ class PortfolioService:
             bench_metrics = self._performance_metrics(bench_returns, bench_days)
             benchmark_block.update({
                 "status": "available",
-                "basis_note": "基准为持仓基金分类映射的基准指数净值（fund_nav.benchmark_nav）。",
+                "basis_note": (
+                    f"基准为 {benchmark_metadata.get('name') or benchmark_metadata.get('code') or '持仓基金分类映射基准'}"
+                    f"；净值序列取自 {benchmark_source} 的 fund_nav.benchmark_nav。"
+                ),
                 "metrics": bench_metrics,
                 "excess_return": round(metrics["cumulative_return"] - bench_metrics["cumulative_return"], 6),
             })
@@ -745,6 +755,31 @@ class PortfolioService:
                 {"code": wind_code, "start": str(start_date), "end": str(end_date)},
             ).fetchall()
         return {str(row[0]): float(row[1]) for row in rows if row[1] is not None}
+
+    def _load_benchmark_metadata(self, wind_code: str) -> Dict[str, Optional[str]]:
+        """返回该基金当前分类映射的真实基准代码与名称。"""
+        from sqlalchemy import text
+
+        engine = get_engine()
+        with engine.connect() as conn:
+            row = conn.execute(
+                text(
+                    """
+                    SELECT bm.benchmark_code, bm.benchmark_name
+                    FROM funds f
+                    JOIN fund_share_classes sc ON sc.fund_id::text = f.id::text
+                    JOIN benchmark_mappings bm ON bm.entity_id::text = sc.entity_id::text
+                    WHERE f.wind_code = :code AND bm.status = 'active'
+                    ORDER BY bm.effective_from DESC NULLS LAST, bm.updated_at DESC
+                    LIMIT 1
+                    """
+                ),
+                {"code": wind_code},
+            ).fetchone()
+        return {
+            "code": str(row[0]) if row and row[0] else None,
+            "name": str(row[1]) if row and row[1] else None,
+        }
 
     @staticmethod
     def _equity_curve(returns: List[float]) -> List[float]:

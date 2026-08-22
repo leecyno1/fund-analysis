@@ -107,6 +107,9 @@ type Backtest = {
   curve?: Array<{ date: string; value: number }>
   benchmark?: {
     source: string
+    source_fund_code?: string
+    code?: string | null
+    name?: string | null
     status: string
     basis_note?: string
     metrics?: PerfMetrics
@@ -209,6 +212,25 @@ export default function PortfolioClient() {
   const [tradeInput, setTradeInput] = useState('')
   const [tradeAmount, setTradeAmount] = useState('')
   const [tradeLoading, setTradeLoading] = useState(false)
+
+  const selectPortfolio = (portfolioId: string) => {
+    if (portfolioId === selectedId) return
+    setDetail(null)
+    setAnalysis(null)
+    setWeightDraft({})
+    setBacktest(null)
+    setMonitor(null)
+    setTradeList(null)
+    setTargetsEditing(false)
+    setTargetRows([])
+    setTargetsError('')
+    setTradeInput('')
+    setTradeAmount('')
+    setAddCode('')
+    setError('')
+    setNotice('')
+    setSelectedId(portfolioId)
+  }
 
   const loadPortfolios = useCallback(async () => {
     setLoading(true)
@@ -333,9 +355,9 @@ export default function PortfolioClient() {
       const payload = await response.json()
       if (!response.ok) throw new Error(payload.detail || '创建失败')
       setNewName('')
-      setNotice(`组合「${name}」已创建，请在详情中添加持仓。`)
       await loadPortfolios()
-      setSelectedId(payload.id)
+      selectPortfolio(payload.id)
+      setNotice(`组合「${name}」已创建，请在详情中添加持仓。`)
     } catch (exc) {
       setError(`创建组合失败: ${exc}`)
     }
@@ -508,7 +530,7 @@ export default function PortfolioClient() {
               <li key={item.id}>
                 <button
                   type="button"
-                  onClick={() => setSelectedId(item.id)}
+                  onClick={() => selectPortfolio(item.id)}
                   className={`w-full rounded-lg px-3 py-2 text-left text-sm transition ${
                     selectedId === item.id ? 'bg-[#e7f0ea] font-medium text-[#1f2d26]' : 'text-[#3d5347] hover:bg-[#f2f6f3]'
                   }`}
@@ -893,7 +915,7 @@ export default function PortfolioClient() {
                         ['年化波动', backtest.metrics?.annualized_volatility != null ? pct(backtest.metrics.annualized_volatility) : '—'],
                         ...(backtest.benchmark?.status === 'available'
                           ? ([
-                              ['基准累计（' + backtest.benchmark.source + '）', pct(backtest.benchmark.metrics?.cumulative_return)],
+                              ['基准累计（' + (backtest.benchmark.name || backtest.benchmark.code || backtest.benchmark.source) + '）', pct(backtest.benchmark.metrics?.cumulative_return)],
                               ['相对基准超额', pct(backtest.benchmark.excess_return)],
                             ] as Array<[string, string]>)
                           : [
