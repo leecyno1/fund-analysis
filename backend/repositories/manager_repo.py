@@ -76,9 +76,9 @@ class ManagerRepo:
 
             sql = """
             INSERT INTO managers (wind_code, name, company, education, work_years,
-                               management_years, current_funds, historical_performance, raw_data)
+                               management_years, current_funds, historical_performance, raw_data, updated_at)
             VALUES (:manager_id, :name, :company, :education, :work_years,
-                    :mgmt_years, :current_funds, CAST(:hist_perf AS jsonb), CAST(:raw_data AS jsonb))
+                    :mgmt_years, :current_funds, CAST(:hist_perf AS jsonb), CAST(:raw_data AS jsonb), NOW())
             ON CONFLICT (wind_code) DO UPDATE SET
                 name = EXCLUDED.name,
                 company = CASE

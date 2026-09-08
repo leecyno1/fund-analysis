@@ -67,19 +67,21 @@ class HoldingRepo:
 
                 insert_sql = """
                 INSERT INTO holdings (
-                    wind_code, quarter, stock_code, stock_name, industry, sub_industry,
+                    fund_id, wind_code, quarter, stock_code, stock_name, industry, sub_industry,
                     weight, equity_portfolio_weight, weight_basis, weight_validation_status, announcement_date, report_date,
                     source, weight_source, weight_source_url, fund_net_asset, fund_net_asset_basis, fund_net_asset_date, synced_at,
-                    shares, market_cap, pe_ratio, pb_ratio, roe,
+                    updated_at, shares, market_cap, pe_ratio, pb_ratio, roe,
                     revenue_growth, dividend_yield, market_cap_value
                 ) VALUES (
+                    (SELECT id::text FROM funds WHERE wind_code = :wind_code),
                     :wind_code, :quarter, :stock_code, :stock_name, :industry, :sub_industry,
                     :weight, :equity_portfolio_weight, :weight_basis, :weight_validation_status, :announcement_date, :report_date,
                     :source, :weight_source, :weight_source_url, :fund_net_asset, :fund_net_asset_basis, :fund_net_asset_date, NOW(),
-                    :shares, :market_cap, :pe_ratio, :pb_ratio, :roe,
+                    NOW(), :shares, :market_cap, :pe_ratio, :pb_ratio, :roe,
                     :revenue_growth, :dividend_yield, :market_cap_value
                 )
                 ON CONFLICT (wind_code, quarter, stock_code) DO UPDATE SET
+                    fund_id = EXCLUDED.fund_id,
                     stock_name = EXCLUDED.stock_name,
                     industry = EXCLUDED.industry,
                     weight = EXCLUDED.weight,
@@ -95,6 +97,7 @@ class HoldingRepo:
                     announcement_date = EXCLUDED.announcement_date,
                     report_date = EXCLUDED.report_date,
                     synced_at = NOW(),
+                    updated_at = NOW(),
                     shares = EXCLUDED.shares
                 """
 

@@ -49,11 +49,13 @@ class FactorRepo:
 
             insert_sql = """
             INSERT INTO factor_exposures (
-                wind_code, quarter, factor_name, exposure, risk_contribution
+                fund_id, wind_code, quarter, factor_name, exposure, risk_contribution
             ) VALUES (
+                (SELECT id::text FROM funds WHERE wind_code = :wind_code),
                 :wind_code, :quarter, :factor_name, :exposure, :risk_contribution
             )
             ON CONFLICT (wind_code, quarter, factor_name) DO UPDATE SET
+                fund_id = EXCLUDED.fund_id,
                 exposure = EXCLUDED.exposure,
                 risk_contribution = EXCLUDED.risk_contribution
             """

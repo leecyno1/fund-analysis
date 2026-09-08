@@ -39,17 +39,19 @@ class AttributionRepo:
 
         sql = text("""
             INSERT INTO performance_attributions (
-                wind_code, benchmark_id, quarter, holding_quarter, status,
+                fund_id, wind_code, benchmark_id, quarter, holding_quarter, status,
                 total_return, benchmark_return, active_return,
                 allocation_effect, selection_effect, interaction_effect, residual,
                 evidence, updated_at
             ) VALUES (
+                (SELECT id::text FROM funds WHERE wind_code = :wind_code),
                 :wind_code, :benchmark_id, :quarter, :holding_quarter, :status,
                 :total_return, :benchmark_return, :active_return,
                 :allocation_effect, :selection_effect, :interaction_effect, :residual,
                 CAST(:evidence AS jsonb), CURRENT_TIMESTAMP
             )
             ON CONFLICT (wind_code, quarter) DO UPDATE SET
+                fund_id = EXCLUDED.fund_id,
                 benchmark_id = EXCLUDED.benchmark_id,
                 holding_quarter = EXCLUDED.holding_quarter,
                 status = EXCLUDED.status,
