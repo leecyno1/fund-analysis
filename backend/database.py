@@ -886,6 +886,7 @@ def init_database():
         "CREATE INDEX IF NOT EXISTS idx_nav_wind_code ON fund_nav(wind_code)",
         "CREATE INDEX IF NOT EXISTS idx_nav_date ON fund_nav(trade_date)",
         "CREATE INDEX IF NOT EXISTS idx_nav_wind_code_trade_date ON fund_nav(wind_code, trade_date)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS ai_analysis_reports_target_key ON ai_analysis_reports(target_type, target_id, report_type)",
         "CREATE INDEX IF NOT EXISTS idx_scores_target ON scores(target_type, target_id)",
         "CREATE INDEX IF NOT EXISTS idx_scores_dimension ON scores(dimension)",
         "CREATE INDEX IF NOT EXISTS idx_fund_evaluation_history ON fund_evaluation_snapshots(wind_code, evaluation_window, created_at DESC)",

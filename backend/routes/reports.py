@@ -50,6 +50,12 @@ def _save_report_to_postgres(report_record: dict) -> Optional[str]:
             CAST(:data_sources AS jsonb), :research_reports_used,
             CAST(:generation_params AS jsonb), NOW()
         )
+        ON CONFLICT (target_type, target_id, report_type) DO UPDATE SET
+            content = EXCLUDED.content,
+            data_sources = EXCLUDED.data_sources,
+            research_reports_used = EXCLUDED.research_reports_used,
+            generation_params = EXCLUDED.generation_params,
+            created_at = NOW()
         RETURNING id
         """
     )

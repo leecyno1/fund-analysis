@@ -17,6 +17,7 @@ interface Report {
   reportDate: string
   source: string
   targetId: string
+  displayTargetId?: string
   targetType: string
   reportType: string
   reportTypeLabel?: string
@@ -277,6 +278,7 @@ export default function ReportDetailPage() {
 
   const relatedCodes = report.relatedCodes || []
   const targetId = report.targetId || report.managerId || ''
+  const displayTargetId = report.displayTargetId || targetId
   const reportReturnHref = `/reports/${encodeURIComponent(String(params.id || ''))}`
   const gateStatus = report.currentSalesRuleGate?.status || 'none'
   const reviewQueueGate = isReviewQueueGate(report.currentSalesRuleGate)
@@ -685,7 +687,7 @@ export default function ReportDetailPage() {
             <p className="mt-2 text-sm text-gray-500">
               {report.reportTypeLabel || report.reportType || '研究报告'}
               {` · ${reportScopeLabel(report.reportType)}`}
-              {targetId ? ` · 对象 ${targetId}` : ''}
+              {displayTargetId ? ` · 对象 ${displayTargetId}` : ''}
               {relatedCodes.length ? ` · 涉及 ${relatedCodes.length} 只基金` : ''}
             </p>
           </div>
