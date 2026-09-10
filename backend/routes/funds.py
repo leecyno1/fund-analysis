@@ -1217,7 +1217,7 @@ async def get_fund_detail(wind_code: str):
     from services.data_quality_service import DataQualityService
     from services.professional_scoring_service import ProfessionalScoringService
     from service_registry import get_data_service, get_scoring_engine
-    from repositories import get_fund_repo, get_factor_repo, get_manager_repo, get_metric_snapshot_repo, get_research_profile_repo
+    from repositories import get_fund_repo, get_manager_repo, get_metric_snapshot_repo, get_research_profile_repo
 
     cache = get_cache()
     cache_key = f"fund:detail:v10:{wind_code}"
@@ -1231,7 +1231,6 @@ async def get_fund_detail(wind_code: str):
     data_svc = get_data_service()
     scoring_engine = get_scoring_engine()
     fund_repo = get_fund_repo()
-    factor_repo = get_factor_repo()
     manager_repo = get_manager_repo()
     research_profile_repo = get_research_profile_repo()
     metric_snapshot_repo = get_metric_snapshot_repo()
@@ -1310,14 +1309,10 @@ async def get_fund_detail(wind_code: str):
         except:
             pass
 
-        # 获取因子暴露
+        # Barra 因子暴露：factor_exposures 为遗留死表(无生产写入)，/api/barra/* 已 deprecated，
+        # 真实风格暴露走 holding_style_snapshots 与统一归因 /api/attribution/fund/{code}。
+        # 前端不消费本字段，保留空对象兼容 API 契约，不再查询遗留死表。
         barra_exposure = {}
-        try:
-            exposures = factor_repo.get_exposures(wind_code)
-            for e in exposures:
-                barra_exposure[e["factor_name"]] = e["exposure"]
-        except:
-            pass
 
         result = _clean_nan({
             "fund": info, "performance": perf, "risk_metrics": risk,
