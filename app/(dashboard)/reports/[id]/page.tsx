@@ -669,8 +669,42 @@ export default function ReportDetailPage() {
     setReportEvidenceTsvStatus('fallback')
   }
 
+  // 导出 Word：取已渲染报告正文 HTML，包装 Word 命名空间后以 application/msword 下载 .doc
+  // （UTF-8 + BOM 保证中文；Word/WPS/LibreOffice 均可打开，零后端依赖）
+  const exportReportWord = () => {
+    const title = report.title || report.id || '基金研究报告'
+    const bodyEl = document.querySelector('.report-markdown')
+    const bodyHtml = bodyEl ? bodyEl.innerHTML : ''
+    const meta = `${report.reportTypeLabel || report.reportType || '研究报告'}${report.reportDate ? ' · ' + report.reportDate : ''}`
+    const html = `<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word" xmlns="http://www.w3.org/TR/REC-html40"><head><meta charset="utf-8"><title>${title}</title><style>body{font-family:"Microsoft YaHei","PingFang SC",sans-serif;line-height:1.7;color:#1a1a2e}h1{font-size:20pt;border-bottom:2px solid #4472C4;padding-bottom:6px}h2{font-size:15pt;margin-top:18px}h3{font-size:13pt}table{border-collapse:collapse;width:100%}th,td{border:1px solid #cbd5e1;padding:6px 8px;font-size:10pt}th{background:#4472C4;color:#fff}.meta{color:#64748b;font-size:10pt;margin-bottom:12px}</style></head><body><h1>${title}</h1><div class="meta">${meta}</div>${bodyHtml}</body></html>`
+    const blob = new Blob(['\ufeff', html], { type: 'application/msword;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `${safeFileStem(title)}.doc`
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    URL.revokeObjectURL(url)
+  }
+
+  // 导出 PDF：调起浏览器打印(配合 @media print 仅打印报告正文)，用户选择“另存为 PDF”
+  const exportReportPdf = () => {
+    window.print()
+  }
+
   return (
     <div className="max-w-4xl mx-auto space-y-6">
+      <style jsx global>{`
+        @media print {
+          button, nav, header, .no-print { display: none !important; }
+          a[href="/reports"] { display: none !important; }
+          body { background: #fff !important; }
+          .report-markdown { font-size: 11pt; }
+          .report-markdown table, .report-markdown pre { page-break-inside: avoid; }
+          .report-markdown h1, .report-markdown h2, .report-markdown h3 { page-break-after: avoid; }
+        }
+      `}</style>
       <Link
         href="/reports"
         className="inline-flex items-center text-gray-600 hover:text-gray-900"
@@ -774,6 +808,24 @@ export default function ReportDetailPage() {
             >
               <Download className="h-4 w-4" />
               下载复核 TSV
+            </button>
+            <button
+              type="button"
+              onClick={exportReportWord}
+              data-testid="report-detail-export-word"
+              className="inline-flex items-center gap-2 rounded-xl bg-white px-4 py-2 text-sm font-semibold text-slate-800 ring-1 ring-slate-200 hover:bg-slate-50"
+            >
+              <FileText className="h-4 w-4" />
+              导出 Word
+            </button>
+            <button
+              type="button"
+              onClick={exportReportPdf}
+              data-testid="report-detail-export-pdf"
+              className="inline-flex items-center gap-2 rounded-xl bg-white px-4 py-2 text-sm font-semibold text-slate-800 ring-1 ring-slate-200 hover:bg-slate-50"
+            >
+              <Download className="h-4 w-4" />
+              导出 PDF
             </button>
             {gateStatus === 'blocked' || gateStatus === 'unknown' ? (
               <Link
