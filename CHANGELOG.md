@@ -2,6 +2,55 @@
 
 本项目的重要变更记录。历史版本（1.0.0 及以前的阶段总结）见 `docs/history/CHANGELOG.md`。
 
+## [2.2.1] - 2026-09-11
+
+修复上线迭代遗留的调度环境缺陷，并重建项目上下文记忆（历史 quest 归档 + 交接文档校正）。
+
+### Fixed
+
+- **launchd 极简 PATH 导致调度任务长期失败**（09-11 `629be0a`）：launchd 启动进程时 PATH 仅 `/usr/bin:/bin:/usr/sbin:/sbin`，不含 `/opt/homebrew/bin`，而 `npm`/`node`/`psql`/`pg_dump` 全在该目录。后果是自 2026-08-19 上线起每个调度日固定 5 个任务失败——4 个 daily + 4 个 weekly 同步任务 `exit=127`，`ops:backup-postgres` **静默 `exit=1`**（`command -v pg_dump` 在 `set -euo pipefail` 下命令替换失败即退出，连一行错误都不打印），连续 22 天无成功备份。三处修复：
+  - `scripts/scheduled_update.sh` 与 `scripts/backup_postgres.sh` 顶部补全 Homebrew PATH（`/opt/homebrew/bin`、`/usr/local/bin`）后 `export`，不在 plist 写死环境，终端与调度共用同一脚本；
+  - `backup_postgres.sh` 的 `pg_dump`/`pg_restore` 回退赋值改为 `command -v ... || true`，二进制缺失时打印含 `PATH` 的明确错误再 `exit 1`，杜绝静默失败；
+  - `package.json` 中 13 个脚本由裸 `python` 改为 `.venv/bin/python`——macOS 与 launchd 都没有 `python` 命令，这是 PATH 修好后暴露的第二层 127（与 `update_fund_*.sh` 既有的解释器候选约定一致）。
+- **M6 验收方法论缺口**：原验收全程在终端手工执行（shell 自带 homebrew PATH），因此完全掩盖了上述缺陷——`runbook.jsonl` 显示 20 次 18:15 调度时点 20/20 全败，只有两个非调度时点的手工执行成功。修复后用 `launchctl kickstart -k gui/$(id -u)/com.fund-analysis.scheduled_update.daily` 在**真实调度环境**验证：9 个 daily 任务 8 个 ok，含备份产出 `fund_analysis_20260911_234226.dump`（约 35MB，`pg_restore -l` 关键表自检通过）与两个曾 127 的 npm 补数任务；`research:sync-manager-identities` 补跑 ok（96s），`manager_profiles` 127→130。weekly bucket 另抽样补跑 `funds:sync-product-profiles -- --limit 100` ok（125s，`requested=100` / `failed=0`，资产配置与持有人结构真实写入），确认 weekly 路径同样恢复；剩余三个重量级 weekly 任务留给周日 20:00 定时器。遗留 `research:sync-ima` 被 IMA 服务端拒绝（`skill auth failed`，凭证已失效），属外部授权问题，非代码缺陷。
+
+### Added
+
+- **历史 quest 恢复归档**：2026-09-08 Qoder IDE 的 `cli_ws_migration` 只迁移工作区产物、未导入会话正文，导致本项目历史 quest 从 IDE 列表消失。新增只读恢复脚本 `../.quest-recovery/export.py`（仅读 CLI transcript、仅写 `restored/`、不触碰 Qoder 数据库），导出 12 个 quest 为可读 Markdown 并生成 `INDEX.md`；脚本具备幂等性（重跑前清理上一批归档，避免会话行数增长导致 tag 变化后残留过期文件）。
+
+### Changed
+
+- **`QODER_HANDOFF.md` 校正过期结论**：第 8 节由「尚无统一编排层，建议实现 `scheduled_update.sh`」改为「已于 M1 落地，不要再重复实现」，并新增 8.1 记录调度真实状态；第 2 节补充 launchd 常驻形态、端口归属排查、极简 PATH 与手工兜底启动；第 5.1 节补充只读核实的数据现状与备份还原点；第 11 节 M1 改为已达成、M3 解除阻塞、M6 标注验收方法论教训，优先级首项改为 IMA 凭证重新授权；新增第 13 节记录 quest 恢复的根因与归档位置。
+
+## [2.2.0] - 2026-09-10
+
+覆盖 2026-08-19 下午至 2026-09-10 的迭代：AI 报告链路打通、LLM 换用 MiniMax-M3、UAT 修复、投研信息密度重构、数据层关联加固与报告导出。
+
+### Added
+
+- **AI 报告前端闭环**（08-19 `93caf62`）：报告 Markdown 渲染、经理名可点击链接、生成入口集成，经理研究链路最后一公里打通。
+- **LLM 综合分析接入 MiniMax-M3**（08-19 `3ebd6e4`）：openai-compatible 协议，四件套配置在 `.env.local`（`LLM_PROVIDER`/`LLM_API_KEY`/`LLM_MODEL`/`LLM_BASE_URL`）；`GET /api/reports/ai-health` 校验配置状态。
+- **组合目标配置 UI + 基金详情页 AI 报告入口**（08-20 `341df7e`）。
+- **报告详情页导出 Word / PDF**（09-10 `105454e`）：纯前端零新依赖，复用已渲染的 `.report-markdown` HTML——Word 走 msword Blob + UTF-8 BOM（中文不乱码），PDF 走 `window.print()` + `@media print`（仅打印正文、表格与标题避免跨页）。绕开后端无 PDF 库与 `export.py` 的 `report_id` 兼容局限。
+
+### Fixed
+
+- 全功能自测暴露的四处缺陷（08-19 `92d5aa7`）。
+- UAT 反馈五项：组合监控误报、基准静默缺失、评分联动（08-19 `e2029da`）。
+- MiniMax-M3 接入伴随的经理报告数据错配与 `<think>` 段泄漏（08-19 `3ebd6e4`）。
+- 定向补数暴露的分类基准映射两处缺陷：映射排序必须 `updated_at` 优先于 `effective_from`（08-20 `e6b13da`）。
+- **数据层关联加固收尾**（09-08 `7d88375`）：`holdings` / `factor_exposures` / `performance_attributions` 补 `fund_id`（经 `wind_code` 反查 `funds.id::text`）与 `updated_at`，新增 3 个唯一索引，三个 repository 的 `ON CONFLICT` 与索引精确配套；`managers.updated_at` 设默认 `NOW()`。同时**回退** `research_reports.id` / `report_id` 的 UUID→TEXT 改动——`local_research_folder_repo.py` 硬编码 `CAST(:report_id AS UUID)`，而 `CREATE TABLE IF NOT EXISTS` 不会迁移已存在表的列类型，改 TEXT 会造成代码定义与生产库不一致并触发 `operator does not exist: text = uuid`。
+- **AI 报告防重 + 标题去 ID 尾巴 + UAT 遗留核实**（09-09 `eb741d2`）：清理存量重复 16 行（29→13，每组保留最新，已全表备份），加唯一约束 `(target_type, target_id, report_type)`，`_save_report_to_postgres` 改为 upsert 覆盖式；经理复合 id「名|性别|学历」在详情/列表 API 增加 `displayTargetId` 用于展示美化，`targetId` / `managerId` 保留原值以维持跳转键完整。核实结论：任期 `fund_code`/`manager_id` 零空值零孤儿（已消解）；经理证据为空的根因是 `manager_profiles` 覆盖率仅 1.8%（127/7218），属数据覆盖天花板而非缺陷。
+
+### Changed
+
+- **去除全部页面宣传性大标题**（08-19 `5077473`）：h1 + 副标题 + eyebrow 移除以回归投研平台信息密度；实体内容标题（基金名、经理名、公司名、报告标题）与紧凑形式的边界语义（如「仅同类比较」）保留。
+- **同步至 Newma-Desk**（08-22 `82ee4f3`）。
+
+### Removed
+
+- **Barra `factor_exposures` 死表依赖清理**（09-10 `198fdd1`）：清空生产库测试残留（`000001.OF` 手填示例 10 行 + `SMOKE.FACTOR.REPO` 冒烟数据 2 行，全表 12 行已备份为还原点），表结构保留；`backend/routes/funds.py` 移除对死表的 `get_exposures` 查询与未使用的 `factor_repo` 引用，`barra_exposure` 字段保留空对象以维持接口契约。真实风格暴露源为 `holding_style_snapshots`。
+
 ## [2.1.0] - 2026-08-19
 
 ### Added — 上线迭代 M1/M2/M4/M5（设计见 `docs/plans/2026-08-19-final-launch-iteration-design.md`）
