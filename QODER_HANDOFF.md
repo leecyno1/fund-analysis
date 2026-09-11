@@ -2,7 +2,7 @@
 
 更新时间：2026-09-11
 
-当前状态：HEAD 为 2026-09-11 调度修复 `629be0a` + 文档记忆重建提交，**local 领先 `origin` / `gitee` 2 个提交，按用户要求暂不推送**。前端 3000 与后端 8005 均由 launchd 从**本仓库**常驻托管。`docs/plans/2026-08-19-final-launch-iteration-design.md` 的 M1–M6 全部完成（M1 的调度缺陷于 2026-09-11 补齐并在调度环境验证，见 8.1），8 月遗留的「值得完善的」清单（组合目标配置 UI、基金详情页 AI 报告入口、报告导出 PDF/Word、定向补数、三项打磨）已于 2026-09-10 全部闭环。**唯一待办是外部授权**：IMA OpenAPI 凭证已失效（`skill auth failed`），需用户重新获取后 `research:sync-ima` 才能恢复。
+当前状态：HEAD 为 2026-09-11 的 3 个提交（调度修复 `629be0a` + 文档记忆重建 + 调度可观测性补充），**local 领先 `origin` / `gitee`，按用户要求暂不推送**。前端 3000 与后端 8005 均由 launchd 从**本仓库**常驻托管。`docs/plans/2026-08-19-final-launch-iteration-design.md` 的 M1–M6 全部完成（M1 的调度缺陷于 2026-09-11 补齐并在调度环境验证，见 8.1），8 月遗留的「值得完善的」清单（组合目标配置 UI、基金详情页 AI 报告入口、报告导出 PDF/Word、定向补数、三项打磨）已于 2026-09-10 全部闭环。**唯一待办是外部授权**：IMA OpenAPI 凭证已失效（`skill auth failed`），需用户重新获取后 `research:sync-ima` 才能恢复。
 
 历史沿革：2026-08-18 完成四代合并去重大重构（v2.0.0）：删除旧 `frontend/`、Wind 数据链路、一代 screening/sync 页面与对应 API；旧路由保留薄重定向；历史文档归档至 `docs/history/`。2026-08-19 起进入上线迭代（v2.1.0），2026-09-10 收敛至 v2.2.0，2026-09-11 发布 v2.2.1（修复 launchd 调度环境缺陷 + 重建项目上下文记忆）。逐条变更见 `CHANGELOG.md`，架构见 `ARCHITECTURE.md`。
 
@@ -273,6 +273,8 @@ weekly 路径另经调度脚本补跑 `funds:sync-product-profiles -- --limit 10
 
 **唯一遗留项**：`research:sync-ima` exit=1，IMA 服务端返回 `skill auth failed`（消息出自 `~/.codex/skills/ima-skill/ima_api.cjs`，属业务拒绝，不是缺凭证的程序化报错）。`~/.config/ima/client_id` 与 `api_key` 均存在（2026-08-14 写入），判断为凭证已过期或被吊销，**需用户重新获取 IMA OpenAPI 凭证**后再跑 `npm run research:sync-ima`；这不是代码缺陷，调度侧无需再改。
 
+⚠️ 因此 `launchctl list` 中 `com.fund-analysis.scheduled_update.daily` 的 last exit 会**持续显示 1**（编排脚本只要有任一任务失败即非零退出），这是「IMA 待重新授权」的信号，不要误判为 PATH 缺陷复发。判断调度是否健康应看 `logs/scheduled_update/runbook.jsonl` 的**逐任务**状态，而非 launchd 的汇总退出码。
+
 ## 9. 验证与验收
 
 提交代码前至少运行：
@@ -300,9 +302,9 @@ npm run smoke:fund-recommendations
 
 ## 10. Git 与仓库维护现状
 
-- 当前分支：`main`，HEAD 为 2026-09-11 的调度修复 `629be0a` + 本次文档记忆重建提交
+- 当前分支：`main`，HEAD 为 2026-09-11 的 3 个提交（调度修复 `629be0a` → 文档记忆重建 → 调度可观测性补充）
 - GitHub：`origin`（SSH）；Gitee：`gitee`（HTTPS），用户 `leecyno1`
-- **local 领先 `origin` / `gitee` 2 个提交，按用户要求暂不推送**；推送前先 `git status` 复核并按批次确认
+- **local 领先 `origin` / `gitee` 3 个提交，按用户要求暂不推送**；推送前先 `git status` 复核并按批次确认
 - 9 月提交链：`7d88375`（数据层加固 + 回退 report_id TEXT）→ `eb741d2`（报告三小项打磨）→ `198fdd1`（Barra 死表清理）→ `105454e`（报告导出）→ `629be0a`（调度 PATH 修复）→ 文档记忆重建，前四批均已推双远端
 - 这些改动均视为用户资产，不得使用 `git reset --hard`、`git checkout -- .` 或批量删除。
 - 先阅读 `git status` 和按模块审查 diff，再按“核心业务、数据同步、Desk Adapter、文档”分批提交。
