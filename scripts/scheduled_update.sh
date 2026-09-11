@@ -24,6 +24,16 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
+# ------------------------- PATH 补全 -------------------------
+# launchd 启动时 PATH 仅 /usr/bin:/bin:/usr/sbin:/sbin，不含 Homebrew 目录，
+# 会让所有 npm 任务 exit=127、依赖 psql/pg_dump 的备份任务失败。
+for brew_bin in /opt/homebrew/bin /usr/local/bin; do
+  if [[ -d "$brew_bin" && ":$PATH:" != *":$brew_bin:"* ]]; then
+    PATH="$brew_bin:$PATH"
+  fi
+done
+export PATH
+
 # ------------------------- 环境加载 -------------------------
 set -a
 for env_file in .env.local .env backend/.env; do
