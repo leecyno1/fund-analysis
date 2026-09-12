@@ -71,6 +71,7 @@ declare -a TASKS=(
   "funds:update-universe|weekly|npm run funds:update-universe"
   "funds:sync-manager-universe|weekly|npm run funds:sync-manager-universe"
   "funds:sync-manager-tenure|weekly|npm run funds:sync-manager-tenure"
+  "funds:sync-dividends|weekly|npm run funds:sync-dividends -- --limit 300"
   "funds:sync-product-profiles|weekly|npm run funds:sync-product-profiles -- --limit 100"
 
   "funds:sync-holdings|quarterly|npm run funds:sync-holdings -- --limit 900"

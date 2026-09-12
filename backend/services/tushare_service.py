@@ -450,6 +450,43 @@ class TushareDataService:
                 factors[trade_date] = factor
         return factors
 
+    def get_fund_dividends(self, wind_code: str) -> List[Dict[str, Any]]:
+        """获取基金全历史分红事件（tushare fund_div）。从未分红的基金返回空列表，属正常情况。"""
+        if self.mock_mode:
+            return []
+        ts_code = _to_ts_code(wind_code)
+        try:
+            df = self.pro.fund_div(ts_code=ts_code)
+        except Exception as error:
+            logger.warning(f"Tushare fund_div unavailable for {ts_code}: {error}")
+            return []
+        if df is None or df.empty:
+            return []
+        rows: List[Dict[str, Any]] = []
+        seen_keys = set()
+        for _, raw in df.iterrows():
+            record = raw.to_dict()
+            div_proc_raw = record.get("div_proc")
+            div_proc = None if div_proc_raw is None or pd.isna(div_proc_raw) else (str(div_proc_raw).strip() or None)
+            item = {
+                "ann_date": _format_tushare_date(record.get("ann_date")),
+                "record_date": _format_tushare_date(record.get("record_date")),
+                "ex_date": _format_tushare_date(record.get("ex_date")),
+                "pay_date": _format_tushare_date(record.get("pay_date")),
+                "net_ex_date": _format_tushare_date(record.get("net_ex_date")),
+                "div_proc": div_proc,
+                "div_cash": _as_float(record.get("div_cash")),
+                "ear_amount": _as_float(record.get("ear_amount")),
+                "source": "tushare.fund_div",
+                "raw_data": {key: (None if pd.isna(value) else value) for key, value in record.items()},
+            }
+            natural_key = (item["ann_date"], item["record_date"], item["ex_date"], item["pay_date"], item["div_cash"])
+            if natural_key in seen_keys:
+                continue
+            seen_keys.add(natural_key)
+            rows.append(item)
+        return rows
+
     def get_benchmark_nav(self, benchmark_code: str, start_date: str, end_date: str) -> List[Dict[str, Any]]:
         """获取可核验的指数基准序列；不支持的基准代码显式返回空集。"""
         normalized_code = str(benchmark_code or "").strip().upper()

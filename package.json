@@ -39,6 +39,7 @@
     "funds:sync-manager-tenure": ".venv/bin/python backend/scripts/sync_fund_manager_tenure.py",
     "funds:sync-manager-universe": ".venv/bin/python backend/scripts/sync_fund_manager_universe.py",
     "funds:sync-holdings": ".venv/bin/python backend/scripts/sync_fund_holdings.py",
+    "funds:sync-dividends": ".venv/bin/python backend/scripts/sync_fund_dividends.py",
     "funds:sync-product-profiles": ".venv/bin/python backend/scripts/sync_fund_product_profiles.py",
     "funds:sync-bond-holdings": ".venv/bin/python backend/scripts/sync_fund_bond_holdings.py",
     "funds:backfill-peer-evaluation": "bash scripts/update_fund_ranking_metrics.sh --peer-evaluation-coverage",

@@ -431,6 +431,23 @@ def init_database():
             fetched_at TIMESTAMP NOT NULL DEFAULT NOW(),
             PRIMARY KEY (wind_code, report_date)
         )""",
+        # 基金分红事件（tushare fund_div）：解释单位净值除息跳空、校验复权口径
+        """CREATE TABLE IF NOT EXISTS fund_dividends (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            wind_code VARCHAR(20) NOT NULL REFERENCES funds(wind_code) ON DELETE CASCADE,
+            ann_date DATE,
+            record_date DATE,
+            ex_date DATE,
+            pay_date DATE,
+            net_ex_date DATE,
+            div_proc VARCHAR(20),
+            div_cash DECIMAL(12, 6),
+            ear_amount DECIMAL(20, 4),
+            source VARCHAR(100) NOT NULL DEFAULT 'tushare.fund_div',
+            raw_data JSONB,
+            created_at TIMESTAMP DEFAULT NOW(),
+            updated_at TIMESTAMP DEFAULT NOW()
+        )""",
         # 基金半年报、年报披露的持有人结构历史
         """CREATE TABLE IF NOT EXISTS fund_holder_structures (
             wind_code VARCHAR(20) NOT NULL REFERENCES funds(wind_code) ON DELETE CASCADE,
@@ -896,6 +913,7 @@ def init_database():
         "CREATE INDEX IF NOT EXISTS idx_holdings_quarter ON holdings(quarter)",
         "CREATE INDEX IF NOT EXISTS idx_holdings_industry ON holdings(industry)",
         "CREATE INDEX IF NOT EXISTS idx_fund_asset_allocations_report_date ON fund_asset_allocations(report_date)",
+        "CREATE INDEX IF NOT EXISTS idx_fund_dividends_wind_code_ex_date ON fund_dividends(wind_code, ex_date)",
         "CREATE INDEX IF NOT EXISTS idx_fund_holder_structures_report_date ON fund_holder_structures(report_date)",
         "CREATE INDEX IF NOT EXISTS idx_fund_bond_holdings_report_date ON fund_bond_holdings(report_date)",
         "CREATE INDEX IF NOT EXISTS idx_fund_bond_holdings_code ON fund_bond_holdings(bond_code)",
