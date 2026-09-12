@@ -11,7 +11,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BACKEND_DIR))
@@ -29,12 +29,16 @@ from services.fund_evaluation_service import FundEvaluationService  # noqa: E402
 from database import get_engine  # noqa: E402
 
 
-def pick_candidates(limit: int) -> List[str]:
-    """选基优先级：组合持仓 > 已有快照基金（保证时序连续）> 最近有指标的新基金。
+def pick_candidates(limit: int, fresh_quota: Optional[int] = None) -> List[str]:
+    """选基优先级：组合持仓 > 存量快照基金（最久未刷新优先，全宇宙轮换）> 无快照新基金（固定配额，覆盖持续扩张）。
 
  组合持仓优先：保证组合页评价摘要尽快可用（否则用户在推荐页看到评分、
  组合页却长期显示暂无快照）。"""
     from sqlalchemy import text
+
+    if fresh_quota is None:
+        fresh_quota = max(10, limit // 5)
+    continuity_limit = max(0, limit - fresh_quota)
 
     engine = get_engine()
     holdings_query = text(
@@ -50,7 +54,7 @@ def pick_candidates(limit: int) -> List[str]:
         SELECT wind_code
         FROM fund_evaluation_snapshots
         GROUP BY wind_code
-        ORDER BY MAX(created_at) DESC
+        ORDER BY MAX(created_at) ASC, wind_code
         LIMIT :limit
         """
     )
@@ -62,12 +66,11 @@ def pick_candidates(limit: int) -> List[str]:
         ]
         continuity = [
             str(row[0]).strip().upper()
-            for row in conn.execute(continuity_query, {"limit": limit}).fetchall()
+            for row in conn.execute(continuity_query, {"limit": continuity_limit}).fetchall()
             if row[0]
         ]
-        remaining = limit - len(continuity)
         fresh: List[str] = []
-        if remaining > 0:
+        if fresh_quota > 0:
             fresh_query = text(
                 """
                 SELECT target_id
@@ -81,7 +84,7 @@ def pick_candidates(limit: int) -> List[str]:
             )
             fresh = [
                 str(row[0]).strip().upper()
-                for row in conn.execute(fresh_query, {"limit": remaining}).fetchall()
+                for row in conn.execute(fresh_query, {"limit": fresh_quota}).fetchall()
                 if row[0]
             ]
     # 去重自防：三级列表间不应重叠，但保守合并（组合持仓最优先）

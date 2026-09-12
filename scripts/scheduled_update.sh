@@ -65,7 +65,7 @@ declare -a TASKS=(
   "watches:scan|daily|curl -fsS --max-time 300 -X POST http://127.0.0.1:8005/api/watches/scan"
   "alerts:scan|daily|curl -fsS --max-time 300 -X POST http://127.0.0.1:8005/api/alerts/scan"
 
-  "evaluation:snapshots|daily|.venv/bin/python backend/scripts/save_evaluation_snapshots.py --limit 50"
+  "evaluation:snapshots|daily|.venv/bin/python backend/scripts/save_evaluation_snapshots.py --limit 150"
   "ops:backup-postgres|daily|bash scripts/backup_postgres.sh"
 
   "funds:update-universe|weekly|npm run funds:update-universe"
