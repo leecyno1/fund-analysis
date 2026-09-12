@@ -1,8 +1,8 @@
 # Qoder 项目交接
 
-更新时间：2026-09-11
+更新时间：2026-09-12
 
-当前状态：HEAD 为 2026-09-11 的 3 个提交（调度修复 `629be0a` + 文档记忆重建 + 调度可观测性补充），**local 领先 `origin` / `gitee`，按用户要求暂不推送**。前端 3000 与后端 8005 均由 launchd 从**本仓库**常驻托管。`docs/plans/2026-08-19-final-launch-iteration-design.md` 的 M1–M6 全部完成（M1 的调度缺陷于 2026-09-11 补齐并在调度环境验证，见 8.1），8 月遗留的「值得完善的」清单（组合目标配置 UI、基金详情页 AI 报告入口、报告导出 PDF/Word、定向补数、三项打磨）已于 2026-09-10 全部闭环。**唯一待办是外部授权**：IMA OpenAPI 凭证已失效（`skill auth failed`），需用户重新获取后 `research:sync-ima` 才能恢复。
+当前状态：HEAD 为 2026-09-11/12 的 4 个本地提交（调度修复 `629be0a` + 三批文档记忆重建/纠正），**local 领先 `origin` / `gitee`，按用户要求暂不推送**。前端 3000 与后端 8005 均由 launchd 从**本仓库**常驻托管。`docs/plans/2026-08-19-final-launch-iteration-design.md` 的 M1–M6 全部完成（M1 的调度缺陷于 2026-09-11 补齐并在调度环境验证，见 8.1），8 月遗留的「值得完善的」清单已于 2026-09-10 全部闭环。2026-09-12 IMA 授权恢复后 **9 个 daily 调度任务全绿，当前无已知技术待办**；下一步只需核对周日 20:00 weekly 定时器首次全自动运行的结果。
 
 历史沿革：2026-08-18 完成四代合并去重大重构（v2.0.0）：删除旧 `frontend/`、Wind 数据链路、一代 screening/sync 页面与对应 API；旧路由保留薄重定向；历史文档归档至 `docs/history/`。2026-08-19 起进入上线迭代（v2.1.0），2026-09-10 收敛至 v2.2.0，2026-09-11 发布 v2.2.1（修复 launchd 调度环境缺陷 + 重建项目上下文记忆）。逐条变更见 `CHANGELOG.md`，架构见 `ARCHITECTURE.md`。
 
@@ -75,7 +75,7 @@ launchd 启动进程时 PATH 只有 `/usr/bin:/bin:/usr/sbin:/sbin`，**不含 `
 
 后续新增任何 launchd 定时任务都要注意这一点；验收定时任务必须用 `launchctl kickstart` 在**调度环境**下跑一次，终端手工成功不算通过。
 
-残留问题：`research:sync-ima` 仍失败，但已不是环境问题——凭证文件齐全（`~/.config/ima/client_id`、`api_key`），IMA 服务端返回 `skill auth failed`（业务错误而非缺凭证的 `-100` 程序错误），需重新获取 OpenAPI 凭证。详见 8.1。
+PATH 修复后曾暴露的第二个问题（`research:sync-ima` 返回 `skill auth failed`）已于 2026-09-12 关闭，且**不是本地凭证失效**——是 IMA 服务端授权状态，用户在 IMA 侧重新授权后即恢复。排查方法与判读规则见 8.1。
 
 ### 2.4 兜底：手工启动（launchd 不可用时）
 
@@ -271,9 +271,15 @@ npm run research:apply-viewpoint-topics
 
 weekly 路径另经调度脚本补跑 `funds:sync-product-profiles -- --limit 100` 验证：ok（125s，`requested=100` / `failed=0`，资产配置与持有人结构真实写入）。其余三个 weekly 任务（`funds:update-universe` 为全市场同步，`sync-manager-universe` / `sync-manager-tenure` 同为重量级）耗时长且消耗 Tushare 配额，未即时手工触发，留给每周日 20:00 定时器自然执行。
 
-**唯一遗留项**：`research:sync-ima` exit=1，IMA 服务端返回 `skill auth failed`（消息出自 `~/.codex/skills/ima-skill/ima_api.cjs`，属业务拒绝，不是缺凭证的程序化报错）。`~/.config/ima/client_id` 与 `api_key` 均存在（2026-08-14 写入），判断为凭证已过期或被吊销，**需用户重新获取 IMA OpenAPI 凭证**后再跑 `npm run research:sync-ima`；这不是代码缺陷，调度侧无需再改。
+**最后一个遗留项已于 2026-09-12 关闭**：`research:sync-ima` 曾返回 `skill auth failed`（服务端非零 `msg`，由 `scripts/sync_ima_research_library.sh` 的 `api_call` 打印——注意 `ima_api.cjs` 只对 fetch 异常抛出，业务错误码是正常返回，判读要看 `.code`）。
 
-⚠️ 因此 `launchctl list` 中 `com.fund-analysis.scheduled_update.daily` 的 last exit 会**持续显示 1**（编排脚本只要有任一任务失败即非零退出），这是「IMA 待重新授权」的信号，不要误判为 PATH 缺陷复发。判断调度是否健康应看 `logs/scheduled_update/runbook.jsonl` 的**逐任务**状态，而非 launchd 的汇总退出码。
+⚠️ **当时的结论「凭证已过期需重新获取」是错的**，复核后修正：用户 09-12 提供的 clientId/apiKey 与 `~/.config/ima/` 里 2026-08-14 起就在用的那组**逐字节相同**（md5 一致），而同一组凭证 09-11 23:42 被拒、09-12 08:03 通过。所以 `skill auth failed` 反映的是 **IMA 服务端的授权状态**（用户在 IMA 侧重新授权后即恢复），不是本地密钥失效。
+
+用户在 IMA 侧完成授权后，经调度脚本执行 `research:sync-ima` ok（30s，`runbook.jsonl` 已记录）：226 份本地纪要全部命中云端同名文件，新增 0、失败 0。**至此 9 个 daily 任务全绿。**
+
+**排查方法教训**：遇到 IMA `skill auth failed` 不要先假定密钥失效——① 用最轻的 `openapi/wiki/v1/search_knowledge_base` 单独复测（1 次调用即可判定授权状态）；② 把本地凭证与用户新提供值做 md5 比对，若相同则问题在服务端授权而非本地配置；③ 凭证只写 `~/.config/ima/`（600 权限，覆盖前先按 `.bak.YYYYMMDD` 备份），不进仓库、不进日志。
+
+⚠️ **判读规则**：编排脚本只要有任一子任务失败就非零退出，所以 `launchctl list` 里 `com.fund-analysis.scheduled_update.daily` 的 last exit 只是「本轮有任务失败」的汇总信号，不能据此断定 PATH 缺陷复发。判断调度健康必须看 `logs/scheduled_update/runbook.jsonl` 的**逐任务** `status`。2026-09-12 起 9 个 daily 任务全绿，该退出码应回到 0；若再次变 1，按 runbook 里的任务名定位，不要重跑整套排查。
 
 ## 9. 验证与验收
 
@@ -302,10 +308,10 @@ npm run smoke:fund-recommendations
 
 ## 10. Git 与仓库维护现状
 
-- 当前分支：`main`，HEAD 为 2026-09-11 的 3 个提交（调度修复 `629be0a` → 文档记忆重建 → 调度可观测性补充）
+- 当前分支：`main`，HEAD 为 2026-09-11/12 的 4 个提交（调度修复 `629be0a` → 文档记忆重建 `8c8ff9f` → 调度可观测性补充 `3c37588` → IMA 授权恢复后的结论纠正）
 - GitHub：`origin`（SSH）；Gitee：`gitee`（HTTPS），用户 `leecyno1`
-- **local 领先 `origin` / `gitee` 3 个提交，按用户要求暂不推送**；推送前先 `git status` 复核并按批次确认
-- 9 月提交链：`7d88375`（数据层加固 + 回退 report_id TEXT）→ `eb741d2`（报告三小项打磨）→ `198fdd1`（Barra 死表清理）→ `105454e`（报告导出）→ `629be0a`（调度 PATH 修复）→ 文档记忆重建，前四批均已推双远端
+- **local 领先 `origin` / `gitee` 4 个提交，按用户要求暂不推送**；推送前先 `git status` 复核并按批次确认
+- 9 月提交链：`7d88375`（数据层加固 + 回退 report_id TEXT）→ `eb741d2`（报告三小项打磨）→ `198fdd1`（Barra 死表清理）→ `105454e`（报告导出）→ `629be0a`（调度 PATH 修复）→ 三批文档记忆重建，前四批均已推双远端
 - 这些改动均视为用户资产，不得使用 `git reset --hard`、`git checkout -- .` 或批量删除。
 - 先阅读 `git status` 和按模块审查 diff，再按“核心业务、数据同步、Desk Adapter、文档”分批提交。
 - 不把 `.env*`、数据库目录、日志、Playwright 截图、IMA 密钥或本地知识库原文提交到远端。
@@ -327,14 +333,13 @@ npm run smoke:fund-recommendations
 
 当前优先级：
 
-1. **IMA OpenAPI 凭证重新授权（唯一外部待办，只能由用户完成）**：`research:sync-ima` 被服务端拒绝（`skill auth failed`），凭证文件存在但已失效。重新获取后写入 `~/.config/ima/` 或 `.env.local`，再跑 `npm run research:sync-ima` 并确认 daily 调度中该任务转 ok。调度脚本本身无需再改。
-2. **核对 weekly 调度首次全自动运行结果**：下一个周日 20:00 后查 `logs/scheduled_update/runbook.jsonl`，确认 `funds:update-universe` / `sync-manager-universe` / `sync-manager-tenure` 三个重量级任务 ok（`sync-product-profiles` 已于 2026-09-11 抽样验证通过），并对比覆盖率是否开始回升。
-3. 再提升基金评价覆盖：优先补齐可分类但缺少净值/指标的同类样本（调度已恢复，可依赖每日增量）。
-4. 完善季报持仓链路：股票、债券、资产配置、持有人结构和归因历史一致更新。
-5. 完善纪要待确认工作流：减少经理、基金和标签误匹配，不自动确认 LLM 结果。
-6. 维护 AI 分析证据回放：任何新字段都要同时进入新分析和旧历史兼容映射。
-7. 可选数据攻坚：经理画像批量生成（`manager_profiles` 覆盖率仅约 1.8%，是经理研究/排序的天花板；需 LLM 调用，属数据攻坚而非缺陷修复，动手前先出方案）。
-8. 最后再处理非核心报告页面和历史 lint warning。
+1. **核对 weekly 调度首次全自动运行结果**：下一个周日 20:00 后查 `logs/scheduled_update/runbook.jsonl`，确认 `funds:update-universe` / `sync-manager-universe` / `sync-manager-tenure` 三个重量级任务 ok（`sync-product-profiles` 已于 2026-09-11 抽样验证通过），并对比覆盖率是否开始回升。
+2. 再提升基金评价覆盖：优先补齐可分类但缺少净值/指标的同类样本（调度已恢复，可依赖每日增量）。
+3. 完善季报持仓链路：股票、债券、资产配置、持有人结构和归因历史一致更新。
+4. 完善纪要待确认工作流：减少经理、基金和标签误匹配，不自动确认 LLM 结果。
+5. 维护 AI 分析证据回放：任何新字段都要同时进入新分析和旧历史兼容映射。
+6. 可选数据攻坚：经理画像批量生成（`manager_profiles` 覆盖率仅约 1.8%，是经理研究/排序的天花板；需 LLM 调用，属数据攻坚而非缺陷修复，动手前先出方案）。
+7. 最后再处理非核心报告页面和历史 lint warning。
 
 ## 12. 禁止回退的设计决定
 

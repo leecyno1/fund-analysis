@@ -12,7 +12,7 @@
   - `scripts/scheduled_update.sh` 与 `scripts/backup_postgres.sh` 顶部补全 Homebrew PATH（`/opt/homebrew/bin`、`/usr/local/bin`）后 `export`，不在 plist 写死环境，终端与调度共用同一脚本；
   - `backup_postgres.sh` 的 `pg_dump`/`pg_restore` 回退赋值改为 `command -v ... || true`，二进制缺失时打印含 `PATH` 的明确错误再 `exit 1`，杜绝静默失败；
   - `package.json` 中 13 个脚本由裸 `python` 改为 `.venv/bin/python`——macOS 与 launchd 都没有 `python` 命令，这是 PATH 修好后暴露的第二层 127（与 `update_fund_*.sh` 既有的解释器候选约定一致）。
-- **M6 验收方法论缺口**：原验收全程在终端手工执行（shell 自带 homebrew PATH），因此完全掩盖了上述缺陷——`runbook.jsonl` 显示 20 次 18:15 调度时点 20/20 全败，只有两个非调度时点的手工执行成功。修复后用 `launchctl kickstart -k gui/$(id -u)/com.fund-analysis.scheduled_update.daily` 在**真实调度环境**验证：9 个 daily 任务 8 个 ok，含备份产出 `fund_analysis_20260911_234226.dump`（约 35MB，`pg_restore -l` 关键表自检通过）与两个曾 127 的 npm 补数任务；`research:sync-manager-identities` 补跑 ok（96s），`manager_profiles` 127→130。weekly bucket 另抽样补跑 `funds:sync-product-profiles -- --limit 100` ok（125s，`requested=100` / `failed=0`，资产配置与持有人结构真实写入），确认 weekly 路径同样恢复；剩余三个重量级 weekly 任务留给周日 20:00 定时器。遗留 `research:sync-ima` 被 IMA 服务端拒绝（`skill auth failed`，凭证已失效），属外部授权问题，非代码缺陷。
+- **M6 验收方法论缺口**：原验收全程在终端手工执行（shell 自带 homebrew PATH），因此完全掩盖了上述缺陷——`runbook.jsonl` 显示 20 次 18:15 调度时点 20/20 全败，只有两个非调度时点的手工执行成功。修复后用 `launchctl kickstart -k gui/$(id -u)/com.fund-analysis.scheduled_update.daily` 在**真实调度环境**验证：9 个 daily 任务 8 个 ok，含备份产出 `fund_analysis_20260911_234226.dump`（约 35MB，`pg_restore -l` 关键表自检通过）与两个曾 127 的 npm 补数任务；`research:sync-manager-identities` 补跑 ok（96s），`manager_profiles` 127→130。weekly bucket 另抽样补跑 `funds:sync-product-profiles -- --limit 100` ok（125s，`requested=100` / `failed=0`，资产配置与持有人结构真实写入），确认 weekly 路径同样恢复；剩余三个重量级 weekly 任务留给周日 20:00 定时器。`research:sync-ima` 一度被服务端拒绝（`skill auth failed`），09-12 复核后确认**不是本地凭证失效**：用户提供的 clientId/apiKey 与 `~/.config/ima/` 中 08-14 起在用的那组逐字节相同（md5 一致），同一组凭证 09-11 23:42 被拒、09-12 08:03 通过，属 IMA 服务端授权状态问题；用户在 IMA 侧重新授权后经调度脚本执行 ok（30s，226 份纪要全部命中云端同名文件，新增 0 / 失败 0）。**至此 9 个 daily 任务全绿。**
 
 ### Added
 
@@ -20,7 +20,7 @@
 
 ### Changed
 
-- **`QODER_HANDOFF.md` 校正过期结论**：第 8 节由「尚无统一编排层，建议实现 `scheduled_update.sh`」改为「已于 M1 落地，不要再重复实现」，并新增 8.1 记录调度真实状态；第 2 节补充 launchd 常驻形态、端口归属排查、极简 PATH 与手工兜底启动；第 5.1 节补充只读核实的数据现状与备份还原点；第 11 节 M1 改为已达成、M3 解除阻塞、M6 标注验收方法论教训，优先级首项改为 IMA 凭证重新授权；新增第 13 节记录 quest 恢复的根因与归档位置。
+- **`QODER_HANDOFF.md` 校正过期结论**：第 8 节由「尚无统一编排层，建议实现 `scheduled_update.sh`」改为「已于 M1 落地，不要再重复实现」，并新增 8.1 记录调度真实状态；第 2 节补充 launchd 常驻形态、端口归属排查、极简 PATH 与手工兜底启动；第 5.1 节补充只读核实的数据现状与备份还原点；第 11 节 M1 改为已达成、M3 解除阻塞、M6 标注验收方法论教训，优先级重排为「核对 weekly 定时器首次全自动运行结果」居首（原首项 IMA 授权已于 09-12 关闭）；新增第 13 节记录 quest 恢复的根因与归档位置。
 
 ## [2.2.0] - 2026-09-10
 
