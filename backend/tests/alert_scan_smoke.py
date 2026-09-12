@@ -29,13 +29,25 @@ class FakeMetricRepo:
         ]
 
 
+class FakeManagerRepo:
+    def get_current_fund_tenure_context(self, fund_code):
+        return {}
+
+
 class FakeAlertRepo:
-    def __init__(self):
+    def __init__(self, open_events=None):
         self.created = []
+        self._open_events = open_events or []
 
     def create_event(self, **kwargs):
         self.created.append(kwargs)
         return {"id": f"event-{len(self.created)}", **kwargs}
+
+    def has_open_event(self, fund_id, event_type):
+        return any(
+            event.get("fund_id") == fund_id and event.get("event_type") == event_type
+            for event in self._open_events
+        )
 
 
 def main() -> int:
@@ -44,6 +56,7 @@ def main() -> int:
         pool_repo=FakePoolRepo(),
         metric_repo=FakeMetricRepo(),
         alert_repo=repo,
+        manager_repo=FakeManagerRepo(),
     )
     summary = service.scan()
     if summary.get('created', 0) < 1:
@@ -51,6 +64,19 @@ def main() -> int:
         return 1
     if not any(event.get('event_type') == 'drawdown' for event in repo.created):
         print(f"Expected drawdown alert event, got: {repo.created}")
+        return 1
+
+    # 已有未解决 drawdown 事件时不重复创建，避免每日调度堆积重复事件
+    repo = FakeAlertRepo(open_events=[{"fund_id": "FUND-TEST-001", "event_type": "drawdown", "status": "new"}])
+    service = AlertScanService(
+        pool_repo=FakePoolRepo(),
+        metric_repo=FakeMetricRepo(),
+        alert_repo=repo,
+        manager_repo=FakeManagerRepo(),
+    )
+    summary = service.scan()
+    if any(event.get('event_type') == 'drawdown' for event in repo.created):
+        print(f"Expected drawdown dedup against open event, got: {repo.created}")
         return 1
     print('OK alert scan service')
     return 0

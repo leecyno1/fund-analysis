@@ -74,6 +74,11 @@ class FakeSalesRuleRepo:
         }
 
 
+class FakeManagerRepo:
+    def get_current_fund_tenure_context(self, fund_code):
+        return {}
+
+
 class FakeAlertRepo:
     def __init__(self):
         self.created = []
@@ -81,6 +86,9 @@ class FakeAlertRepo:
     def create_event(self, **kwargs):
         self.created.append(kwargs)
         return {"id": f"event-{len(self.created)}", **kwargs}
+
+    def has_open_event(self, fund_id, event_type):
+        return False
 
 
 def main() -> int:
@@ -91,6 +99,7 @@ def main() -> int:
         alert_repo=repo,
         peer_service=FakePeerService(),
         sales_rule_repo=FakeSalesRuleRepo(),
+        manager_repo=FakeManagerRepo(),
         today=date(2026, 6, 4),
     )
     summary = service.scan()

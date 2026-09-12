@@ -5,7 +5,10 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
-from repositories import get_alert_repo, get_fund_pool_repo, get_metric_snapshot_repo
+from repositories import get_alert_repo, get_fund_pool_repo, get_manager_repo, get_metric_snapshot_repo
+
+# 现任经理上任多少天内视为“经理变更”，需要重估经理维度结论
+MANAGER_CHANGE_ALERT_DAYS = 30
 
 
 class AlertScanService:
@@ -15,6 +18,7 @@ class AlertScanService:
         metric_repo=None,
         alert_repo=None,
         peer_service=None,
+        manager_repo=None,
         sales_rule_repo=None,
         today: Optional[date] = None,
         max_members_per_status: Optional[int] = None,
@@ -23,6 +27,7 @@ class AlertScanService:
         self.pool_repo = pool_repo or get_fund_pool_repo()
         self.metric_repo = metric_repo or get_metric_snapshot_repo()
         self.alert_repo = alert_repo or get_alert_repo()
+        self.manager_repo = manager_repo or get_manager_repo()
         self.sales_rule_repo = sales_rule_repo
         self._sales_rule_engine = None
         if peer_service is None:
@@ -45,7 +50,7 @@ class AlertScanService:
                     members = members[:max(0, self.max_members_per_status)]
                 for member in members:
                     sales_rule_issues = self._sales_rule_evidence_issues(member)
-                    if sales_rule_issues:
+                    if sales_rule_issues and not self._has_open(member["fund_id"], "sales_rule_evidence"):
                         wind_code = self._member_wind_code(member)
                         created_events.append(self.alert_repo.create_event(
                             rule_id=None,
@@ -70,7 +75,7 @@ class AlertScanService:
 
                     metric_map = self._metric_map(self.metric_repo.get_latest_panel("fund", member["fund_id"]))
                     drawdown = metric_map.get("max_drawdown")
-                    if drawdown is not None and drawdown <= Decimal("-0.15"):
+                    if drawdown is not None and drawdown <= Decimal("-0.15") and not self._has_open(member["fund_id"], "drawdown"):
                         created_events.append(self.alert_repo.create_event(
                             rule_id=None,
                             fund_id=member["fund_id"],
@@ -83,7 +88,7 @@ class AlertScanService:
                             details={"current_drawdown": float(drawdown), "pool_id": pool["id"]},
                         ))
                     review_date = self._parse_date(member.get("next_review_date"))
-                    if review_date is not None and review_date < self.today:
+                    if review_date is not None and review_date < self.today and not self._has_open(member["fund_id"], "review_due"):
                         overdue_days = (self.today - review_date).days
                         created_events.append(self.alert_repo.create_event(
                             rule_id=None,
@@ -97,7 +102,7 @@ class AlertScanService:
                             details={"pool_id": pool["id"], "member_status": status, "overdue_days": overdue_days},
                         ))
                     weak_peer_metrics = self._weak_peer_metrics(member["fund_id"]) if self.include_peer_metrics else []
-                    if weak_peer_metrics:
+                    if weak_peer_metrics and not self._has_open(member["fund_id"], "peer_percentile"):
                         created_events.append(self.alert_repo.create_event(
                             rule_id=None,
                             fund_id=member["fund_id"],
@@ -109,12 +114,61 @@ class AlertScanService:
                             status="new",
                             details={"pool_id": pool["id"], "member_status": status, "weak_peer_metrics": weak_peer_metrics},
                         ))
+                    manager_change_event = self._manager_change_event(member, pool, status)
+                    if manager_change_event is not None:
+                        created_events.append(manager_change_event)
 
         return {
             "status": "completed",
             "created": len(created_events),
             "events": created_events,
         }
+
+    def _has_open(self, fund_id: str, event_type: str) -> bool:
+        try:
+            return bool(self.alert_repo.has_open_event(fund_id, event_type))
+        except Exception:
+            return False
+
+    def _manager_change_event(self, member: Dict[str, Any], pool: Dict[str, Any], status: str) -> Optional[Dict[str, Any]]:
+        wind_code = self._member_wind_code(member)
+        if not wind_code:
+            return None
+        try:
+            context = self.manager_repo.get_current_fund_tenure_context(wind_code)
+        except Exception:
+            return None
+        start_date = self._parse_date(context.get("start_date"))
+        if start_date is None:
+            return None
+        days_since_start = (self.today - start_date).days
+        if days_since_start < 0 or days_since_start > MANAGER_CHANGE_ALERT_DAYS:
+            return None
+        if self.alert_repo.event_exists(
+            fund_id=member["fund_id"],
+            event_type="manager_change",
+            detail_key="manager_start_date",
+            detail_value=start_date.isoformat(),
+        ):
+            return None
+        return self.alert_repo.create_event(
+            rule_id=None,
+            fund_id=member["fund_id"],
+            pool_member_id=member["id"],
+            event_type="manager_change",
+            severity="high" if status in {"candidate", "core"} else "medium",
+            title=f"经理变更：现任经理上任不足 {MANAGER_CHANGE_ALERT_DAYS} 天",
+            message=f"现任经理团队 {start_date.isoformat()} 上任（{days_since_start} 天前），既有经理维度结论需按新任经理重估",
+            status="new",
+            details={
+                "pool_id": pool["id"],
+                "member_status": status,
+                "wind_code": wind_code,
+                "manager_start_date": start_date.isoformat(),
+                "days_since_manager_start": days_since_start,
+                "manager_ids": list(context.get("manager_ids") or []),
+            },
+        )
 
     def _weak_peer_metrics(self, fund_id: str) -> List[Dict[str, Any]]:
         try:
