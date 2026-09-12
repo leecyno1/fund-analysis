@@ -70,7 +70,7 @@ export default function FundPeriodPerformancePanel({ snapshot }: { snapshot: Fun
       <div className="flex flex-wrap items-start justify-between gap-4 border-b border-[#e1e6e2] p-5 sm:p-6">
         <div>
           <h2 className="flex items-center gap-2 text-lg font-bold"><CalendarRange className="h-5 w-5 text-[#28745c]" />年度业绩</h2>
-          <p className="mt-1 text-xs leading-6 text-[#7a8580]">按自然年度计算真实{snapshot.navBasis === 'accum_nav' ? '累计净值' : '单位净值'}收益，只与“{snapshot.peerGroupName || '标准同类组待补'}”比较。</p>
+          <p className="mt-1 text-xs leading-6 text-[#7a8580]">按自然年度计算真实{snapshot.navBasis === 'adj_nav' ? '复权净值' : snapshot.navBasis === 'accum_nav' ? '累计净值' : '单位净值'}收益，只与“{snapshot.peerGroupName || '标准同类组待补'}”比较。</p>
         </div>
         <span className="text-xs text-[#7a8580]">净值截至 {snapshot.latestNavDate || '—'}</span>
       </div>

@@ -121,6 +121,13 @@ async function loadComparisonFund(code: string): Promise<ComparisonFund | null> 
       peerRank: ready ? numberValue(professionalPosition.rank) : null,
       peerCount: ready ? numberValue(professionalPosition.peer_count) : null,
       peerPercentile: ready ? numberValue(professionalPosition.percentile) : null,
+      dimensionScores: ready
+        ? Object.fromEntries(
+            Object.entries(asRecord(windowEvaluation.dimension_scores))
+              .map(([dimension, value]) => [dimension, numberValue(asRecord(value).score)])
+              .filter((entry): entry is [string, number] => entry[1] != null),
+          )
+        : {},
     }]
   })) as ComparisonFund['evaluationWindows']
 

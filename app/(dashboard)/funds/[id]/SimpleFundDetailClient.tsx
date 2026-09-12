@@ -49,6 +49,7 @@ import FundProductProfilePanel, { type FundProductProfile } from './FundProductP
 import FundFofHoldingPanel, { type FundFofHoldingSnapshot } from './FundFofHoldingPanel'
 import FundDataQualityPanel, { type FundDataQualitySnapshot } from './FundDataQualityPanel'
 import FundDrawdownRecoveryPanel, { type FundDrawdownRecoverySnapshot } from './FundDrawdownRecoveryPanel'
+import FundDerivedSeriesCharts, { type FundDerivedSeriesSnapshot } from './FundDerivedSeriesCharts'
 import FundPeriodPerformancePanel, { type FundPeriodPerformanceSnapshot } from './FundPeriodPerformancePanel'
 import FundShareClassPanel, { type FundShareClassSnapshot } from './FundShareClassPanel'
 import FundManagerHistoryPanel, { type FundManagerHistorySnapshot } from './FundManagerHistoryPanel'
@@ -60,7 +61,8 @@ export type FundNavPoint = {
   nav: number
   unitNav: number | null
   accumNav: number | null
-  navBasis: 'accum_nav' | 'unit_nav'
+  adjNav: number | null
+  navBasis: 'adj_nav' | 'accum_nav' | 'unit_nav'
   benchmarkNav: number | null
 }
 
@@ -491,6 +493,7 @@ type Props = {
   managerTenurePerformance: FundManagerTenurePerformance
   assetAllocation: FundAssetAllocationSnapshot
   drawdownRecovery: FundDrawdownRecoverySnapshot
+  derivedSeries: FundDerivedSeriesSnapshot
   periodPerformance: FundPeriodPerformanceSnapshot
   fofHoldings: FundFofHoldingSnapshot
   bondAnomaly: FundBondAnomalySnapshot
@@ -610,7 +613,9 @@ function buildChartSeries(nav: FundNavPoint[]) {
   const baseFundNav = aligned[0]?.nav ?? null
   const baseBenchmarkNav = aligned[0]?.benchmarkNav ?? null
   const benchmarkObservations = aligned.filter((point) => point.benchmarkNav != null).length
-  const navBasis = aligned.some((point) => point.navBasis === 'accum_nav') ? 'accum_nav' : 'unit_nav'
+  const navBasis = aligned.some((point) => point.navBasis === 'adj_nav')
+    ? 'adj_nav' as const
+    : aligned.some((point) => point.navBasis === 'accum_nav') ? 'accum_nav' as const : 'unit_nav' as const
   const data = aligned.map((point) => ({
     ...point,
     fundGrowth: baseFundNav != null && baseFundNav > 0 ? ((point.nav / baseFundNav) - 1) * 100 : null,
@@ -1449,7 +1454,7 @@ const contractTenorLabels: Record<string, string> = {
   over_10y: '10年以上',
 }
 
-export default function SimpleFundDetailClient({ fund, nav, evaluationWindows, evaluationHistory, assessmentSummary, detailHighlights, plainLanguageBrief, researchMemos, dataQuality, shareClasses, managerHistory, managerTenurePerformance, assetAllocation, drawdownRecovery, periodPerformance, fofHoldings, bondAnomaly, bondDuration, bondHoldings, holderStructure, holdingSnapshot, holdingChanges, holdingStyle, holdingExperience, productProfile }: Props) {
+export default function SimpleFundDetailClient({ fund, nav, evaluationWindows, evaluationHistory, assessmentSummary, detailHighlights, plainLanguageBrief, researchMemos, dataQuality, shareClasses, managerHistory, managerTenurePerformance, assetAllocation, drawdownRecovery, derivedSeries, periodPerformance, fofHoldings, bondAnomaly, bondDuration, bondHoldings, holderStructure, holdingSnapshot, holdingChanges, holdingStyle, holdingExperience, productProfile }: Props) {
   const [window, setWindow] = useState<(typeof windows)[number]['value']>('1y')
   const selectedWindow = windows.find((item) => item.value === window) || windows[1]
   const evaluation = evaluationWindows[window] || evaluationWindows['1y']
@@ -1691,7 +1696,7 @@ export default function SimpleFundDetailClient({ fund, nav, evaluationWindows, e
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
               <h2 className="flex items-center gap-2 text-lg font-bold"><ChartNoAxesCombined className="h-5 w-5 text-[#28745c]" />历史净值</h2>
-              <p className="mt-1 text-xs leading-6 text-[#7a8580]">默认使用累计净值处理分红和份额折算；累计净值缺失时才使用单位净值。</p>
+              <p className="mt-1 text-xs leading-6 text-[#7a8580]">默认使用复权净值（分红再投资口径）处理分红和份额折算；复权缺失时依次回退累计净值、单位净值。</p>
             </div>
             <div className="inline-flex border border-[#cfd6d0] bg-[#f7f8f5] p-1">
               {windows.map((item) => (
@@ -1713,7 +1718,7 @@ export default function SimpleFundDetailClient({ fund, nav, evaluationWindows, e
               </ResponsiveContainer>
               <div className="mt-2 flex flex-wrap gap-4 text-[11px] text-[#68746e]"><span className="inline-flex items-center gap-1.5"><i className="h-0.5 w-4 bg-[#176a52]" />本基金</span>{chartData.some((point) => point.benchmarkGrowth != null) ? <span className="inline-flex items-center gap-1.5"><i className="h-0.5 w-4 bg-[#9a7c45]" />{benchmark}</span> : null}</div>
               <div className="mt-3 flex flex-wrap gap-x-5 gap-y-1 border-t border-[#edf0ed] pt-3 text-[10px] text-[#87918c]">
-                <span>{chartSeries.navBasis === 'accum_nav' ? '累计净值口径' : '单位净值口径'}</span>
+                <span>{chartSeries.navBasis === 'adj_nav' ? '复权净值口径' : chartSeries.navBasis === 'accum_nav' ? '累计净值口径' : '单位净值口径'}</span>
                 <span>{formatDate(chartSeries.startDate)} 至 {formatDate(chartSeries.endDate)}</span>
                 <span>{chartSeries.observations} 个净值日 · {chartMatchesEvaluation ? '与评价窗口一致' : '按可核验区间展示'}</span>
                 {chartSeries.benchmarkObservations ? <span>基准共同日期 {chartSeries.benchmarkObservations} 个 · 覆盖 {formatPercent(chartSeries.benchmarkCoverage, 0)}</span> : <span>当前没有可核验基准曲线</span>}
@@ -1752,6 +1757,8 @@ export default function SimpleFundDetailClient({ fund, nav, evaluationWindows, e
       <FundPeriodPerformancePanel snapshot={periodPerformance} />
 
       <FundDrawdownRecoveryPanel snapshot={drawdownRecovery} />
+
+      <FundDerivedSeriesCharts series={derivedSeries} />
 
       <section>
         <div className="flex flex-wrap items-end justify-between gap-3 pb-4">

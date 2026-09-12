@@ -3,8 +3,8 @@
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useMemo, useState, useTransition } from 'react'
-import { ArrowLeft, BarChart3, Bot, Building2, CalendarRange, CircleAlert, ExternalLink, FileText, GitCompareArrows, Network, Plus, Search, ShieldCheck, Sparkles, X } from 'lucide-react'
-import { CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
+import { ArrowLeft, BarChart3, Bot, Building2, CalendarRange, CircleAlert, ExternalLink, FileText, GitCompareArrows, Network, Plus, Search, ShieldCheck, Sparkles, Target, X } from 'lucide-react'
+import { Bar, BarChart, CartesianGrid, Legend, Line, LineChart, PolarAngleAxis, PolarGrid, PolarRadiusAxis, Radar, RadarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import type { CamelFund } from '@/lib/backend-api'
 import EvidenceTriptychStrip from './EvidenceTriptychStrip'
 import DecisionSupportPanel from './DecisionSupportPanel'
@@ -30,6 +30,7 @@ type WindowEvaluation = {
   peerRank: number | null
   peerCount: number | null
   peerPercentile: number | null
+  dimensionScores: Record<string, number>
 }
 
 type CalendarPeriodPerformance = {
@@ -250,6 +251,24 @@ export type HoldingSimilaritySnapshot = {
 }
 
 const colors = ['#176a52', '#a45d45', '#6b7334', '#2e6284', '#7b5384', '#8a702e']
+
+const dimensionLabels: Record<string, string> = {
+  return: '收益能力',
+  excess_return: '超额收益',
+  active_efficiency: '主动管理效率',
+  drawdown_control: '回撤控制',
+  risk: '风险控制',
+  risk_adjusted: '风险调整后收益',
+  consistency: '表现稳定性',
+  manager_tenure: '经理任期',
+  tracking_quality: '跟踪质量',
+  cost_efficiency: '成本效率',
+  scale_liquidity: '规模与流动性',
+  income_competitiveness: '收益竞争力',
+  capital_preservation: '净值稳定性',
+  income_stability: '收益稳定性',
+  data_quality: '数据质量',
+}
 const windows = [
   { value: '6m', label: '近 6 月' },
   { value: '1y', label: '近 1 年' },
@@ -436,6 +455,32 @@ export default function SimpleComparisonClient({ funds, alignedComparison, holdi
   const calendarYears = useMemo(() => Array.from(new Set(
     funds.flatMap((item) => item.periodPerformance.periods.map((period) => period.year)),
   )).sort((left, right) => right - left).slice(0, 5), [funds])
+  const radarDimensions = useMemo(() => {
+    if (funds.length < 2) return [] as string[]
+    const perFund = funds.map((item) => selectedEvaluation(item, window).dimensionScores || {})
+    return Object.keys(perFund[0] || {}).filter((key) => perFund.every((scores) => {
+      const value = scores[key]
+      return typeof value === 'number' && Number.isFinite(value)
+    }))
+  }, [funds, window])
+  const radarData = useMemo(() => radarDimensions.map((key) => {
+    const row: Record<string, number | string> = { dimension: dimensionLabels[key] || key }
+    for (const item of funds) {
+      row[item.fund.windCode] = Number(selectedEvaluation(item, window).dimensionScores[key].toFixed(1))
+    }
+    return row
+  }), [funds, window, radarDimensions])
+  const yearlyChartData = useMemo(() => [...calendarYears].sort((left, right) => left - right).map((year) => {
+    const row: Record<string, number | string | null> = {
+      year: funds.flatMap((item) => item.periodPerformance.periods).find((period) => period.year === year)?.label || `${year} 年`,
+    }
+    for (const item of funds) {
+      const period = item.periodPerformance.periods.find((entry) => entry.year === year)
+      row[item.fund.windCode] = period && period.coverageStatus === 'complete' ? Number((period.return * 100).toFixed(2)) : null
+    }
+    return row
+  }).filter((row) => funds.some((item) => typeof row[item.fund.windCode] === 'number')), [calendarYears, funds])
+  const yearlyChartReady = yearlyChartData.length > 0
 
   async function searchFunds() {
     const keyword = query.trim()
@@ -804,6 +849,35 @@ export default function SimpleComparisonClient({ funds, alignedComparison, holdi
             ) : <div className="mt-6 grid h-64 place-items-center border border-dashed border-[#cdd5cf] text-sm text-[#79847e]">当前区间没有可用净值数据</div>}
           </section>
 
+          <section className="border border-[#dbe1dc] bg-white p-5 sm:p-6">
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div>
+                <h2 className="flex items-center gap-2 text-lg font-bold"><Target className="h-5 w-5 text-[#28745c]" />维度得分对比</h2>
+                <p className="mt-1 text-xs leading-6 text-[#7a8580]">{selectedWindow.label}各维度得分（0—100），只取所有基金都有有效评分的共同维度；任一基金证据不足的维度不出现在坐标轴上。</p>
+              </div>
+            </div>
+            {radarDimensions.length >= 3 ? (
+              <div className="mt-6 h-[320px] w-full sm:h-[380px]">
+                <ResponsiveContainer width="100%" height="100%" minWidth={0} initialDimension={{ width: 320, height: 320 }}>
+                  <RadarChart data={radarData} outerRadius="72%">
+                    <PolarGrid stroke="#e1e6e2" />
+                    <PolarAngleAxis dataKey="dimension" tick={{ fontSize: 11, fill: '#57645d' }} />
+                    <PolarRadiusAxis domain={[0, 100]} tick={{ fontSize: 10, fill: '#96a09a' }} axisLine={false} tickCount={4} />
+                    <Tooltip formatter={(value, name) => [`${Number(value).toFixed(1)} 分`, name]} />
+                    <Legend wrapperStyle={{ fontSize: 12 }} />
+                    {funds.map((item, index) => (
+                      <Radar key={item.fund.windCode} dataKey={item.fund.windCode} name={item.fund.name || item.fund.windCode} stroke={colors[index]} fill={colors[index]} fillOpacity={0.12} isAnimationActive={false} />
+                    ))}
+                  </RadarChart>
+                </ResponsiveContainer>
+              </div>
+            ) : (
+              <div className="mt-6 border border-dashed border-[#cdd5cf] px-5 py-6 text-center text-xs leading-6 text-[#79847e]">
+                所有基金共同拥有有效得分的维度不足 3 个（{radarDimensions.length ? `当前仅 ${radarDimensions.length} 个` : '当前没有'}），暂不绘制雷达图；各维度得分以下方评价表为准。
+              </div>
+            )}
+          </section>
+
           <section>
             <div className="pb-4">
               <h2 className="text-lg font-bold">核心指标</h2>
@@ -872,6 +946,25 @@ export default function SimpleComparisonClient({ funds, alignedComparison, holdi
                 </div>
                 <span className="text-xs text-[#7a8580]">最近净值截至 {funds.map((item) => item.periodPerformance.latestNavDate).filter(Boolean).sort().at(0) || '—'}</span>
               </div>
+              {yearlyChartReady ? (
+                <div className="border-b border-[#e1e6e2] p-5 sm:p-6">
+                  <div className="h-[280px] w-full">
+                    <ResponsiveContainer width="100%" height="100%" minWidth={0} initialDimension={{ width: 320, height: 280 }}>
+                      <BarChart data={yearlyChartData} margin={{ top: 8, right: 8, bottom: 4, left: -12 }}>
+                        <CartesianGrid stroke="#e6eae6" strokeDasharray="3 3" vertical={false} />
+                        <XAxis dataKey="year" tick={{ fontSize: 11, fill: '#718078' }} tickLine={false} axisLine={false} />
+                        <YAxis tick={{ fontSize: 11, fill: '#718078' }} tickLine={false} axisLine={false} tickFormatter={(value) => `${Number(value).toFixed(0)}%`} />
+                        <Tooltip formatter={(value, name) => [value == null ? '—' : `${Number(value).toFixed(1)}%`, name]} />
+                        <Legend wrapperStyle={{ fontSize: 12 }} />
+                        {funds.map((item, index) => (
+                          <Bar key={item.fund.windCode} dataKey={item.fund.windCode} name={item.fund.name || item.fund.windCode} fill={colors[index]} maxBarSize={28} isAnimationActive={false} />
+                        ))}
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                  <p className="mt-3 text-[10px] leading-5 text-[#87918c]">只绘制净值覆盖完整的自然年度收益；部分区间、同类名次和同类中位数见下表。</p>
+                </div>
+              ) : null}
               <div className="overflow-x-auto">
                 <table className="w-full min-w-[1080px] border-collapse text-left text-xs">
                   <thead className="bg-[#f1f4f1] text-[#66726c]">
@@ -888,7 +981,7 @@ export default function SimpleComparisonClient({ funds, alignedComparison, holdi
                       <tr key={item.fund.windCode}>
                         <td className="px-4 py-4">
                           <strong className="text-sm text-[#26342d]">{item.fund.name || item.fund.windCode}</strong>
-                          <span className="mt-1 block text-[10px] text-[#87918c]">{item.periodPerformance.navBasis === 'accum_nav' ? '累计净值' : '单位净值'}</span>
+                          <span className="mt-1 block text-[10px] text-[#87918c]">{item.periodPerformance.navBasis === 'adj_nav' ? '复权净值' : item.periodPerformance.navBasis === 'accum_nav' ? '累计净值' : '单位净值'}</span>
                         </td>
                         {calendarYears.map((year) => {
                           const period = item.periodPerformance.periods.find((entry) => entry.year === year)
