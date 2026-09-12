@@ -151,7 +151,7 @@ npm run dev
 | `ai_analysis_reports` | 13 | 2026-09-09 去重（29→13）+ 唯一约束 + upsert 后保持稳定，未再重复 |
 | `manager_profiles` | 130 | 2026-09-11 补跑 `research:sync-manager-identities` 后由 127 增至 130；覆盖率仍仅约 1.8%（130/7218），是经理证据链天花板 |
 
-**备份现状**：曾自 2026-08-20 15:36 起连续 22 天全部失败（launchd 极简 PATH 缺陷，见 8.1），**2026-09-11 已修复并恢复**。`backups/postgres/` 现有 5 个 dump，最新可用还原点为 `fund_analysis_20260911_234226.dump`（约 35MB，由调度环境 `launchctl kickstart` 产出，内容自检通过）。后续每个调度日 18:15 自动积累；做破坏性数据操作前仍可先手工执行 `bash scripts/backup_postgres.sh` 取一个即时还原点。
+**备份现状**：曾自 2026-08-20 15:36 起连续 22 天全部失败（launchd 极简 PATH 缺陷，见 8.1），**2026-09-11 已修复并恢复**。最新可用还原点为 `fund_analysis_20260912_081435.dump`（约 37MB，由 `launchctl kickstart` 在调度环境产出，内容自检通过）。后续每个调度日 18:15 自动积累，保留最近 14 份；做破坏性数据操作前仍可先手工执行 `bash scripts/backup_postgres.sh` 取一个即时还原点。
 
 ## 6. 当前最重要的代码入口
 
@@ -275,7 +275,9 @@ weekly 路径另经调度脚本补跑 `funds:sync-product-profiles -- --limit 10
 
 ⚠️ **当时的结论「凭证已过期需重新获取」是错的**，复核后修正：用户 09-12 提供的 clientId/apiKey 与 `~/.config/ima/` 里 2026-08-14 起就在用的那组**逐字节相同**（md5 一致），而同一组凭证 09-11 23:42 被拒、09-12 08:03 通过。所以 `skill auth failed` 反映的是 **IMA 服务端的授权状态**（用户在 IMA 侧重新授权后即恢复），不是本地密钥失效。
 
-用户在 IMA 侧完成授权后，经调度脚本执行 `research:sync-ima` ok（30s，`runbook.jsonl` 已记录）：226 份本地纪要全部命中云端同名文件，新增 0、失败 0。**至此 9 个 daily 任务全绿。**
+用户在 IMA 侧完成授权后，经调度脚本执行 `research:sync-ima` ok（30s，`runbook.jsonl` 已记录）：226 份本地纪要全部命中云端同名文件，新增 0、失败 0。
+
+**最终一次性验收（2026-09-12 08:14）**：用 `launchctl kickstart` 在调度环境完整跑一轮 daily，**9/9 全部 ok**（`backfill-browser-core` 4s、`backfill-peer-evaluation` 103s、`sync-ima` 33s、`sync-manager-identities` 108s、三个 scan 各 0s、`evaluation:snapshots` 17s、`backup-postgres` 4s），当日 `alerts.log` 零条，`launchctl list` 中 daily 的汇总退出码回到 **0**，产出新 dump `fund_analysis_20260912_081435.dump`（约 37MB）。此前 09-11 的验证是分三次拼出的（kickstart 8/9 + 两个单独补跑），这一轮才是单次全绿的确定性证据。
 
 **排查方法教训**：遇到 IMA `skill auth failed` 不要先假定密钥失效——① 用最轻的 `openapi/wiki/v1/search_knowledge_base` 单独复测（1 次调用即可判定授权状态）；② 把本地凭证与用户新提供值做 md5 比对，若相同则问题在服务端授权而非本地配置；③ 凭证只写 `~/.config/ima/`（600 权限，覆盖前先按 `.bak.YYYYMMDD` 备份），不进仓库、不进日志。
 
