@@ -73,7 +73,7 @@ declare -a TASKS=(
   "funds:sync-manager-tenure|weekly|npm run funds:sync-manager-tenure"
   "funds:sync-product-profiles|weekly|npm run funds:sync-product-profiles -- --limit 100"
 
-  "funds:sync-holdings|quarterly|npm run funds:sync-holdings -- --limit 100"
+  "funds:sync-holdings|quarterly|npm run funds:sync-holdings -- --limit 900"
   "funds:sync-bond-holdings|quarterly|npm run funds:sync-bond-holdings -- --limit 100"
   "data:sync-holding-style|quarterly|npm run data:sync-holding-style"
 
