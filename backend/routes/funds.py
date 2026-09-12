@@ -1074,6 +1074,23 @@ async def get_fund_drawdown_recovery(wind_code: str):
         raise HTTPException(status_code=500, detail="基金回撤修复分析暂时不可用")
 
 
+@router.get("/{wind_code}/derived-series")
+async def get_fund_derived_series(
+    wind_code: str,
+    window: str = Query("1y", description="滚动收益窗口：3m/6m/1y/3y"),
+):
+    """获取水下回撤曲线与滚动收益序列，供详情页图表使用。"""
+    from services.fund_derived_series_service import FundDerivedSeriesService
+
+    try:
+        return _clean_nan(FundDerivedSeriesService().get(wind_code, window=window))
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except Exception as exc:
+        logger.error(f"Get fund derived series error for {wind_code}: {exc}")
+        raise HTTPException(status_code=500, detail="基金派生序列暂时不可用")
+
+
 @router.get("/{wind_code}/period-performance")
 async def get_fund_period_performance(
     wind_code: str,

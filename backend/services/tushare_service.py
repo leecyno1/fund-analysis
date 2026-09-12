@@ -358,13 +358,34 @@ class TushareDataService:
                 self._strict_fail(f"Tushare fund_nav returned empty nav series for {wind_code}")
                 return self._normalize_nav_series(self._mock_nav_series(wind_code, start_date, end_date))
 
+            adj_nav_from_factor = False
+            existing_adj_count = (
+                pd.to_numeric(df["adj_nav"], errors="coerce").notna().sum()
+                if "adj_nav" in df.columns
+                else 0
+            )
+            if existing_adj_count == 0:
+                adj_factors = self._fetch_fund_adj_factors(ts_code, start, end)
+                if adj_factors:
+                    derived_adj = []
+                    for _, row in df.iterrows():
+                        unit_nav_value = _as_float(row.get("unit_nav"))
+                        factor = adj_factors.get(str(row.get("nav_date", "")))
+                        derived_adj.append(
+                            unit_nav_value * factor
+                            if unit_nav_value is not None and factor is not None
+                            else None
+                        )
+                    df["adj_nav"] = derived_adj
+                    adj_nav_from_factor = True
+
             result = []
             df = df.sort_values("nav_date")
             minimum_source_rows = max(2, int(len(df) * 0.6))
             metric_nav_source = next(
                 (
                     column
-                    for column in ("accum_nav", "adj_nav", "unit_nav")
+                    for column in ("adj_nav", "accum_nav", "unit_nav")
                     if column in df.columns
                     and pd.to_numeric(df[column], errors="coerce").notna().sum() >= minimum_source_rows
                 ),
@@ -373,6 +394,11 @@ class TushareDataService:
             if metric_nav_source is None:
                 self._strict_fail(f"Tushare fund_nav has no consistent NAV column for {wind_code}")
                 return []
+            metric_nav_lineage = (
+                "tushare.fund_adj.adj_factor"
+                if metric_nav_source == "adj_nav" and adj_nav_from_factor
+                else f"tushare.fund_nav.{metric_nav_source}"
+            )
             previous_accum_nav = None
             for _, row in df.iterrows():
                 date_str = str(row.get("nav_date", ""))
@@ -396,7 +422,7 @@ class TushareDataService:
                     "accum_nav": accum_nav,
                     "adj_nav": adjusted_nav,
                     "reported_accum_nav": _as_float(row.get("accum_nav")),
-                    "metric_nav_source": f"tushare.fund_nav.{metric_nav_source}",
+                    "metric_nav_source": metric_nav_lineage,
                     "daily_return": daily_return,
                     "net_asset": _as_float(row.get("net_asset")),
                     "total_netasset": _as_float(row.get("total_netasset")),
@@ -406,6 +432,23 @@ class TushareDataService:
             logger.error(f"Tushare get_fund_nav error for {wind_code}: {e}")
             self._strict_fail(f"Tushare get_fund_nav failed for {wind_code}: {e}")
             return self._normalize_nav_series(self._mock_nav_series(wind_code, start_date, end_date))
+
+    def _fetch_fund_adj_factors(self, ts_code: str, start: str, end: str) -> Dict[str, float]:
+        """拉取复权因子；不可用时返回空集，调用方回退累计净值口径。"""
+        try:
+            adj_df = self.pro.fund_adj(ts_code=ts_code, start_date=start, end_date=end)
+        except Exception as error:
+            logger.warning(f"Tushare fund_adj unavailable for {ts_code}: {error}")
+            return {}
+        if adj_df is None or adj_df.empty:
+            return {}
+        factors: Dict[str, float] = {}
+        for _, row in adj_df.iterrows():
+            trade_date = str(row.get("trade_date", ""))
+            factor = _as_float(row.get("adj_factor"))
+            if trade_date and factor is not None and factor > 0:
+                factors[trade_date] = factor
+        return factors
 
     def get_benchmark_nav(self, benchmark_code: str, start_date: str, end_date: str) -> List[Dict[str, Any]]:
         """获取可核验的指数基准序列；不支持的基准代码显式返回空集。"""
@@ -752,8 +795,26 @@ class TushareDataService:
                 return self._mock_performance(wind_code)
 
             nav_df = nav_df.sort_values("nav_date").copy()
+            existing_adj_count = (
+                pd.to_numeric(nav_df["adj_nav"], errors="coerce").notna().sum()
+                if "adj_nav" in nav_df.columns
+                else 0
+            )
+            if existing_adj_count == 0:
+                adj_factors = self._fetch_fund_adj_factors(ts_code, start_3y, end_date)
+                if adj_factors:
+                    nav_df["adj_nav"] = [
+                        (unit_nav_value * factor if unit_nav_value is not None and factor is not None else None)
+                        for unit_nav_value, factor in (
+                            (
+                                _as_float(row.get("unit_nav")),
+                                adj_factors.get(str(row.get("nav_date", ""))),
+                            )
+                            for _, row in nav_df.iterrows()
+                        )
+                    ]
             metric_nav = pd.Series(index=nav_df.index, dtype="float64")
-            for column in ("accum_nav", "adj_nav", "unit_nav"):
+            for column in ("adj_nav", "accum_nav", "unit_nav"):
                 if column in nav_df.columns:
                     metric_nav = metric_nav.combine_first(pd.to_numeric(nav_df[column], errors="coerce"))
             nav_df["metric_nav"] = metric_nav
@@ -789,9 +850,12 @@ class TushareDataService:
                 annual_vol = daily_returns.std() * (252 ** 0.5)
                 sharpe = (annual_return / annual_vol) if annual_vol > 0 else 0
                 volatility = annual_vol
+                downside_deviation = daily_returns.clip(upper=0).std() * (252 ** 0.5)
+                sortino = (annual_return / downside_deviation) if downside_deviation > 0 else 0
             else:
                 sharpe = 0
                 volatility = 0
+                sortino = 0
 
             performance = {
                 "annualized_return_1y": round(ret_1y, 4),
@@ -799,7 +863,7 @@ class TushareDataService:
                 "max_drawdown": round(max_dd, 4),
                 "sharpe_ratio": round(sharpe, 4),
                 "volatility": round(volatility, 4),
-                "sortino": round(sharpe * 1.2, 4),
+                "sortino": round(sortino, 4),
                 "calmar_ratio": round(abs(ret_1y / max_dd), 4) if max_dd != 0 else 0,
                 "win_rate_1y": round((daily_returns > 0).sum() / len(daily_returns), 4) if len(daily_returns) > 0 else 0,
             }

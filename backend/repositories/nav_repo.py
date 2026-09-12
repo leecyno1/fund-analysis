@@ -57,15 +57,16 @@ class NavRepo:
             insert_sql = """
             INSERT INTO fund_nav (
                 wind_code, trade_date, nav, unit_nav, accum_nav,
-                daily_return, benchmark_nav, discount_rate
+                adj_nav, daily_return, benchmark_nav, discount_rate
             ) VALUES (
                 :wind_code, :trade_date, :nav, :unit_nav, :accum_nav,
-                :daily_return, :benchmark_nav, :discount_rate
+                :adj_nav, :daily_return, :benchmark_nav, :discount_rate
             )
             ON CONFLICT (wind_code, trade_date) DO UPDATE SET
                 nav = EXCLUDED.nav,
                 unit_nav = EXCLUDED.unit_nav,
                 accum_nav = EXCLUDED.accum_nav,
+                adj_nav = EXCLUDED.adj_nav,
                 daily_return = EXCLUDED.daily_return,
                 benchmark_nav = COALESCE(EXCLUDED.benchmark_nav, fund_nav.benchmark_nav),
                 discount_rate = EXCLUDED.discount_rate
@@ -96,6 +97,7 @@ class NavRepo:
                             "nav": nav_value,
                             "unit_nav": nav_value,
                             "accum_nav": _clean(nav.get("accum_nav")),
+                            "adj_nav": _clean(nav.get("adj_nav")),
                             "daily_return": _clean(nav.get("daily_return")),
                             "benchmark_nav": _clean(nav.get("benchmark_nav")),
                             "discount_rate": _clean(nav.get("discount_rate")),
@@ -131,7 +133,7 @@ class NavRepo:
             where_sql = " AND ".join(where_clauses)
 
             sql = f"""
-                SELECT trade_date, COALESCE(unit_nav, nav) AS unit_nav, accum_nav, daily_return, benchmark_nav
+                SELECT trade_date, COALESCE(unit_nav, nav) AS unit_nav, accum_nav, adj_nav, daily_return, benchmark_nav
                 FROM fund_nav
                 WHERE {where_sql}
                 ORDER BY trade_date ASC
@@ -144,6 +146,7 @@ class NavRepo:
                         "date": r.trade_date,
                         "nav": r.unit_nav,
                         "accum_nav": r.accum_nav,
+                        "adj_nav": r.adj_nav,
                         "daily_return": r.daily_return,
                         "benchmark_nav": r.benchmark_nav,
                     }

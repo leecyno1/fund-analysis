@@ -535,7 +535,8 @@ class FundClassificationRepo:
                         WHERE nav.trade_date BETWEEN :start_date AND :end_date
                     )::int AS period_observations,
                     COUNT(*)::int AS total_observations,
-                    COUNT(nav.accum_nav)::int AS accum_observations
+                    COUNT(nav.accum_nav)::int AS accum_observations,
+                    COUNT(nav.adj_nav)::int AS adj_observations
                 FROM eligible_shares share
                 JOIN fund_nav nav ON nav.wind_code = share.wind_code
                 WHERE nav.trade_date BETWEEN :baseline_start_date AND :end_date
@@ -550,6 +551,8 @@ class FundClassificationRepo:
                     entity_id,
                     wind_code,
                     CASE
+                        WHEN adj_observations >= 2 AND adj_observations >= GREATEST(accum_observations, total_observations) * 0.6
+                        THEN 'adj_nav'
                         WHEN accum_observations >= GREATEST(2, CEIL(total_observations * 0.9))
                         THEN 'accum_nav'
                         ELSE 'unit_nav'
@@ -576,6 +579,7 @@ class FundClassificationRepo:
                     selected.nav_basis,
                     nav.trade_date,
                     CASE
+                        WHEN selected.nav_basis = 'adj_nav' THEN nav.adj_nav
                         WHEN selected.nav_basis = 'accum_nav' THEN nav.accum_nav
                         ELSE COALESCE(nav.unit_nav, nav.nav)
                     END AS nav_value

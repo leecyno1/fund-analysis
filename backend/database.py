@@ -343,6 +343,7 @@ def init_database():
             nav DECIMAL(10, 4),
             unit_nav DECIMAL(10, 4),
             accum_nav DECIMAL(10, 4),
+            adj_nav DECIMAL(12, 4),
             daily_return DECIMAL(12, 8),
             benchmark_nav DECIMAL(10, 4),
             discount_rate DECIMAL(12, 8),
@@ -957,6 +958,7 @@ def init_database():
 
     migrations = [
         "ALTER TABLE fund_nav ADD COLUMN IF NOT EXISTS unit_nav DECIMAL(10, 4)",
+        "ALTER TABLE fund_nav ADD COLUMN IF NOT EXISTS adj_nav DECIMAL(12, 4)",
         "ALTER TABLE fund_nav ADD COLUMN IF NOT EXISTS daily_return DECIMAL(12, 8)",
         "ALTER TABLE fund_nav ADD COLUMN IF NOT EXISTS benchmark_nav DECIMAL(10, 4)",
         "ALTER TABLE fund_nav ADD COLUMN IF NOT EXISTS discount_rate DECIMAL(12, 8)",
