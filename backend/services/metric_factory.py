@@ -69,6 +69,9 @@ class MetricFactory:
         sortino_ratio = annualized_excess_return / downside_deviation if downside_deviation else 0
         max_drawdown = self._max_drawdown(points)
         calmar_ratio = self.calculate_return_metrics(nav_series).get("annualized_return", 0) / abs(max_drawdown) if max_drawdown else 0
+        var_95 = self._percentile(daily_returns, 0.05)
+        tail_returns = [value for value in daily_returns if value <= var_95]
+        cvar_95 = sum(tail_returns) / len(tail_returns) if tail_returns else 0
 
         return {
             "annualized_volatility": annualized_volatility,
@@ -77,6 +80,9 @@ class MetricFactory:
             "sortino_ratio": sortino_ratio,
             "max_drawdown": max_drawdown,
             "calmar_ratio": calmar_ratio,
+            "var_95": var_95,
+            "cvar_95": cvar_95,
+            "monthly_win_rate": self._monthly_win_rate(points, daily_returns),
             "daily_return_mean": average_return,
             "daily_return_std": volatility,
         }
@@ -224,6 +230,28 @@ class MetricFactory:
         mean = sum(values) / len(values)
         variance = sum((value - mean) ** 2 for value in values) / (len(values) - 1)
         return math.sqrt(variance)
+
+    @staticmethod
+    def _percentile(values: List[float], level: float) -> float:
+        if not values:
+            return 0
+        ordered = sorted(values)
+        position = level * (len(ordered) - 1)
+        lower = int(math.floor(position))
+        upper = int(math.ceil(position))
+        fraction = position - lower
+        return ordered[lower] + (ordered[upper] - ordered[lower]) * fraction
+
+    @staticmethod
+    def _monthly_win_rate(points: List[Tuple[date, float]], daily_returns: List[float]) -> float:
+        if not daily_returns:
+            return 0
+        monthly: Dict[Tuple[int, int], float] = {}
+        for (point_date, _), value in zip(points[1:], daily_returns):
+            key = (point_date.year, point_date.month)
+            monthly[key] = (1 + monthly.get(key, 0.0)) * (1 + value) - 1
+        positive = sum(1 for value in monthly.values() if value > 0)
+        return positive / len(monthly) if monthly else 0
 
     @staticmethod
     def _max_drawdown(points: List[Tuple[date, float]]) -> float:
