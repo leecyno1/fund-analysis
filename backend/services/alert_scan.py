@@ -19,7 +19,6 @@ class AlertScanService:
         alert_repo=None,
         peer_service=None,
         manager_repo=None,
-        sales_rule_repo=None,
         today: Optional[date] = None,
         max_members_per_status: Optional[int] = None,
         include_peer_metrics: bool = True,
@@ -28,8 +27,6 @@ class AlertScanService:
         self.metric_repo = metric_repo or get_metric_snapshot_repo()
         self.alert_repo = alert_repo or get_alert_repo()
         self.manager_repo = manager_repo or get_manager_repo()
-        self.sales_rule_repo = sales_rule_repo
-        self._sales_rule_engine = None
         if peer_service is None:
             from services.peer_comparison_service import PeerComparisonService
 
@@ -49,30 +46,6 @@ class AlertScanService:
                 if self.max_members_per_status is not None:
                     members = members[:max(0, self.max_members_per_status)]
                 for member in members:
-                    sales_rule_issues = self._sales_rule_evidence_issues(member)
-                    if sales_rule_issues and not self._has_open(member["fund_id"], "sales_rule_evidence"):
-                        wind_code = self._member_wind_code(member)
-                        created_events.append(self.alert_repo.create_event(
-                            rule_id=None,
-                            fund_id=member["fund_id"],
-                            pool_member_id=member["id"],
-                            event_type="sales_rule_evidence",
-                            severity="high" if status in {"candidate", "core"} else "medium",
-                            title="销售规则/R1-R5 证据过期或待补",
-                            message=f"销售规则买前证据未满足 30 天复核窗口：{'；'.join(sales_rule_issues[:5])}",
-                            status="new",
-                            details={
-                                "pool_id": pool["id"],
-                                "member_status": status,
-                                "wind_code": wind_code,
-                                "fund_code": wind_code,
-                                "purchase_plan": "sip",
-                                "planned_amount": 1000,
-                                "evidence_window_days": 30,
-                                "missing_items": sales_rule_issues,
-                            },
-                        ))
-
                     metric_map = self._metric_map(self.metric_repo.get_latest_panel("fund", member["fund_id"]))
                     drawdown = metric_map.get("max_drawdown")
                     if drawdown is not None and drawdown <= Decimal("-0.15") and not self._has_open(member["fund_id"], "drawdown"):
@@ -196,80 +169,6 @@ class AlertScanService:
                     "percentile": round(percentile_value, 2),
                 })
         return weak_metrics
-
-    def _sales_rule_evidence_issues(self, member: Dict[str, Any]) -> List[str]:
-        rule = self._latest_sales_rule(member)
-        if not rule:
-            return ["销售规则整条待补", "R1-R5 风险等级缺少 30 天来源背书"]
-
-        source_date = self._parse_date(rule.get("source_updated_at"))
-        issues: List[str] = []
-        if source_date is None:
-            issues.append("销售规则来源日期待补")
-        else:
-            age_days = (self.today - source_date).days
-            if age_days < 0:
-                issues.append("销售规则来源日期晚于当前扫描日，需重新核验")
-            elif age_days > 30:
-                issues.append(f"销售规则来源已过期 {age_days} 天，超过 30 天买前复核窗口")
-
-        risk_level = str(rule.get("risk_level") or "").strip().upper()
-        if risk_level not in {"R1", "R2", "R3", "R4", "R5"}:
-            issues.append("R1-R5 风险等级待补")
-        elif source_date is None or (self.today - source_date).days < 0 or (self.today - source_date).days > 30:
-            issues.append(f"{risk_level} 风险等级缺少 30 天内来源背书")
-
-        purchase_status = str(rule.get("purchase_status") or "").strip().lower()
-        if not purchase_status or purchase_status == "unknown":
-            issues.append("申购状态待补")
-        if rule.get("purchase_fee_rate") is None:
-            issues.append("申购费率待补")
-        if not rule.get("redemption_fee_rules"):
-            issues.append("赎回费规则待补")
-
-        return issues
-
-    def _latest_sales_rule(self, member: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        if self.sales_rule_repo is not None:
-            return self.sales_rule_repo.get_latest_rule(member)
-        wind_code = self._member_wind_code(member)
-        if not wind_code:
-            return None
-        try:
-            from sqlalchemy import create_engine, text
-            try:
-                from backend.database import get_database_url
-            except ModuleNotFoundError:
-                from database import get_database_url
-
-            if self._sales_rule_engine is None:
-                self._sales_rule_engine = create_engine(get_database_url(), pool_pre_ping=True)
-            sql = text("""
-                SELECT
-                    wind_code,
-                    platform,
-                    purchase_status,
-                    purchase_fee_rate,
-                    redemption_fee_rules,
-                    risk_level,
-                    source_updated_at,
-                    updated_at
-                FROM fund_sales_rules
-                WHERE UPPER(wind_code) = UPPER(:wind_code)
-                ORDER BY source_updated_at DESC NULLS LAST, updated_at DESC NULLS LAST
-                LIMIT 1
-            """)
-            with self._sales_rule_engine.connect() as conn:
-                row = conn.execute(sql, {"wind_code": wind_code}).fetchone()
-            if not row:
-                return None
-            data = dict(row._mapping)
-            for key, value in list(data.items()):
-                if isinstance(value, (datetime, date)):
-                    data[key] = value.isoformat()
-            return data
-        except Exception:
-            return None
 
     @staticmethod
     def _member_wind_code(member: Dict[str, Any]) -> str:
