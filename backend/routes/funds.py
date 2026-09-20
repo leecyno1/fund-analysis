@@ -454,7 +454,7 @@ def _holding_summary(holdings: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 @router.get("/")
-async def list_funds(
+def list_funds(
     fund_type: Optional[str] = Query(None, description="基金类型: stock/hybrid/bond/index/..."),
     keyword: Optional[str] = Query(None, description="搜索关键词（基金名称/代码）"),
     page: int = Query(1, ge=1),
