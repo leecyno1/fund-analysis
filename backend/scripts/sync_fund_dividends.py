@@ -100,7 +100,7 @@ def main() -> int:
         "failed_count": len(failed),
         "failed_sample": dict(list(failed.items())[:5]),
     }, ensure_ascii=False, indent=2))
-    return 0 if len(failed) < len(codes) else 1
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":
