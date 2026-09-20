@@ -39,7 +39,7 @@ class RollingMetricService:
         benchmark_code: Optional[str] = None,
         as_of_date: Optional[date] = None,
     ) -> List[Dict[str, Any]]:
-        points = self.metric_factory._normalize_nav_series(nav_series)
+        points = self.metric_factory._normalize_nav_series(nav_series, as_of_date=as_of_date)
         if len(points) < 2:
             return []
 
@@ -53,7 +53,7 @@ class RollingMetricService:
             }
             for item in nav_series
             if item.get("benchmark_nav") is not None
-        ])
+        ], as_of_date=effective_as_of)
         benchmark_by_date = {item_date: nav for item_date, nav in benchmark_points}
 
         for window, expected_observations in self.windows.items():
@@ -133,7 +133,9 @@ class RollingMetricService:
 
         effective_benchmark = benchmark_code or mapped_benchmark or (profile or {}).get("primary_benchmark")
         effective_peer_group = peer_group_key or mapped_peer_group or (profile or {}).get("peer_group")
-        nav_series = nav_repo.get_nav_series(fund_code)
+        nav_series = nav_repo.get_nav_series(
+            fund_code, end_date=as_of_date.isoformat() if as_of_date else None,
+        )
         records = self.calculate_for_nav_series(
             nav_series,
             target_type="fund",

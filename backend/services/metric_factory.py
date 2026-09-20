@@ -64,9 +64,7 @@ class MetricFactory:
         annualized_volatility = volatility * math.sqrt(self.trading_days)
         annualized_excess_return = average_return * self.trading_days - self.risk_free_rate
         sharpe_ratio = annualized_excess_return / annualized_volatility if annualized_volatility else 0
-        downside_returns = [min(value, 0) for value in daily_returns]
-        downside_deviation = self._stddev(downside_returns) * math.sqrt(self.trading_days)
-        sortino_ratio = annualized_excess_return / downside_deviation if downside_deviation else 0
+        downside_metrics = self.calculate_downside_metrics(daily_returns)
         max_drawdown = self._max_drawdown(points)
         calmar_ratio = self.calculate_return_metrics(nav_series).get("annualized_return", 0) / abs(max_drawdown) if max_drawdown else 0
         var_95 = self._percentile(daily_returns, 0.05)
@@ -75,9 +73,8 @@ class MetricFactory:
 
         return {
             "annualized_volatility": annualized_volatility,
-            "downside_risk": downside_deviation,
+            **downside_metrics,
             "sharpe_ratio": sharpe_ratio,
-            "sortino_ratio": sortino_ratio,
             "max_drawdown": max_drawdown,
             "calmar_ratio": calmar_ratio,
             "var_95": var_95,
@@ -85,6 +82,21 @@ class MetricFactory:
             "monthly_win_rate": self._monthly_win_rate(points, daily_returns),
             "daily_return_mean": average_return,
             "daily_return_std": volatility,
+        }
+
+    def calculate_downside_metrics(self, daily_returns: List[float]) -> Dict[str, float]:
+        """以年化无风险利率为目标，按全样本下行二阶矩计算风险。"""
+        if not daily_returns:
+            return {}
+        # 目标收益线性折日，与分子的算术年化口径保持一致。
+        daily_target = self.risk_free_rate / self.trading_days
+        shortfalls = [min(value - daily_target, 0.0) for value in daily_returns]
+        second_moment = sum(value**2 for value in shortfalls) / len(daily_returns)
+        downside_deviation = math.sqrt(second_moment * self.trading_days)
+        annualized_excess_return = sum(daily_returns) / len(daily_returns) * self.trading_days - self.risk_free_rate
+        return {
+            "downside_risk": downside_deviation,
+            "sortino_ratio": annualized_excess_return / downside_deviation if downside_deviation else 0,
         }
 
     def calculate_relative_metrics(
@@ -134,10 +146,18 @@ class MetricFactory:
         window: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """将计算结果转换为可持久化的指标记录。"""
+        nav_series = [
+            {"date": day, "nav": nav}
+            for day, nav in self._normalize_nav_series(nav_series, as_of_date=as_of_date)
+        ]
         metrics: Dict[str, float] = {}
         metrics.update(self.calculate_return_metrics(nav_series))
         metrics.update(self.calculate_risk_metrics(nav_series))
         if benchmark_series:
+            benchmark_series = [
+                {"date": day, "nav": nav}
+                for day, nav in self._normalize_nav_series(benchmark_series, as_of_date=as_of_date)
+            ]
             metrics.update(self.calculate_relative_metrics(nav_series, benchmark_series))
 
         records = []
@@ -168,11 +188,13 @@ class MetricFactory:
 
         nav_repo = get_nav_repo()
         metric_repo = get_metric_snapshot_repo()
-        nav_series = nav_repo.get_nav_series(fund_code)
-        if not nav_series:
+        nav_series = nav_repo.get_nav_series(
+            fund_code, end_date=as_of_date.isoformat() if as_of_date else None,
+        )
+        normalized = self._normalize_nav_series(nav_series, as_of_date=as_of_date)
+        if len(normalized) < 2:
             return {"fund_code": fund_code, "saved": 0, "metrics": []}
 
-        normalized = self._normalize_nav_series(nav_series)
         effective_as_of = as_of_date or normalized[-1][0]
         records = self.build_metric_records(
             target_type="fund",
@@ -190,7 +212,11 @@ class MetricFactory:
             ))
         return {"fund_code": fund_code, "saved": len(saved), "metrics": saved}
 
-    def _normalize_nav_series(self, nav_series: Iterable[Dict[str, Any]]) -> List[Tuple[date, float]]:
+    def _normalize_nav_series(
+        self,
+        nav_series: Iterable[Dict[str, Any]],
+        as_of_date: Optional[date] = None,
+    ) -> List[Tuple[date, float]]:
         points: List[Tuple[date, float]] = []
         for item in nav_series:
             nav_value = item.get("accum_nav") or item.get("adj_nav") or item.get("nav") or item.get("unit_nav")
@@ -209,6 +235,8 @@ class MetricFactory:
                 parsed_date = item_date
             else:
                 parsed_date = datetime.fromisoformat(str(item_date)).date()
+            if as_of_date is not None and parsed_date > as_of_date:
+                continue
             points.append((parsed_date, value))
         points.sort(key=lambda item: item[0])
         return points

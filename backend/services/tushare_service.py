@@ -17,6 +17,7 @@ from dataclasses import dataclass
 import pandas as pd
 
 from services.fund_nav_evidence_service import FundNavEvidenceService
+from services.metric_factory import MetricFactory
 from lib.holding_weight_validation import normalize_holding_weights
 
 logger = logging.getLogger(__name__)
@@ -455,11 +456,7 @@ class TushareDataService:
         if self.mock_mode:
             return []
         ts_code = _to_ts_code(wind_code)
-        try:
-            df = self.pro.fund_div(ts_code=ts_code)
-        except Exception as error:
-            logger.warning(f"Tushare fund_div unavailable for {ts_code}: {error}")
-            return []
+        df = self.pro.fund_div(ts_code=ts_code)
         if df is None or df.empty:
             return []
         rows: List[Dict[str, Any]] = []
@@ -850,15 +847,19 @@ class TushareDataService:
                             for _, row in nav_df.iterrows()
                         )
                     ]
-            metric_nav = pd.Series(index=nav_df.index, dtype="float64")
+            minimum_source_rows = max(10, int(len(nav_df) * 0.6))
             for column in ("adj_nav", "accum_nav", "unit_nav"):
-                if column in nav_df.columns:
-                    metric_nav = metric_nav.combine_first(pd.to_numeric(nav_df[column], errors="coerce"))
-            nav_df["metric_nav"] = metric_nav
-            nav_df = nav_df[nav_df["metric_nav"].notna() & (nav_df["metric_nav"] > 0)]
-            if len(nav_df) < 10:
-                self._strict_fail(f"Tushare fund_nav returned insufficient usable performance rows for {wind_code}")
+                if column not in nav_df.columns:
+                    continue
+                values = pd.to_numeric(nav_df[column], errors="coerce")
+                usable_values = values.where((values > 0) & (values < float("inf")))
+                if usable_values.notna().sum() >= minimum_source_rows:
+                    nav_df["metric_nav"] = usable_values
+                    break
+            else:
+                self._strict_fail(f"Tushare fund_nav has no consistent NAV column for performance of {wind_code}")
                 return self._mock_performance(wind_code)
+            nav_df = nav_df[nav_df["metric_nav"].notna()]
 
             nav_1y = nav_df[nav_df["nav_date"] >= start_1y]
             if len(nav_1y) >= 2:
@@ -887,8 +888,7 @@ class TushareDataService:
                 annual_vol = daily_returns.std() * (252 ** 0.5)
                 sharpe = (annual_return / annual_vol) if annual_vol > 0 else 0
                 volatility = annual_vol
-                downside_deviation = daily_returns.clip(upper=0).std() * (252 ** 0.5)
-                sortino = (annual_return / downside_deviation) if downside_deviation > 0 else 0
+                sortino = MetricFactory().calculate_downside_metrics(daily_returns.tolist())["sortino_ratio"]
             else:
                 sharpe = 0
                 volatility = 0
