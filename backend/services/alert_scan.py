@@ -1,13 +1,13 @@
 """
 预警扫描服务
 """
-from datetime import date, datetime
+import json
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
 from repositories import get_alert_repo, get_fund_pool_repo, get_manager_repo, get_metric_snapshot_repo
 
-# 现任经理上任多少天内视为“经理变更”，需要重估经理维度结论
 MANAGER_CHANGE_ALERT_DAYS = 30
 
 
@@ -46,7 +46,7 @@ class AlertScanService:
                 if self.max_members_per_status is not None:
                     members = members[:max(0, self.max_members_per_status)]
                 for member in members:
-                    metric_map = self._metric_map(self.metric_repo.get_latest_panel("fund", member["fund_id"]))
+                    metric_map = self._metric_map(self.metric_repo.get_latest_panel("fund", self._member_wind_code(member)))
                     drawdown = metric_map.get("max_drawdown")
                     if drawdown is not None and drawdown <= Decimal("-0.15") and not self._has_open(member["fund_id"], "drawdown"):
                         created_events.append(self.alert_repo.create_event(
@@ -90,6 +90,7 @@ class AlertScanService:
                     manager_change_event = self._manager_change_event(member, pool, status)
                     if manager_change_event is not None:
                         created_events.append(manager_change_event)
+                    created_events.extend(self._manager_departure_events(member, pool, status))
 
         return {
             "status": "completed",
@@ -142,6 +143,52 @@ class AlertScanService:
                 "manager_ids": list(context.get("manager_ids") or []),
             },
         )
+
+    def _manager_departure_events(self, member: Dict[str, Any], pool: Dict[str, Any], status: str) -> List[Dict[str, Any]]:
+        wind_code = self._member_wind_code(member)
+        if not wind_code:
+            return []
+        tenures = self.manager_repo.list_fund_manager_departures(
+            wind_code, self.today - timedelta(days=MANAGER_CHANGE_ALERT_DAYS), self.today,
+        )
+        events = []
+        for tenure in tenures:
+            start_date = tenure["start_date"].isoformat()
+            end_date = tenure["end_date"].isoformat()
+            departure_key = json.dumps(
+                [tenure["manager_id"], start_date, end_date], ensure_ascii=False, separators=(",", ":"),
+            )
+            if self.alert_repo.event_exists(
+                fund_id=member["fund_id"],
+                event_type="manager_change",
+                detail_key="manager_departure_key",
+                detail_value=departure_key,
+            ):
+                continue
+            days_since_end = (self.today - tenure["end_date"]).days
+            events.append(self.alert_repo.create_event(
+                rule_id=None,
+                fund_id=member["fund_id"],
+                pool_member_id=member["id"],
+                event_type="manager_change",
+                severity="high" if status in {"candidate", "core"} else "medium",
+                title="经理变更：经理离任",
+                message=f"经理 {tenure['manager_name']} 于 {end_date} 离任（{days_since_end} 天前），既有经理维度结论需结合团队变化重新核验",
+                status="new",
+                details={
+                    "pool_id": pool["id"],
+                    "member_status": status,
+                    "wind_code": wind_code,
+                    "change_type": "departure",
+                    "departed_manager_id": tenure["manager_id"],
+                    "tenure_start_date": start_date,
+                    "manager_end_date": end_date,
+                    "days_since_manager_end": days_since_end,
+                    "manager_departure_key": departure_key,
+                    "source": tenure["source"],
+                },
+            ))
+        return events
 
     def _weak_peer_metrics(self, fund_id: str) -> List[Dict[str, Any]]:
         try:

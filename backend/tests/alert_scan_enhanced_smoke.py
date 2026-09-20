@@ -57,6 +57,9 @@ class FakeManagerRepo:
     def get_current_fund_tenure_context(self, fund_code):
         return {}
 
+    def list_fund_manager_departures(self, fund_code, start_date, end_date):
+        return []
+
 
 class FakeAlertRepo:
     def __init__(self):
