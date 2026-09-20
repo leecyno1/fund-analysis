@@ -80,11 +80,15 @@ class FundDerivedSeriesService:
                     "value": points[index][1] / previous_nav - 1,
                 })
         elif len(points) >= 2:
+            # 滚动窗口不够，但真实回撤轨迹照常给出，并携带真实历史起止日，
+            # 让前端只隐藏滚动图而不是整段回撤（UAT：短样本回撤隐藏）。
             return {
                 "status": "insufficient_evidence",
                 "observations": len(points),
                 "window": window_key,
                 "nav_basis": basis,
+                "history_start": points[0][0].isoformat(),
+                "history_end": points[-1][0].isoformat(),
                 "drawdown_series": drawdown_series,
                 "rolling_return_series": [],
                 "boundary": cls.BOUNDARY,

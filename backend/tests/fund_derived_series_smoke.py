@@ -64,6 +64,15 @@ def main() -> int:
         raise AssertionError(f"short series must be insufficient evidence: {insufficient}")
     if insufficient.get("rolling_return_series"):
         raise AssertionError("insufficient evidence must not fabricate rolling series")
+    # 短样本只有滚动窗口不够：真实回撤轨迹必须照常给出，且带真实历史起止日，
+    # 否则详情页会把可用的回撤曲线整体隐藏（UAT：短样本回撤隐藏）。
+    if len(insufficient.get("drawdown_series") or []) != 10:
+        raise AssertionError(f"short sample must expose every real drawdown point: {insufficient.get('drawdown_series')}")
+    if insufficient.get("history_start") != rows[0]["date"] or insufficient.get("history_end") != rows[9]["date"]:
+        raise AssertionError(
+            "short sample must carry real history bounds: "
+            f"{insufficient.get('history_start')} ~ {insufficient.get('history_end')}"
+        )
 
     if result.get("nav_basis") != "accum_nav":
         raise AssertionError(f"accum-only rows must keep accum basis: {result.get('nav_basis')}")

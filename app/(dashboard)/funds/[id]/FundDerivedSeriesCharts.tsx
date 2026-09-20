@@ -42,7 +42,9 @@ export default function FundDerivedSeriesCharts({ series }: { series: FundDerive
   const hasDrawdown = series.drawdownSeries.length >= 2
   const hasRolling = series.rollingReturnSeries.length >= 2
 
-  if (series.status === 'insufficient_evidence' || (!hasDrawdown && !hasRolling)) {
+  // 短样本可能只是滚动窗口不够：只要回撤轨迹真实可用就照常展示，
+  // 滚动图由自己的占位说明，不再因 status 整段隐藏（UAT：短样本回撤隐藏）。
+  if (!hasDrawdown && !hasRolling) {
     return (
       <section className="border border-dashed border-[#cbd3cd] bg-white px-6 py-8">
         <div className="flex gap-3 text-sm text-[#65716b]">
@@ -60,6 +62,8 @@ export default function FundDerivedSeriesCharts({ series }: { series: FundDerive
   const rollingValues = series.rollingReturnSeries.map((point) => point.value ?? 0)
   const rollingMin = rollingValues.length ? Math.min(...rollingValues) : 0
   const rollingMax = rollingValues.length ? Math.max(...rollingValues) : 0
+  const historyStart = series.historyStart || series.drawdownSeries[0]?.date || series.rollingReturnSeries[0]?.date || ''
+  const historyEnd = series.historyEnd || series.drawdownSeries.at(-1)?.date || series.rollingReturnSeries.at(-1)?.date || ''
 
   return (
     <section className="overflow-hidden border border-[#dbe1dc] bg-white">
@@ -118,7 +122,7 @@ export default function FundDerivedSeriesCharts({ series }: { series: FundDerive
       </div>
 
       <div className="border-t border-[#e1e6e2] bg-[#fafbf9] px-5 py-3 text-[10px] leading-5 text-[#8a948f]">
-        {formatDate(series.historyStart)} 至 {formatDate(series.historyEnd)} · {series.observations} 个净值日 · {series.boundary}
+        {formatDate(historyStart)} 至 {formatDate(historyEnd)} · {series.observations} 个净值日 · {series.boundary}
       </div>
     </section>
   )

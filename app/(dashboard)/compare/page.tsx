@@ -28,7 +28,8 @@ function parseCodes(value?: string | string[]) {
 
 async function loadComparisonFund(code: string): Promise<ComparisonFund | null> {
   const [snapshotResponse, holdingsResponse] = await Promise.all([
-    fetch(`${backendApiBaseUrl}/api/funds/${encodeURIComponent(code)}/research-snapshot`, { cache: 'no-store' }),
+    // saved 归因证据优先复用（history_reused），无已存现场结果时返回 not_run 占位，不触发现场计算。
+    fetch(`${backendApiBaseUrl}/api/funds/${encodeURIComponent(code)}/research-snapshot?include_attribution=true&live_attribution=false`, { cache: 'no-store' }),
     fetch(`${backendApiBaseUrl}/api/funds/${encodeURIComponent(code)}/holdings?local_only=true`, { cache: 'no-store' }),
   ])
   if (!snapshotResponse.ok) return null
@@ -89,7 +90,7 @@ async function loadComparisonFund(code: string): Promise<ComparisonFund | null> 
   const styleEvidenceRecord = asRecord(assessmentSummary.style_evidence)
   const memoItemsRaw = Array.isArray(researchMemos.items) ? researchMemos.items.map(asRecord) : []
   const memoHighlights = memoItemsRaw.slice(0, 3).map((memo) => {
-    const scopeRaw = textValue(memo.scope || memo.memo_scope).toLowerCase()
+    const scopeRaw = textValue(memo.evidence_scope || memo.scope || memo.memo_scope).toLowerCase()
     const scope: 'fund' | 'manager' | 'other' =
       scopeRaw === 'fund' || scopeRaw === 'fund_specific' ? 'fund'
       : scopeRaw === 'manager' || scopeRaw === 'manager_level' ? 'manager'
@@ -240,6 +241,8 @@ async function loadComparisonFund(code: string): Promise<ComparisonFund | null> 
             isYtd: Boolean(period.is_ytd),
             return: periodReturn,
             coverageStatus: textValue(period.coverage_status),
+            actualStartDate: textValue(period.actual_start_date),
+            actualEndDate: textValue(period.actual_end_date),
             observationCoverage: numberValue(period.observation_coverage),
             rank: numberValue(period.rank),
             peerCount: numberValue(period.peer_count) || 0,

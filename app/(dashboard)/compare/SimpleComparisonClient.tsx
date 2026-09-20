@@ -8,6 +8,7 @@ import { Bar, BarChart, CartesianGrid, Legend, Line, LineChart, PolarAngleAxis, 
 import type { CamelFund } from '@/lib/backend-api'
 import EvidenceTriptychStrip from './EvidenceTriptychStrip'
 import DecisionSupportPanel from './DecisionSupportPanel'
+import { buildYearlyChartData } from './yearlyChartData'
 import {
   asRecord,
   formatAsset,
@@ -39,6 +40,8 @@ type CalendarPeriodPerformance = {
   isYtd: boolean
   return: number
   coverageStatus: string
+  actualStartDate: string
+  actualEndDate: string
   observationCoverage: number | null
   rank: number | null
   peerCount: number
@@ -470,17 +473,17 @@ export default function SimpleComparisonClient({ funds, alignedComparison, holdi
     }
     return row
   }), [funds, window, radarDimensions])
-  const yearlyChartData = useMemo(() => [...calendarYears].sort((left, right) => left - right).map((year) => {
-    const row: Record<string, number | string | null> = {
-      year: funds.flatMap((item) => item.periodPerformance.periods).find((period) => period.year === year)?.label || `${year} 年`,
-    }
-    for (const item of funds) {
-      const period = item.periodPerformance.periods.find((entry) => entry.year === year)
-      row[item.fund.windCode] = period && period.coverageStatus === 'complete' ? Number((period.return * 100).toFixed(2)) : null
-    }
-    return row
-  }).filter((row) => funds.some((item) => typeof row[item.fund.windCode] === 'number')), [calendarYears, funds])
+  const yearlyChartData = useMemo(() => buildYearlyChartData(
+    funds.map((item) => ({ windCode: item.fund.windCode, periods: item.periodPerformance.periods })),
+    calendarYears,
+  ), [calendarYears, funds])
   const yearlyChartReady = yearlyChartData.length > 0
+  const navCutoffDates = funds.map((item) => item.periodPerformance.latestNavDate).filter(Boolean).sort()
+  const navCutoffLabel = navCutoffDates.length === 0
+    ? '最近净值截至 —'
+    : navCutoffDates[0] === navCutoffDates[navCutoffDates.length - 1]
+      ? `最近净值截至 ${navCutoffDates[0]}`
+      : `各基金净值截止日不同（${navCutoffDates[0]} ~ ${navCutoffDates[navCutoffDates.length - 1]}）`
 
   async function searchFunds() {
     const keyword = query.trim()
@@ -944,7 +947,7 @@ export default function SimpleComparisonClient({ funds, alignedComparison, holdi
                   <h2 className="flex items-center gap-2 text-lg font-bold"><CalendarRange className="h-5 w-5 text-[#28745c]" />年度业绩稳定性</h2>
                   <p className="mt-1 text-xs leading-6 text-[#7a8580]">按自然年度比较真实净值收益、同类名次和同类中位数，优先看多年表现是否持续。</p>
                 </div>
-                <span className="text-xs text-[#7a8580]">最近净值截至 {funds.map((item) => item.periodPerformance.latestNavDate).filter(Boolean).sort().at(0) || '—'}</span>
+                <span className="text-xs text-[#7a8580]">{navCutoffLabel}</span>
               </div>
               {yearlyChartReady ? (
                 <div className="border-b border-[#e1e6e2] p-5 sm:p-6">
@@ -962,7 +965,7 @@ export default function SimpleComparisonClient({ funds, alignedComparison, holdi
                       </BarChart>
                     </ResponsiveContainer>
                   </div>
-                  <p className="mt-3 text-[10px] leading-5 text-[#87918c]">只绘制净值覆盖完整的自然年度收益；部分区间、同类名次和同类中位数见下表。</p>
+                  <p className="mt-3 text-[10px] leading-5 text-[#87918c]">只绘制净值覆盖完整、且同年净值截止日一致的自然年度收益；截止日不一致或部分区间、同类名次和同类中位数见下表。</p>
                 </div>
               ) : null}
               <div className="overflow-x-auto">
@@ -998,6 +1001,9 @@ export default function SimpleComparisonClient({ funds, alignedComparison, holdi
                                   ? `中位数 ${formatSignedPercent(period.peerMedianReturn)}`
                                   : `净值覆盖 ${period.observationCoverage == null ? '—' : `${(period.observationCoverage * 100).toFixed(0)}%`}`}
                               </span>
+                              {period.isYtd && period.actualEndDate ? (
+                                <span className="mt-1 block text-[10px] text-[#929b96]">截至 {formatDate(period.actualEndDate)}</span>
+                              ) : null}
                             </td>
                           )
                         })}
