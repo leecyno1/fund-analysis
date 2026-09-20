@@ -4,6 +4,7 @@ Tushare 数据服务 - 替代 Wind API 获取基金和经理数据
 import os
 import re
 import time
+import math
 import logging
 import hashlib
 import csv
@@ -383,15 +384,15 @@ class TushareDataService:
             result = []
             df = df.sort_values("nav_date")
             minimum_source_rows = max(2, int(len(df) * 0.6))
-            metric_nav_source = next(
-                (
-                    column
-                    for column in ("adj_nav", "accum_nav", "unit_nav")
-                    if column in df.columns
-                    and pd.to_numeric(df[column], errors="coerce").notna().sum() >= minimum_source_rows
-                ),
-                None,
-            )
+            metric_nav_source = None
+            for column in ("adj_nav", "accum_nav", "unit_nav"):
+                if column not in df.columns:
+                    continue
+                values = pd.to_numeric(df[column], errors="coerce")
+                usable_values = values.where((values > 0) & (values < float("inf")))
+                if usable_values.notna().sum() >= minimum_source_rows:
+                    metric_nav_source = column
+                    break
             if metric_nav_source is None:
                 self._strict_fail(f"Tushare fund_nav has no consistent NAV column for {wind_code}")
                 return []
@@ -406,10 +407,15 @@ class TushareDataService:
                 if len(date_str) == 8:
                     date_str = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"
                 metric_nav = _as_float(row.get(metric_nav_source))
-                if metric_nav is None or metric_nav <= 0:
+                if metric_nav is None or metric_nav <= 0 or not math.isfinite(metric_nav):
                     continue
-                unit_nav = _as_float(row.get("unit_nav")) or metric_nav
+                unit_nav = _as_float(row.get("unit_nav"))
+                if unit_nav is not None and not math.isfinite(unit_nav):
+                    unit_nav = None
+                unit_nav = unit_nav or metric_nav
                 adjusted_nav = _as_float(row.get("adj_nav"))
+                if adjusted_nav is not None and not math.isfinite(adjusted_nav):
+                    adjusted_nav = None
                 accum_nav = metric_nav
                 daily_return = None
                 if previous_accum_nav and accum_nav:

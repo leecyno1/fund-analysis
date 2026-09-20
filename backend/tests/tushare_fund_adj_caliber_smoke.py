@@ -1,3 +1,4 @@
+import math
 import os
 import sys
 from datetime import date, timedelta
@@ -63,6 +64,51 @@ class FakeProWithoutAdj:
         ])
 
 
+class FakeProWithDirtyAdj:
+    """复权列混入 0/负数/inf：非有限正数的虚假覆盖不得让 adj_nav 入选。"""
+
+    def fund_nav(self, **kwargs):
+        start = date.today() - timedelta(days=DAYS - 1)
+        rows = []
+        for offset in range(DAYS):
+            if offset < 6:
+                adj_nav = 1.0 + offset * 0.001
+            elif offset < 10:
+                adj_nav = 0.0
+            elif offset < 13:
+                adj_nav = -1.0
+            elif offset < 16:
+                adj_nav = float("inf")
+            else:
+                adj_nav = None
+            rows.append({
+                "ts_code": "000003.OF",
+                "nav_date": (start + timedelta(days=offset)).strftime("%Y%m%d"),
+                "unit_nav": 1.0 + offset * 0.001,
+                "accum_nav": 1.0 + offset * 0.001,
+                "adj_nav": adj_nav,
+            })
+        return pd.DataFrame(rows)
+
+
+class FakeProWithInfTail:
+    """复权列整体可用但末尾数行为 inf：inf 行不得泄漏进净值序列。"""
+
+    def fund_nav(self, **kwargs):
+        start = date.today() - timedelta(days=DAYS - 1)
+        rows = []
+        for offset in range(DAYS):
+            adj_nav = float("inf") if offset >= DAYS - 5 else 1.0 + offset * 0.001
+            rows.append({
+                "ts_code": "000004.OF",
+                "nav_date": (start + timedelta(days=offset)).strftime("%Y%m%d"),
+                "unit_nav": 1.0 + offset * 0.001,
+                "accum_nav": 1.0 + offset * 0.001,
+                "adj_nav": adj_nav,
+            })
+        return pd.DataFrame(rows)
+
+
 def build_service(fake_pro) -> TushareDataService:
     service = TushareDataService(token="test", mock_mode=True)
     service.mock_mode = False
@@ -98,6 +144,23 @@ def main() -> int:
     fallback_series = fallback.get_fund_nav("000002.OF", "2020-01-01", "2099-01-01")
     if any(item.get("metric_nav_source") != "tushare.fund_nav.accum_nav" for item in fallback_series):
         raise AssertionError(f"without fund_adj the caliber must fall back to accum_nav: {fallback_series[0]}")
+
+    dirty = build_service(FakeProWithDirtyAdj())
+    dirty_series = dirty.get_fund_nav("000003.OF", "2020-01-01", "2099-01-01")
+    if any(item.get("metric_nav_source") != "tushare.fund_nav.accum_nav" for item in dirty_series):
+        raise AssertionError(f"adj_nav kept alive only by 0/negative/inf values must fall back to accum_nav: {dirty_series[0]}")
+    if len(dirty_series) != DAYS:
+        raise AssertionError(f"fallback caliber must keep the full series: got {len(dirty_series)}, expected {DAYS}")
+
+    inf_tail = build_service(FakeProWithInfTail())
+    inf_tail_series = inf_tail.get_fund_nav("000004.OF", "2020-01-01", "2099-01-01")
+    if len(inf_tail_series) != DAYS - 5:
+        raise AssertionError(f"inf rows must be dropped from the nav series: got {len(inf_tail_series)}, expected {DAYS - 5}")
+    for name, series in (("dirty", dirty_series), ("inf_tail", inf_tail_series)):
+        for item in series:
+            for key, value in item.items():
+                if isinstance(value, float) and not math.isfinite(value):
+                    raise AssertionError(f"{name} series must never contain non-finite values: {key}={value} at {item.get('date')}")
 
     performance_service = build_service(fake_pro)
     performance = performance_service.get_fund_performance("000001.OF")
