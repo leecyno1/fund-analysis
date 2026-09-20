@@ -1389,6 +1389,38 @@ async def get_fund_nav(
     return _clean_nan(result)
 
 
+@router.get("/{wind_code}/dividends")
+async def get_fund_dividends(
+    wind_code: str,
+    limit: int = Query(100, description="最多返回条数(1-500)"),
+):
+    """获取基金分红事件（本地优先，缺失时回退 tushare fund_div；从未分红返回空列表）"""
+    from services.cache_service import get_cache, TTL
+    from repositories import get_fund_dividends_repo
+    from service_registry import get_data_service
+
+    cache = get_cache()
+    cache_key = f"fund:dividends:v1:{wind_code}:{limit}"
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    data = get_fund_dividends_repo().list_fund_dividends(wind_code, limit=limit)
+    source = "local.postgres.fund_dividends"
+    if not data:
+        data = get_data_service().get_fund_dividends(wind_code)
+        source = "tushare.fund_div"
+
+    result = {
+        "wind_code": wind_code,
+        "count": len(data),
+        "source": source,
+        "data": data,
+    }
+    cache.set(cache_key, result, TTL.LONG)
+    return _clean_nan(result)
+
+
 @router.get("/{wind_code}/holding-experience")
 async def get_fund_holding_experience(wind_code: str):
     """回放历史买入日下的 1/3/6/12 个月持有体验。"""
