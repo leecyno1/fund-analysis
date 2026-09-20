@@ -1065,6 +1065,9 @@ def init_database():
 
     try:
         with engine.connect() as conn:
+            # 启动 DDL 若被长读事务阻塞（ALTER 需 ACCESS EXCLUSIVE），5 秒后放弃
+            # 而不是无限等待；语句全部幂等，读事务结束后下次调用自然补齐
+            conn.execute(text("SET LOCAL lock_timeout = '5s'"))
             for sql in tables:
                 conn.execute(text(sql))
             for sql in migrations:
