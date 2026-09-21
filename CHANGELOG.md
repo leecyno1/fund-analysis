@@ -2,6 +2,27 @@
 
 本项目的重要变更记录。历史版本（1.0.0 及以前的阶段总结）见 `docs/history/CHANGELOG.md`。
 
+## [2.2.2] - 2026-09-21
+
+覆盖 2026-09-20/21 的 UAT 遗留缺口闭环（五项，`18f68a6`…`8961e96`）与冒烟测试基线全绿恢复（`819983d` + `42c749b`）。
+
+### Fixed
+
+- **净值口径与 lineage 全链路统一**（09-20 `18f68a6`）：`get_fund_nav` 与 `get_fund_performance` 的口径列选择加有限正数过滤——adj_nav 列若只剩 0/负值/inf 的"假活"值，不再被误选为业绩口径，按 adj>accum>unit 顺延到首个真实可用列；逐行守卫拦截非有限净值（NaN/Inf 不落库不进序列）；输出守卫让 `unit_nav`/`adjusted_nav` 非有限时置 None。生产库抽查证实复权口径可中和分红跳空（019510.OF 单位净值区间收益 -2.90% vs 复权 -0.58%）。顺带纠正 `fund_nav_dedup_smoke` 自始写反的降序断言（实现自始 ASC，前端 NavChart 按返回顺序绘图需要升序）。
+- **分红数据接入复权计算闭环**（09-20 `6f192c6`）：新增 `GET /api/funds/{code}/dividends`（本地 `fund_dividends` 优先，缺失回退 tushare `fund_div`，从未分红返回空列表并带 source lineage）——此前 530 基金 4764 条分红事件只写不读，复权链路缺最后一环。
+- **基金池成员标识混用归一**（09-20 `bd66f86`）：系统审计确认 UUID/代码混写的唯一真实缺口是 `add_fund_to_pool`——修复为入库统一归一为 wind_code（经 funds 表反查），存在性检查用别名集合（wind_code/UUID/原始值）去重，同一基金的两种历史别名不再重复入池；生产库仅 4 条测试残留，无需回填。
+- **启动 DDL 无锁超时**（09-20 `b7904d3`）：`init_database` 建表前置 `SET LOCAL lock_timeout = '5s'`——ALTER 需 ACCESS EXCLUSIVE 锁，若被长读事务阻塞（此前真实观测过启动卡死），5 秒后放弃而非无限等待；语句全部幂等，读事务结束后下次调用自然补齐。Redis/Mongo/Qdrant 降级路径核实已内建且有冒烟覆盖，无需改动。
+- **前端 UAT 四项展示缺陷**（09-21 `8961e96`）：① 比较页快照请求补 `include_attribution=true&live_attribution=false`（复用已存归因证据 history_reused，不触发现场计算），归因证据不再恒显"尚未运行"占位；② 纪要证据层级优先读 `evidence_scope`（fund_specific/manager_level），基金级/经理级标签不再落入"其他"；③ 短样本仅缺滚动窗口时回撤轨迹照常展示（派生序列服务短样本分支补 `history_start/end`，前端另有 fallback）；④ 年度图同年各基金净值截止日不一致时不再直接并柱（新纯函数模块 `compare/yearlyChartData.ts`：只保留多数截止日组，并列取最新），表头显式披露截止日区间，YTD 单元格标注"截至 日期"。
+
+### Changed
+
+- **冒烟测试基线全绿恢复**（09-21 `819983d` + `42c749b`）：批量跑 `scripts/*.mjs` 发现 22 个失败，经三组并行甄别确认为 21 个历史重构漏同步的陈旧断言 + 1 个真实数据缺口，全部处理后批量验收 **121/122 通过**。修复模式遵循 5077473 确立的"边界语义不变，仅换锚文本"惯例：锚点跟随 `/sales-rules → /evidence-coverage` 路由归一与 `MATERIAL_EVIDENCE_VALIDATION_FAILED` 错误码改名、discover 三层组件拆分、`buy-evidence → research-evidence` 与 `pre-purchase-report → research-review-report` 实现搬家（原路径只剩转发 stub）、净值 adj 优先口径、同类样本下限分类化（`category_specific_peer_metric_proxy`）。两个 smoke 按现行边界改写：`manager_buy_before_evidence`（经理页纯研究视角禁购买入口 + "补充名下基金材料"引导必须落到逐基金核验页 + 经理分析报告购买口径完整保留）、`fund_pool_sales_rule_gate`（自建 rejected 夹具 → 测 409 门禁 → DELETE 自清理，不再依赖历史残留池数据）。5 个 smoke 补进 acceptance staticChecks 接线（其"被收录"断言此前从未成立）。
+- **真实数据缺口如实保留**：`fund_manager_detail_smoke` 仍红——`managerAssessment` 需 ≥1 在管任期 `performance_snapshot=available`，全库 84962 条任期仅 29 条 available（09-20 批量写入）；邹立虎卡 `partial_tenure_coverage`、许拓全部产品基准曲线 `data_unavailable`。属数据覆盖积累问题而非代码缺陷，待每日快照调度积累（或经理级同步）后自然转绿。
+
+### Removed
+
+- **`wind_service_no_implicit_mock_smoke` 删除**（09-21 `42c749b`）：守护对象 `backend/services/wind_service.py` 与 `backend/wind_service/` 已随 16a0ad8（v2.0.0 四代合并）作为一代 Wind 死资产删除，该 smoke 为漏网；"数据层不得隐式 mock"的守护由 Tushare `strict_no_mock=True`（`real_data_sync_strict_gate_smoke`）与 `style_exposure_no_mock_smoke` 等现行 smoke 承担。顺带清理 `backend/wind_service/__pycache__` 孤儿字节码残骸。
+
 ## [2.2.1] - 2026-09-11
 
 修复上线迭代遗留的调度环境缺陷，并重建项目上下文记忆（历史 quest 归档 + 交接文档校正）。
