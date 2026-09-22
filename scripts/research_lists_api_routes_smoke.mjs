@@ -48,7 +48,7 @@ assertIncludes(legacyFundPoolShortlistRoute, "export { GET } from '../../../mark
 assertIncludes(legacyFundPoolMemberPatchRoute, "export { PATCH } from '../../../market/research-lists/members/[memberId]/route'", 'legacy fund-pool member patch route delegates canonical route')
 
 const activeSurfaces = [
-  'app/(dashboard)/funds/[id]/FundDetailClient.tsx',
+  'app/(dashboard)/funds/[id]/SimpleFundDetailClient.tsx',
   'app/(dashboard)/market/MarketBrowserClient.tsx',
   'app/(dashboard)/analysis/[id]/AnalysisDetailClient.tsx',
   'app/(dashboard)/analysis/comparison/page.tsx',

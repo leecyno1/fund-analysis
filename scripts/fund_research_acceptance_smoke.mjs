@@ -56,7 +56,6 @@ const staticChecks = [
   'scripts/comparison_research_semantics_smoke.mjs',
   'scripts/market_browser_smoke.mjs',
   'scripts/fund_detail_methodology_focus_smoke.mjs',
-  'scripts/fund_detail_research_semantics_smoke.mjs',
   'scripts/nav_chart_no_mock_smoke.mjs',
   'scripts/fund_holding_exposure_smoke.mjs',
   'scripts/evidence_coverage_holdings_smoke.mjs',
