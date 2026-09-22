@@ -4,7 +4,7 @@
 
 ## [2.2.2] - 2026-09-21
 
-覆盖 2026-09-20/21 的 UAT 遗留缺口闭环（五项，`18f68a6`…`8961e96`）与冒烟测试基线全绿恢复（`819983d` + `42c749b`）。
+覆盖 2026-09-20/21 的 UAT 遗留缺口闭环（五项，`18f68a6`…`8961e96`）、冒烟测试基线全绿恢复（`819983d` + `42c749b`）与 09-22 追加的详情页研究画像边界清理（`e9fbab5`）、服务重启上线与经理任期补数。**最终冒烟批量验收 121/121 全绿。**
 
 ### Fixed
 
@@ -14,10 +14,14 @@
 - **启动 DDL 无锁超时**（09-20 `b7904d3`）：`init_database` 建表前置 `SET LOCAL lock_timeout = '5s'`——ALTER 需 ACCESS EXCLUSIVE 锁，若被长读事务阻塞（此前真实观测过启动卡死），5 秒后放弃而非无限等待；语句全部幂等，读事务结束后下次调用自然补齐。Redis/Mongo/Qdrant 降级路径核实已内建且有冒烟覆盖，无需改动。
 - **前端 UAT 四项展示缺陷**（09-21 `8961e96`）：① 比较页快照请求补 `include_attribution=true&live_attribution=false`（复用已存归因证据 history_reused，不触发现场计算），归因证据不再恒显"尚未运行"占位；② 纪要证据层级优先读 `evidence_scope`（fund_specific/manager_level），基金级/经理级标签不再落入"其他"；③ 短样本仅缺滚动窗口时回撤轨迹照常展示（派生序列服务短样本分支补 `history_start/end`，前端另有 fallback）；④ 年度图同年各基金净值截止日不一致时不再直接并柱（新纯函数模块 `compare/yearlyChartData.ts`：只保留多数截止日组，并列取最新），表头显式披露截止日区间，YTD 单元格标注"截至 日期"。
 
+- **真实数据缺口已闭环**（09-22）：`fund_manager_detail_smoke` 曾因 `managerAssessment` 需 ≥1 在管任期 `performance_snapshot=available` 而红（全库 84962 条任期仅 29 条 available）。注意 `GET /api/data-sync/managers/{id}` 只 upsert 经理与基金基础信息、**不写任期绩效快照**；正确入口是 `backend/scripts/sync_fund_manager_tenure.py --manager-id`（`FundManagerTenureSyncService.sync_manager`，实时 Tushare 净值+基准落库）。对张仲维执行后 6 条在管任期全部 available（16233 净值点、6304 基准点），smoke 转绿。
+
 ### Changed
 
-- **冒烟测试基线全绿恢复**（09-21 `819983d` + `42c749b`）：批量跑 `scripts/*.mjs` 发现 22 个失败，经三组并行甄别确认为 21 个历史重构漏同步的陈旧断言 + 1 个真实数据缺口，全部处理后批量验收 **121/122 通过**。修复模式遵循 5077473 确立的"边界语义不变，仅换锚文本"惯例：锚点跟随 `/sales-rules → /evidence-coverage` 路由归一与 `MATERIAL_EVIDENCE_VALIDATION_FAILED` 错误码改名、discover 三层组件拆分、`buy-evidence → research-evidence` 与 `pre-purchase-report → research-review-report` 实现搬家（原路径只剩转发 stub）、净值 adj 优先口径、同类样本下限分类化（`category_specific_peer_metric_proxy`）。两个 smoke 按现行边界改写：`manager_buy_before_evidence`（经理页纯研究视角禁购买入口 + "补充名下基金材料"引导必须落到逐基金核验页 + 经理分析报告购买口径完整保留）、`fund_pool_sales_rule_gate`（自建 rejected 夹具 → 测 409 门禁 → DELETE 自清理，不再依赖历史残留池数据）。5 个 smoke 补进 acceptance staticChecks 接线（其"被收录"断言此前从未成立）。
-- **真实数据缺口如实保留**：`fund_manager_detail_smoke` 仍红——`managerAssessment` 需 ≥1 在管任期 `performance_snapshot=available`，全库 84962 条任期仅 29 条 available（09-20 批量写入）；邹立虎卡 `partial_tenure_coverage`、许拓全部产品基准曲线 `data_unavailable`。属数据覆盖积累问题而非代码缺陷，待每日快照调度积累（或经理级同步）后自然转绿。
+- **基金详情页研究画像边界确认与死代码清理**（09-22 `e9fbab5`，用户确认）：删除 `FundDetailClient.tsx`（357KB、零引用——e3478bb 切换 SimpleFundDetailClient 后仅剩 11 个冒烟的源码锚点在维持假绿）与其唯一调用者 `app/api/funds/[id]/route.ts`（每次请求预取销售规则告警/同类分位/买前证据却无人渲染）。购买门禁 UI 不复活：购买路径在 /market、/analysis/fund、/evidence-coverage 与正式研究复核报告（服务端硬门禁）中提供；11 个冒烟守护迁移至现行边界（详情页禁购买入口、类别专属评价方法卡、同类样本门禁、专业评分就绪才渲染、材料证据与 review-events 反向守护重定向），删除 `fund_detail_research_semantics_smoke`（全部断言守护死组件专属文案）。`local_real_flow_smoke` 的详情步骤同步改走现行流程（/funds/{code} 页面 + research-snapshot，buyEvidence 由 compare-matrix 步骤逐基金验证）。
+- **服务重启上线**（09-22，用户授权）：后端 `launchctl kickstart` 加载全部新代码（分红端点实测本地源返回、派生序列带真实起止日）；前端 bootout → `next build` → bootstrap（从 `~/Library/LaunchAgents/` 加载，从仓库路径 bootstrap 报 error 5）。浏览器 DOM 级验证 #29 修复真实生效：两只测试基金 2026 年净值截止日不同（9/18 vs 9/11），新逻辑不再并柱、表头披露"各基金净值截止日不同（2026-09-11 ~ 2026-09-18）"、逐基金"截至"标注显示，控制台零错误。
+- **3000 端口抢占夺回**（09-22）：前端停服构建期间被 newma-desk `dev-stack.mjs`（自有 LaunchAgent `com.newma.desk.dev`）的 fund-analysis **dev 模式捆绑副本**抢占 3000——与此前 8005 被抢占同款冲突。按既定解法只杀占用端口的子进程树（不动 dev-stack 本体，它还管 8011/8788/3001 等其他项目端口），立即 kickstart 本项目前端夺回端口；隐患仍在：本项目前端任何停服窗口都可能再次被抢占。
+- **冒烟测试基线全绿恢复**（09-21 `819983d` + `42c749b`）：批量跑 `scripts/*.mjs` 发现 22 个失败，经三组并行甄别确认为 21 个历史重构漏同步的陈旧断言 + 1 个真实数据缺口，全部处理后批量验收通过。修复模式遵循 5077473 确立的"边界语义不变，仅换锚文本"惯例：锚点跟随 `/sales-rules → /evidence-coverage` 路由归一与 `MATERIAL_EVIDENCE_VALIDATION_FAILED` 错误码改名、discover 三层组件拆分、`buy-evidence → research-evidence` 与 `pre-purchase-report → research-review-report` 实现搬家（原路径只剩转发 stub）、净值 adj 优先口径、同类样本下限分类化（`category_specific_peer_metric_proxy`）。两个 smoke 按现行边界改写：`manager_buy_before_evidence`（经理页纯研究视角禁购买入口 + "补充名下基金材料"引导必须落到逐基金核验页 + 经理分析报告购买口径完整保留）、`fund_pool_sales_rule_gate`（自建 rejected 夹具 → 测 409 门禁 → DELETE 自清理，不再依赖历史残留池数据）。5 个 smoke 补进 acceptance staticChecks 接线（其"被收录"断言此前从未成立）。
 
 ### Removed
 
