@@ -323,7 +323,10 @@ npm run smoke:fund-recommendations
 export FRONTEND_BASE_URL=http://127.0.0.1:3000 BACKEND_API_URL=http://127.0.0.1:8005 APP_BASE_URL=http://127.0.0.1:3000
 for s in scripts/*.mjs; do node "$s" >/dev/null 2>&1 || echo "FAIL $s"; done   # 无输出即全绿
 
-# 后端（当前基线 136 过 / 19 个既有环境性失败：缺 sys.path 注入家族、SQLite/PG 方言、Qdrant 未运行等，清理进行中）
+# 后端（基线 152 过 / 3 个环境依赖失败：research_reports_crud、vector_db、semantic_warmup
+#  —— 依赖 Docker 基础设施，报告写路径走 MongoDB、向量检索走 Qdrant；Docker daemon 未运行时这三个
+#  必然失败。需全绿时：open -a Docker，待 daemon 就绪后 docker compose up -d mongo qdrant（在 基金筛选/ 目录，
+#  只起这两个容器，postgres/redis 不要起——PG 用的是本地 Homebrew 实例））
 cd backend && for t in tests/*.py; do ../.venv/bin/python "$t" >/dev/null 2>&1 || echo "FAIL $t"; done
 ```
 
