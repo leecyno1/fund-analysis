@@ -241,7 +241,7 @@ class PostgresLocalResearchFolderRepo:
         "review_proposals", "review_status", "local_folder_id", "local_relative_path",
         "local_source_path", "source_hash", "extraction_status", "extraction_provider",
         "extraction_model", "llm_extraction_status", "llm_extraction_error", "created_at",
-        "updated_at",
+        "updated_at", "embedding_status", "embedding_source",
     }
     JSON_FIELDS = {"key_points", "review_proposals", "last_scan_counts"}
 
@@ -582,6 +582,20 @@ class PostgresLocalResearchFolderRepo:
         with self.engine.connect() as conn:
             row = conn.execute(text("SELECT * FROM research_reports WHERE id = CAST(:id AS UUID)"), {"id": report_id}).fetchone()
         return self._with_manager_links(self._row(row))
+
+    def delete_report(self, report_id: str) -> bool:
+        from sqlalchemy import text
+
+        with self.engine.begin() as conn:
+            conn.execute(
+                text("DELETE FROM research_report_managers WHERE report_id = CAST(:id AS UUID)"),
+                {"id": report_id},
+            )
+            result = conn.execute(
+                text("DELETE FROM research_reports WHERE id = CAST(:id AS UUID)"),
+                {"id": report_id},
+            )
+        return bool(result.rowcount)
 
     def list_reports(
         self,

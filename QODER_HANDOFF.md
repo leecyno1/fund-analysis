@@ -107,6 +107,7 @@ npm run dev
 
 ## 4. 数据与证据边界
 
+- **MongoDB 已从报告链路移除（2026-09-23）**：调研报告 CRUD 写路径、AI 报告历史/详情读路径、AI 报告生成管线中的纪要与画像读取，全部归一 PostgreSQL（与既有读路径同库）。上传报告现在立即可在列表检索（此前写 Mongo 读 PG 互不相通）；`/api/reports/history` 此前恒空（读从未运行的 Mongo）也已修复。Mongo 仍被 `scoring.py` 的 scores 集合引用（Mongo 缺失时该评分历史接口空转，未动）。
 - 基金必须先分类，再进入同类评价。
 - 不跨类别比较，不用短期收益冠军直接推荐。
 - Barra / Brinson 只用于解释，不进入基金综合评分。
@@ -323,10 +324,8 @@ npm run smoke:fund-recommendations
 export FRONTEND_BASE_URL=http://127.0.0.1:3000 BACKEND_API_URL=http://127.0.0.1:8005 APP_BASE_URL=http://127.0.0.1:3000
 for s in scripts/*.mjs; do node "$s" >/dev/null 2>&1 || echo "FAIL $s"; done   # 无输出即全绿
 
-# 后端（基线 152 过 / 3 个环境依赖失败：research_reports_crud、vector_db、semantic_warmup
-#  —— 依赖 Docker 基础设施，报告写路径走 MongoDB、向量检索走 Qdrant；Docker daemon 未运行时这三个
-#  必然失败。需全绿时：open -a Docker，待 daemon 就绪后 docker compose up -d mongo qdrant（在 基金筛选/ 目录，
-#  只起这两个容器，postgres/redis 不要起——PG 用的是本地 Homebrew 实例））
+# 后端（基线 152/152 全绿，自 09-23 起不再依赖 Docker：报告读写已全部归一 PostgreSQL，
+#  Qdrant 语义检索死链路与 Mongo 写路径已移除，详见 CHANGELOG 2.2.2）
 cd backend && for t in tests/*.py; do ../.venv/bin/python "$t" >/dev/null 2>&1 || echo "FAIL $t"; done
 ```
 

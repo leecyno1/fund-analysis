@@ -1048,6 +1048,8 @@ def init_database():
         "ALTER TABLE fund_bond_holdings ADD COLUMN IF NOT EXISTS metadata_source TEXT",
         "ALTER TABLE fund_bond_holdings ADD COLUMN IF NOT EXISTS metadata_url TEXT",
         "ALTER TABLE fund_bond_holdings ADD COLUMN IF NOT EXISTS metadata_status VARCHAR(30) NOT NULL DEFAULT 'unavailable'",
+        "ALTER TABLE research_reports ADD COLUMN IF NOT EXISTS embedding_status VARCHAR(30) NOT NULL DEFAULT 'unavailable'",
+        "ALTER TABLE research_reports ADD COLUMN IF NOT EXISTS embedding_source VARCHAR(60) NOT NULL DEFAULT 'keyword_only_no_mock'",
         """INSERT INTO research_report_managers (
                 report_id, manager_id, manager_name, source, confirmed_at
             )

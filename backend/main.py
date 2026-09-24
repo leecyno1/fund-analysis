@@ -104,15 +104,6 @@ async def lifespan(app: FastAPI):
     if db is not None:
         logger.info("MongoDB connected (research reports)")
 
-    # 初始化向量数据库
-    try:
-        from services.vector_db_service import get_vector_db
-        vector_db = get_vector_db()
-        info = vector_db.get_collection_info()
-        logger.info(f"Vector DB connected: {info.get('name')} with {info.get('points_count', 0)} points")
-    except Exception as e:
-        logger.warning(f"Vector DB init warning: {e}")
-
     logger.info("Application startup complete")
     yield
     logger.info("Application shutdown")

@@ -124,14 +124,6 @@ FOF 只有在净值指标齐全、且最新公开底层基金至少 5 只并覆�
 
 IMA 凭证可通过 `IMA_OPENAPI_CLIENTID`、`IMA_OPENAPI_APIKEY` 环境变量传入，也可保存在本机 `~/.config/ima/`，不写入仓库。同步时会跳过云端已有文件，只上传新增纪要。
 
-## Docker
-
-```bash
-docker compose up -d --build
-```
-
-Docker 使用仓库根目录 Next.js 应用和 `backend/main.py`。
-
 ## 数据原则
 
 - 基金必须先分类，再做同类评价。
