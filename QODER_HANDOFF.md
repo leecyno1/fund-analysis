@@ -107,7 +107,7 @@ npm run dev
 
 ## 4. 数据与证据边界
 
-- **MongoDB 已从报告链路移除（2026-09-23）**：调研报告 CRUD 写路径、AI 报告历史/详情读路径、AI 报告生成管线中的纪要与画像读取，全部归一 PostgreSQL（与既有读路径同库）。上传报告现在立即可在列表检索（此前写 Mongo 读 PG 互不相通）；`/api/reports/history` 此前恒空（读从未运行的 Mongo）也已修复。Mongo 仍被 `scoring.py` 的 scores 集合引用（Mongo 缺失时该评分历史接口空转，未动）。
+- **MongoDB 已从报告链路移除（2026-09-23）**：调研报告 CRUD 写路径、AI 报告历史/详情读路径、AI 报告生成管线中的纪要与画像读取，全部归一 PostgreSQL（与既有读路径同库）。上传报告现在立即可在列表检索（此前写 Mongo 读 PG 互不相通）；`/api/reports/history` 此前恒空（读从未运行的 Mongo）也已修复。MongoDB 依赖已于 2026-09-24 彻底移除（`172bbd2`）：`service_registry` 的 `get_db` 连接器与 Mongo 版 repo 类均已删除，后端运行栈为 PostgreSQL + 本地缓存，零外部服务。
 - 基金必须先分类，再进入同类评价。
 - 不跨类别比较，不用短期收益冠军直接推荐。
 - Barra / Brinson 只用于解释，不进入基金综合评分。
