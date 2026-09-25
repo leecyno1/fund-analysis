@@ -30,7 +30,7 @@ import json
 
 from routes import funds, fund_companies, home, managers, scoring, reports, research_reports, research_memos, research_folders, watchlists
 from routes import attribution, barra, brinson, export, data_sync, data_health, metrics, fund_pools, alerts, investment_analysis, fund_browser, market_indices, newma_desk, investment_theses, anomaly_scanner, fund_watches, research_queue, decision_postmortems, research_decision_logs, research_signals, decision_support, portfolio
-from service_registry import get_data_service, get_scoring_engine, get_db
+from service_registry import get_data_service, get_scoring_engine
 
 logging.basicConfig(
     level=os.environ.get("LOG_LEVEL", "INFO"),
@@ -99,10 +99,6 @@ async def lifespan(app: FastAPI):
         init_database()
     except Exception as e:
         logger.warning(f"Database init warning: {e}")
-
-    db = get_db()
-    if db is not None:
-        logger.info("MongoDB connected (research reports)")
 
     logger.info("Application startup complete")
     yield

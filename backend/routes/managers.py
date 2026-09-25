@@ -23,8 +23,8 @@ def _clean_nan(obj):
 
 
 def _get_services():
-    from service_registry import get_data_service, get_scoring_engine, get_db
-    return get_data_service(), get_scoring_engine(), get_db()
+    from service_registry import get_data_service, get_scoring_engine
+    return get_data_service(), get_scoring_engine()
 
 
 @router.get("/browser")
@@ -63,7 +63,7 @@ async def list_managers(
     """获取基金经理列表（优化版：跳过昂贵的 fund performance/risk/style 调用）"""
     from services.cache_service import get_cache, TTL
 
-    data_svc, _, db = _get_services()
+    data_svc, _ = _get_services()
     cache = get_cache()
 
     try:
@@ -280,7 +280,7 @@ async def generate_manager_profile(manager_id: str):
 @router.get("/{manager_id}/score")
 async def get_manager_score(manager_id: str):
     """获取经理评分（兼容前端）"""
-    data_svc, scoring_engine, db = _get_services()
+    data_svc, scoring_engine = _get_services()
 
     try:
         info = data_svc.get_manager_info(manager_id)
@@ -342,7 +342,7 @@ async def get_morningstar_rating(manager_id: str):
     if cached is not None:
         return _clean_nan(cached)
 
-    data_svc, _, db = _get_services()
+    data_svc, _ = _get_services()
 
     try:
         # 获取经理基础信息
