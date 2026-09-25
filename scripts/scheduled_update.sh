@@ -59,6 +59,7 @@ declare -a TASKS=(
   "funds:backfill-peer-evaluation|daily|npm run funds:backfill-peer-evaluation -- --limit 100"
   "research:sync-ima|daily|npm run research:sync-ima"
   "research:sync-manager-identities|daily|npm run research:sync-manager-identities"
+  "managers:snapshot-backlog|daily|.venv/bin/python backend/scripts/sync_fund_manager_tenure.py --snapshot-backlog 3 --throttle 0.5"
 
   "research:signals-scan|daily|curl -fsS --max-time 300 http://127.0.0.1:8005/api/research-signals/scan"
   "anomalies:scan|daily|curl -fsS --max-time 300 http://127.0.0.1:8005/api/anomalies/scan"
