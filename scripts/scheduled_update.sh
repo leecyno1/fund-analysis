@@ -56,7 +56,7 @@ mkdir -p "$DAY_LOG_DIR" "$LOCK_ROOT"
 #   命令：直接放在数组里，用 -- 分隔 npm run 参数
 declare -a TASKS=(
   "funds:backfill-browser-core|daily|npm run funds:backfill-browser-core"
-  "funds:backfill-peer-evaluation|daily|npm run funds:backfill-peer-evaluation -- --limit 100"
+  "funds:backfill-peer-evaluation|daily|npm run funds:backfill-peer-evaluation -- --limit 1000"
   "research:sync-ima|daily|npm run research:sync-ima"
   "research:sync-manager-identities|daily|npm run research:sync-manager-identities"
   "managers:snapshot-backlog|daily|.venv/bin/python backend/scripts/sync_fund_manager_tenure.py --snapshot-backlog 3 --throttle 0.5"
