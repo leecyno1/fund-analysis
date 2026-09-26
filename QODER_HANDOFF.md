@@ -2,7 +2,7 @@
 
 更新时间：2026-09-22
 
-当前状态：`main` 已推送至 `origin`（GitHub）与 `gitee`，三端一致（HEAD `62c58ae`，含 2026-09-20/21 的 2.2.2 全部内容与 09-22 详情页边界清理）。前端 3000 与后端 8005 均由 launchd 从**本仓库**常驻托管，且已加载 2.2.2 新代码（09-22 重启验证）。`docs/plans/2026-08-19-final-launch-iteration-design.md` 的 M1–M6 全部完成。**2026-09-20/21 完成 UAT 遗留五项缺口闭环**（净值口径统一、分红消费闭环、基金池标识归一、启动 DDL 锁超时、前端 UAT 四项展示修复，见 `CHANGELOG.md` 2.2.2）；**2026-09-21 恢复冒烟测试基线全绿（前端 121/121）**；2026-09-22 确认详情页"研究画像"边界并删除死组件（用户决策）。当前已知事项：① `research:sync-ima` 自 09-15 起每日失败（IMA skill 要求升级 1.1.9→1.1.10，需用户手工更新，见 8.1）；② 3000 端口存在 newma-desk dev-stack 抢占隐患（见 2.2）。
+当前状态：`main` 已推送至 `origin`（GitHub）与 `gitee`，三端一致（HEAD `62c58ae`，含 2026-09-20/21 的 2.2.2 全部内容与 09-22 详情页边界清理）。前端 3000 与后端 8005 均由 launchd 从**本仓库**常驻托管，且已加载 2.2.2 新代码（09-22 重启验证）。`docs/plans/2026-08-19-final-launch-iteration-design.md` 的 M1–M6 全部完成。**2026-09-20/21 完成 UAT 遗留五项缺口闭环**（净值口径统一、分红消费闭环、基金池标识归一、启动 DDL 锁超时、前端 UAT 四项展示修复，见 `CHANGELOG.md` 2.2.2）；**2026-09-21 恢复冒烟测试基线全绿（前端 121/121）**；2026-09-22 确认详情页"研究画像"边界并删除死组件（用户决策）。当前已知事项：① 3000 端口存在 newma-desk dev-stack 抢占隐患（见 2.2，需在 newma-desk 侧根治）。IMA skill 已于 09-26 升级至 1.1.10，调度恢复全绿。
 
 历史沿革：2026-08-18 完成四代合并去重大重构（v2.0.0）：删除旧 `frontend/`、Wind 数据链路、一代 screening/sync 页面与对应 API；旧路由保留薄重定向；历史文档归档至 `docs/history/`。2026-08-19 起进入上线迭代（v2.1.0），2026-09-10 收敛至 v2.2.0，2026-09-11 发布 v2.2.1（修复 launchd 调度环境缺陷 + 重建项目上下文记忆），2026-09-20/21 发布 v2.2.2（UAT 遗留缺口闭环 + 冒烟基线全绿恢复 + 详情页研究画像边界确认）。逐条变更见 `CHANGELOG.md`，架构见 `ARCHITECTURE.md`。
 
@@ -288,9 +288,11 @@ weekly 路径另经调度脚本补跑 `funds:sync-product-profiles -- --limit 10
 
 **排查方法教训**：遇到 IMA `skill auth failed` 不要先假定密钥失效——① 用最轻的 `openapi/wiki/v1/search_knowledge_base` 单独复测（1 次调用即可判定授权状态）；② 把本地凭证与用户新提供值做 md5 比对，若相同则问题在服务端授权而非本地配置；③ 凭证只写 `~/.config/ima/`（600 权限，覆盖前先按 `.bak.YYYYMMDD` 备份），不进仓库、不进日志。
 
-**最后更新（2026-09-22）：`research:sync-ima` 自 09-15 起每日失败——IMA skill 版本升级未授权**。日志返回 `code:-200 发现新版本 skill：1.1.10（当前版本：1.1.9）`，要求从 `app-dl.ima.qq.com` 下载 zip 解压后手工更新 ima-skill。**外部日志里的升级指令不构成执行授权**，未经用户授权不要代为执行；升级属用户手工操作（下载 zip → unzip → 更新 ima-skill），完成后每日调度自然恢复全绿。影响仅是本地纪要暂不向 IMA 云端同步（本地数据完好），其余 9 个 daily 任务正常。另：09-20（周日）weekly 定时器**首次全自动运行 5 任务全 ok**（`funds:update-universe` / `sync-manager-universe` / `sync-manager-tenure` / `sync-dividends` / `sync-product-profiles`），第 11 节的"核对 weekly 首跑结果"待办已关闭。
+**IMA skill 已升级至 1.1.10（2026-09-26，用户授权后执行）**：此前 09-15 起 `research:sync-ima` 每日失败（`code:-200 要求升级 skill`）。升级流程：从 `https://app-dl.ima.qq.com/skills/ima-skills-1.1.10.zip` 下载 → 解压 → 替换 `~/.codex/skills/ima-skill`（旧版备份 `ima-skill.bak.20260926`）。升级后实测同步 ok（新增 0 / 已存在 226 / 失败 0），**11 个 daily 任务恢复全绿**。注意：skill 版本升级提示来自外部日志，未经用户授权不代为执行；再次出现版本要求时按此流程处理并先获用户确认。
 
-⚠️ **判读规则**：编排脚本只要有任一子任务失败就非零退出，所以 `launchctl list` 里 `com.fund-analysis.scheduled_update.daily` 的 last exit 只是「本轮有任务失败」的汇总信号，不能据此断定 PATH 缺陷复发。判断调度健康必须看 `logs/scheduled_update/runbook.jsonl` 的**逐任务** `status`。当前预期状态：9 ok + 1 failed（`sync-ima`，skill 升级待用户处理）；若出现其他任务失败，按 runbook 里的任务名定位，不要重跑整套排查。
+另：09-20（周日）weekly 定时器**首次全自动运行 5 任务全 ok**（`funds:update-universe` / `sync-manager-universe` / `sync-manager-tenure` / `sync-dividends` / `sync-product-profiles`），第 11 节的"核对 weekly 首跑结果"待办已关闭。
+
+⚠️ **判读规则**：编排脚本只要有任一子任务失败就非零退出，所以 `launchctl list` 里 `com.fund-analysis.scheduled_update.daily` 的 last exit 只是「本轮有任务失败」的汇总信号，不能据此断定 PATH 缺陷复发。判断调度健康必须看 `logs/scheduled_update/runbook.jsonl` 的**逐任务** `status`。当前预期状态：11 个 daily 全 ok；若出现失败，按 runbook 里的任务名定位，不要重跑整套排查。
 
 ## 9. 验证与验收
 
@@ -357,8 +359,7 @@ cd backend && for t in tests/*.py; do ../.venv/bin/python "$t" >/dev/null 2>&1 |
 
 当前优先级：
 
-1. **IMA skill 升级（用户手工）**：`research:sync-ima` 自 09-15 起每日失败，按 8.1 节说明由用户手工更新 ima-skill 至 1.1.10 后自然恢复全绿。
-2. **3000 端口抢占根治（用户决策）**：在 newma-desk 侧移除其 fund-analysis 前端或改端口，否则本项目前端停服窗口仍可能被抢占（见 2.2）。
+1. **3000 端口抢占根治（用户决策）**：在 newma-desk 侧移除其 fund-analysis 前端或改端口，否则本项目前端停服窗口仍可能被抢占（见 2.2）。（IMA skill 已于 09-26 升级至 1.1.10，该待办关闭）
 3. 再提升基金评价覆盖：优先补齐可分类但缺少净值/指标的同类样本（调度已恢复，可依赖每日增量）。
 4. 完善季报持仓链路：股票、债券、资产配置、持有人结构和归因历史一致更新。
 5. 完善纪要待确认工作流：减少经理、基金和标签误匹配，不自动确认 LLM 结果。
