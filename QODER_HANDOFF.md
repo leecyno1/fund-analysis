@@ -1,6 +1,6 @@
 # Qoder 项目交接
 
-更新时间：2026-09-26（本文档按此时点完整交接，接手 agent 从这里开始）
+更新时间：2026-09-30（交接后首个接手迭代已补：调度错过自动补偿，见 8.1 末尾与 HEAD `c7b16d2`）
 
 当前状态：`main` 三端一致（本地 = GitHub `origin` = gitee，HEAD `2cdecd5`），无未提交改动。前端 3000 与后端 8005 由 launchd 从**本仓库**常驻托管并运行最新代码（09-22 重启后未再改前端；后端 09-25 重启加载快照批量同步）。`docs/plans/2026-08-19-final-launch-iteration-design.md` 的 M1–M6 全部完成。**2026-09-20 → 09-26 的完整迭代弧线**（详见 `CHANGELOG.md` 2.2.2）：UAT 遗留五项缺口闭环 → 前端冒烟 121/121 全绿 → 详情页"研究画像"边界确认（删除 357KB 死组件）→ 报告链路去 Docker 化（读写归一 PG）→ MongoDB 依赖彻底移除（运行栈 = PG + 本地缓存，零外部服务）→ 经理任期快照批量补齐（55→350 条）→ 评价覆盖回填提额至每日 1000 只 → IMA skill 升级 1.1.10（调度 11 任务全绿）。**代码功能零已知缺口，后端 152/152、前端 121/121。**
 
@@ -298,6 +298,8 @@ weekly 路径另经调度脚本补跑 `funds:sync-product-profiles -- --limit 10
 **IMA skill 已升级至 1.1.10（2026-09-26，用户授权后执行）**：此前 09-15 起 `research:sync-ima` 每日失败（`code:-200 要求升级 skill`）。升级流程：从 `https://app-dl.ima.qq.com/skills/ima-skills-1.1.10.zip` 下载 → 解压 → 替换 `~/.codex/skills/ima-skill`（旧版备份 `ima-skill.bak.20260926`）。升级后实测同步 ok（新增 0 / 已存在 226 / 失败 0），**11 个 daily 任务恢复全绿**。注意：skill 版本升级提示来自外部日志，未经用户授权不代为执行；再次出现版本要求时按此流程处理并先获用户确认。
 
 另：09-20（周日）weekly 定时器**首次全自动运行 5 任务全 ok**（`funds:update-universe` / `sync-manager-universe` / `sync-manager-tenure` / `sync-dividends` / `sync-product-profiles`），第 11 节的"核对 weekly 首跑结果"待办已关闭。
+
+**调度错过自动补偿（2026-09-30 `c7b16d2` 已上线）**：背景——09-26 系统重启 + 机器睡眠导致两晚 daily 未运行（LaunchAgent 依赖用户登录会话），曾需手工 kickstart 补跑。现为自动机制：① `scheduled_update.sh` 的 run_task 前置当日去重（runbook 当日同名任务 ok → 跳过并记 `skipped_today`）；② daily plist `RunAtLoad=true`（登录即触发一轮）。效果：正常日子登录补跑 11/11 全 skipped_today（25 秒、零配额消耗）；错过调度日则登录即自动补跑。判读 runbook 时 `skipped_today` 不是失败。weekly 保持 RunAtLoad=false。
 
 ⚠️ **判读规则**：编排脚本只要有任一子任务失败就非零退出，所以 `launchctl list` 里 `com.fund-analysis.scheduled_update.daily` 的 last exit 只是「本轮有任务失败」的汇总信号，不能据此断定 PATH 缺陷复发。判断调度健康必须看 `logs/scheduled_update/runbook.jsonl` 的**逐任务** `status`。当前预期状态：11 个 daily 全 ok；若出现失败，按 runbook 里的任务名定位，不要重跑整套排查。
 
