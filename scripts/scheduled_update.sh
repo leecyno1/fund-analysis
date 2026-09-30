@@ -193,6 +193,31 @@ list_tasks() {
 }
 
 # ------------------------- 单任务执行 -------------------------
+_today_ok_in_runbook() {
+  # 当日（本地日期）同名任务已有 ok 记录 → 返回 0。RunAtLoad 补跑依赖此判定：
+  # 正常日子 18:15 已跑过，登录触发的补跑会全部跳过，不重复消耗 Tushare/LLM 配额；
+  # 错过调度日（重启/睡眠）则登录即自动补跑。
+  local id="$1" today
+  today="$(date +%Y-%m-%d)"
+  [[ -f "$RUNBOOK" ]] || return 1
+  python3 - "$RUNBOOK" "$id" "$today" <<'PY' 2>/dev/null
+import json, sys
+path, task_id, today = sys.argv[1], sys.argv[2], sys.argv[3]
+try:
+    with open(path) as f:
+        for line in f:
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if row.get("task") == task_id and row.get("status") == "ok" and str(row.get("ts", ""))[:10] == today:
+                sys.exit(0)
+except OSError:
+    pass
+sys.exit(1)
+PY
+}
+
 run_task() {
   local row="$1"
   local id="${row%%|*}"; local rest="${row#*|}"
@@ -203,7 +228,18 @@ run_task() {
   local start_ts end_ts start_iso end_iso duration exit_code=0
 
   if [[ "$DRY_RUN" == "1" ]]; then
-    printf "[dry-run] %-40s %s\n" "$id" "$cmd"
+    if _today_ok_in_runbook "$id"; then
+      printf "[dry-run] %-40s %s\n" "$id" "skipped_today（当日已成功，补跑保护）"
+    else
+      printf "[dry-run] %-40s %s\n" "$id" "$cmd"
+    fi
+    return 0
+  fi
+
+  # 当日已成功：跳过补跑（runbook 记 skipped_today，不改写既有 ok 记录）
+  if _today_ok_in_runbook "$id"; then
+    echo "[skip] $id 当日已成功，跳过补跑。" | tee -a "$task_log"
+    _write_runbook "$id" "$bucket" "$cmd" "skipped_today" 0 "$(now_iso)" "$(now_iso)" 0 "already ok today"
     return 0
   fi
 

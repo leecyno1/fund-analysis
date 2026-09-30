@@ -59,6 +59,6 @@
   <string>/tmp/fund-analysis.scheduled_update.daily.stderr.log</string>
 
   <key>RunAtLoad</key>
-  <false/>
+  <true/>
 </dict>
 </plist>
