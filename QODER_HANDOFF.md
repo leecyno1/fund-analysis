@@ -299,7 +299,7 @@ weekly 路径另经调度脚本补跑 `funds:sync-product-profiles -- --limit 10
 
 另：09-20（周日）weekly 定时器**首次全自动运行 5 任务全 ok**（`funds:update-universe` / `sync-manager-universe` / `sync-manager-tenure` / `sync-dividends` / `sync-product-profiles`），第 11 节的"核对 weekly 首跑结果"待办已关闭。
 
-**调度错过自动补偿（2026-09-30 `c7b16d2` 已上线）**：背景——09-26 系统重启 + 机器睡眠导致两晚 daily 未运行（LaunchAgent 依赖用户登录会话），曾需手工 kickstart 补跑。现为自动机制：① `scheduled_update.sh` 的 run_task 前置当日去重（runbook 当日同名任务 ok → 跳过并记 `skipped_today`）；② daily plist `RunAtLoad=true`（登录即触发一轮）。效果：正常日子登录补跑 11/11 全 skipped_today（25 秒、零配额消耗）；错过调度日则登录即自动补跑。判读 runbook 时 `skipped_today` 不是失败。weekly 保持 RunAtLoad=false。
+**调度错过自动补偿——权威时点语义（2026-09-30 `c7b16d2`+`f` 修正上线）**：背景——09-26 系统重启 + 机器睡眠导致两晚 daily 未运行（LaunchAgent 依赖用户登录会话），曾需手工 kickstart 补跑。机制（初版"当日 ok 去重"当日即修正为权威时点制，避免晨间 RunAtLoad 预跑废掉当晚正式调度、丢当日收盘数据）：① **时点闸**——daily 的权威调度是每日 18:15（收盘后）；早于该时点的整轮触发（RunAtLoad 晨间登录/手工提前跑）直接退出（`--force` 绕过；`--only`/`--list` 不受限）；② **时点后去重**——仅"当日 18:15 之后"的 ok 记录才计入去重（记 `skipped_today`），早于时点的 ok 不影响当晚正式轮；③ daily plist `RunAtLoad=true`：晨间登录被闸零成本，18:15 后登录（当晚调度被错过）则自动补跑。判读 runbook 时 `skipped_today` 不是失败；`logs/scheduled_update/<date>/runatload-gate.log` 记录被闸触发。测试可用 `DAILY_FIRE_HM` 环境变量注入时点（见 `backend/tests/scheduled_update_dedup_smoke.py` 四场景）。weekly 保持 RunAtLoad=false。
 
 ⚠️ **判读规则**：编排脚本只要有任一子任务失败就非零退出，所以 `launchctl list` 里 `com.fund-analysis.scheduled_update.daily` 的 last exit 只是「本轮有任务失败」的汇总信号，不能据此断定 PATH 缺陷复发。判断调度健康必须看 `logs/scheduled_update/runbook.jsonl` 的**逐任务** `status`。当前预期状态：11 个 daily 全 ok；若出现失败，按 runbook 里的任务名定位，不要重跑整套排查。
 

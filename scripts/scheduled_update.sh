@@ -88,6 +88,10 @@ MODE=""
 BUCKET=""
 TASK_ID=""
 DRY_RUN="0"
+FORCE="0"
+# daily 权威调度时点（本地 HHMM）：晚间收盘后的正式轮才是权威口径；
+# 早于该时点的 RunAtLoad/手工整轮触发会被闸住。测试可用环境变量覆写。
+DAILY_FIRE_HM="${DAILY_FIRE_HM:-1815}"
 
 usage() {
   cat <<USAGE
@@ -111,6 +115,7 @@ while [[ $# -gt 0 ]]; do
     --bucket)   MODE="bucket"; BUCKET="${2:-}"; shift 2;;
     --only)     MODE="only"; TASK_ID="${2:-}"; shift 2;;
     --dry-run)  DRY_RUN="1"; shift;;
+    --force)    FORCE="1"; shift;;
     -h|--help)  usage; exit 0;;
     *)          echo "未知参数：$1" >&2; usage >&2; exit 2;;
   esac
@@ -193,16 +198,25 @@ list_tasks() {
 }
 
 # ------------------------- 单任务执行 -------------------------
-_today_ok_in_runbook() {
-  # 当日（本地日期）同名任务已有 ok 记录 → 返回 0。RunAtLoad 补跑依赖此判定：
-  # 正常日子 18:15 已跑过，登录触发的补跑会全部跳过，不重复消耗 Tushare/LLM 配额；
-  # 错过调度日（重启/睡眠）则登录即自动补跑。
-  local id="$1" today
+daily_fire_epoch() {
+  # 当日 DAILY_FIRE_HM（本地）的 epoch 秒。解析失败取极大值：宁可重跑也不误跳。
+  local today epoch
   today="$(date +%Y-%m-%d)"
+  epoch="$(date -j -f "%Y-%m-%d %H:%M" "${today} ${DAILY_FIRE_HM:0:2}:${DAILY_FIRE_HM:2:2}" +%s 2>/dev/null || true)"
+  echo "${epoch:-9999999999}"
+}
+
+_ok_since_daily_fire() {
+  # 当日权威时点（默认 18:15 本地）之后已有该任务的 ok 记录 → 返回 0。
+  # 语义：晚间正式调度是权威口径；早于时点的 ok（晨间 RunAtLoad 或手工提前跑）
+  # 不计入去重，保证当晚正式轮照常执行、当日收盘数据不丢。
+  local id="$1" boundary
+  boundary="$(daily_fire_epoch)"
   [[ -f "$RUNBOOK" ]] || return 1
-  python3 - "$RUNBOOK" "$id" "$today" <<'PY' 2>/dev/null
+  python3 - "$RUNBOOK" "$id" "$boundary" <<'PY' 2>/dev/null
 import json, sys
-path, task_id, today = sys.argv[1], sys.argv[2], sys.argv[3]
+from datetime import datetime
+path, task_id, boundary = sys.argv[1], sys.argv[2], float(sys.argv[3])
 try:
     with open(path) as f:
         for line in f:
@@ -210,7 +224,16 @@ try:
                 row = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if row.get("task") == task_id and row.get("status") == "ok" and str(row.get("ts", ""))[:10] == today:
+            if row.get("task") != task_id or row.get("status") != "ok":
+                continue
+            start = str(row.get("start") or "")
+            if not start:
+                continue
+            try:
+                ts = datetime.fromisoformat(start.replace("Z", "+00:00")).timestamp()
+            except ValueError:
+                continue
+            if ts >= boundary:
                 sys.exit(0)
 except OSError:
     pass
@@ -228,18 +251,19 @@ run_task() {
   local start_ts end_ts start_iso end_iso duration exit_code=0
 
   if [[ "$DRY_RUN" == "1" ]]; then
-    if _today_ok_in_runbook "$id"; then
-      printf "[dry-run] %-40s %s\n" "$id" "skipped_today（当日已成功，补跑保护）"
+    if [[ "$bucket" == "daily" && "$FORCE" != "1" ]] && _ok_since_daily_fire "$id"; then
+      printf "[dry-run] %-40s %s\n" "$id" "skipped_today（当日权威时点后已成功，补跑保护）"
     else
       printf "[dry-run] %-40s %s\n" "$id" "$cmd"
     fi
     return 0
   fi
 
-  # 当日已成功：跳过补跑（runbook 记 skipped_today，不改写既有 ok 记录）
-  if _today_ok_in_runbook "$id"; then
-    echo "[skip] $id 当日已成功，跳过补跑。" | tee -a "$task_log"
-    _write_runbook "$id" "$bucket" "$cmd" "skipped_today" 0 "$(now_iso)" "$(now_iso)" 0 "already ok today"
+  # 当日权威时点后已成功：跳过补跑（runbook 记 skipped_today，不改写既有 ok 记录）。
+  # --force 绕过；weekly 不做去重（RunAtLoad=false，仅周日调度或手工触发）。
+  if [[ "$bucket" == "daily" && "$FORCE" != "1" ]] && _ok_since_daily_fire "$id"; then
+    echo "[skip] $id 当日权威时点后已成功，跳过补跑。" | tee -a "$task_log"
+    _write_runbook "$id" "$bucket" "$cmd" "skipped_today" 0 "$(now_iso)" "$(now_iso)" 0 "already ok since daily fire time"
     return 0
   fi
 
@@ -316,6 +340,18 @@ case "$MODE" in
   bucket)
     if [[ -z "$BUCKET" ]]; then
       echo "--bucket 需要名称" >&2; exit 2
+    fi
+    # 权威时点闸：daily 的权威调度是每日 18:15（收盘后）。早于该时点的整轮触发
+    # （RunAtLoad 晨间登录、手工提前跑）直接退出，避免预跑结果让晚间正式轮被去重
+    # 跳过而丢当日收盘数据。--force 绕过；--only 单任务不受限。
+    if [[ "$BUCKET" == "daily" && "$FORCE" != "1" ]]; then
+      now_hm="$(date +%H%M)"
+      if [[ "$now_hm" < "$DAILY_FIRE_HM" ]]; then
+        echo "[gate] 当前 ${now_hm} 早于 daily 权威时点 ${DAILY_FIRE_HM}，本次整轮触发不执行；晚间正式调度会跑。"
+        mkdir -p "$DAY_LOG_DIR" 2>/dev/null || true
+        echo "[$(now_iso)] gated before ${DAILY_FIRE_HM} (now=${now_hm})" >> "$DAY_LOG_DIR/runatload-gate.log" 2>/dev/null || true
+        exit 0
+      fi
     fi
     rows=()
     while IFS= read -r row; do

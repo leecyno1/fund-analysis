@@ -1,4 +1,11 @@
-"""当日已成功任务的补跑去重：RunAtLoad 补偿依赖此语义，正常日子登录不重复消耗配额。"""
+"""调度补偿的权威时点语义：时点前整轮触发被闸住；时点后 ok 才计入去重；--force 绕过两者。
+
+场景（全部用 DAILY_FIRE_HM 注入时点、dry-run 执行，零副作用）：
+1. 闸：时点设为当天 23:59 → 当前时刻必然早于时点 → 整轮触发打印 gate 提示、无任务行。
+2. 去重：时点设为当天 00:00 → 当天任意时刻的 ok 记录都晚于时点 → 全部标 skipped_today。
+   （依赖当天 runbook 已有 ok 记录；无记录时退化为"至少展示正常命令行"并提示场景不可测。）
+3. force：时点 23:59 + --force → 闸与去重都被绕过，展示真实命令。
+"""
 import os
 import subprocess
 import sys
@@ -9,53 +16,58 @@ REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 SCRIPT = os.path.join(REPO, "scripts", "scheduled_update.sh")
 
 
-def _run(*args):
+def _run(*args, fire=None):
+    env = dict(os.environ)
+    if fire is not None:
+        env["DAILY_FIRE_HM"] = fire
     return subprocess.run(
         ["bash", SCRIPT, *args],
-        capture_output=True, text=True, cwd=REPO, timeout=120,
+        capture_output=True, text=True, cwd=REPO, timeout=120, env=env,
     )
 
 
-def _today_ok_count(task_id):
-    # 复刻 runbook 判定：当日（本地日期）同名任务 status=ok 的条数
-    import json
-    import datetime
-    today = datetime.date.today().isoformat()
-    count = 0
-    with open(os.path.join(REPO, "logs", "scheduled_update", "runbook.jsonl")) as f:
-        for line in f:
-            try:
-                row = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if row.get("task") == task_id and row.get("status") == "ok" and str(row.get("ts", ""))[:10] == today:
-                count += 1
-    return count
-
-
 def main() -> int:
-    # dry-run 模式下，当日已 ok 的任务必须被标记为 skipped_today（补跑保护）
-    result = _run("--bucket", "daily", "--dry-run")
-    if result.returncode != 0:
-        print(f"dry-run failed: {result.stdout[-500:]} {result.stderr[-500:]}")
+    # 场景 1：时点前的整轮触发必须被闸住（晨间 RunAtLoad 语义）
+    gated = _run("--bucket", "daily", "--dry-run", fire="2359")
+    if gated.returncode != 0:
+        print(f"gate run failed: {gated.stdout[-300:]} {gated.stderr[-300:]}")
         return 1
-    out = result.stdout
+    if "[gate]" not in gated.stdout or "[dry-run]" in gated.stdout:
+        print(f"Expected gate notice without task lines before fire time, got:\n{gated.stdout[-500:]}")
+        return 1
 
-    if "skipped_today" not in out:
-        # 当日确有 ok 任务（本冒烟在调度运行过的一天执行）时应出现 skipped_today
-        probe = _today_ok_count("alerts:scan")
-        if probe > 0:
-            print(f"Expected skipped_today markers for already-ok tasks today, got:\n{out[-800:]}")
+    # 场景 2：时点后的 ok 计入去重（当天已有 ok 记录时全部 skipped_today）
+    dedup = _run("--bucket", "daily", "--dry-run", fire="0000")
+    if dedup.returncode != 0:
+        print(f"dedup run failed: {dedup.stdout[-300:]}")
+        return 1
+    if "skipped_today" in dedup.stdout:
+        if "[dry-run]" not in dedup.stdout or "npm run" in dedup.stdout:
+            print(f"Expected all tasks marked skipped_today, got:\n{dedup.stdout[-500:]}")
             return 1
-        print("no ok tasks recorded today; dedup path untestable now, run after a scheduled day")
-        return 0
+    else:
+        # 当天 runbook 尚无 ok 记录：至少应展示正常命令行（未误闸、未误跳）
+        if "[gate]" in dedup.stdout or "npm run" not in dedup.stdout:
+            print(f"No ok records today; expected plain command listing, got:\n{dedup.stdout[-500:]}")
+            return 1
+        print("no ok records recorded today; dedup path untestable now (gate/force verified)")
 
-    # 出现 skipped_today 时，必须同时保留 dry-run 输出中未跑任务的正常展示
-    if "[dry-run]" not in out:
-        print(f"Expected dry-run listing for fresh tasks, got:\n{out[-500:]}")
+    # 场景 3：--force 同时绕过闸与去重
+    forced = _run("--bucket", "daily", "--dry-run", "--force", fire="2359")
+    if forced.returncode != 0:
+        print(f"force run failed: {forced.stdout[-300:]}")
+        return 1
+    if "[gate]" in forced.stdout or "skipped_today" in forced.stdout or "npm run" not in forced.stdout:
+        print(f"Expected force to bypass gate and dedup, got:\n{forced.stdout[-500:]}")
         return 1
 
-    print("OK same-day already-ok tasks are deduplicated on rerun (skipped_today)")
+    # 场景 4：--only 单任务不受闸限制（手工定向运维入口）
+    only = _run("--only", "alerts:scan", "--dry-run", fire="2359")
+    if "[dry-run]" not in only.stdout or "[gate]" in only.stdout:
+        print(f"Expected --only to bypass the gate, got:\n{only.stdout[-300:]}")
+        return 1
+
+    print("OK fire-time gate, since-fire dedup, force bypass and --only exemption all behave correctly")
     return 0
 
 
