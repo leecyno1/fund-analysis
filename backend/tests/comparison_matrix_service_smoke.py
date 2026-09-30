@@ -13,8 +13,11 @@ def pick_metric_rich_funds(count: int = 2) -> list:
 
     with get_engine().connect() as conn:
         rows = conn.execute(text(
-            "SELECT target_id FROM metric_snapshots WHERE metric_window = '1y'"
-            " GROUP BY target_id ORDER BY COUNT(*) DESC LIMIT :count"
+            "SELECT ms.target_id FROM metric_snapshots ms"
+            " JOIN fund_evaluation_snapshots fes ON fes.wind_code = ms.target_id"
+            "   AND fes.evaluation_window = '1y' AND fes.overall_score IS NOT NULL"
+            " WHERE ms.metric_window = '1y'"
+            " GROUP BY ms.target_id ORDER BY COUNT(*) DESC LIMIT :count"
         ), {"count": count}).fetchall()
     if len(rows) < count:
         raise AssertionError(f"metric_snapshots lacks {count} funds with 1y metrics")

@@ -4,6 +4,7 @@
 from fastapi import APIRouter, HTTPException, Query, BackgroundTasks, Body
 from pydantic import BaseModel
 from typing import List, Optional
+import math
 from datetime import date, datetime
 from decimal import Decimal
 from uuid import UUID
@@ -30,7 +31,11 @@ def _json_safe(value):
     if isinstance(value, UUID):
         return str(value)
     if isinstance(value, Decimal):
-        return float(value)
+        value = float(value)
+    if isinstance(value, float) and not math.isfinite(value):
+        # PG jsonb 拒收裸 NaN/Infinity token（零波动基金的 Sharpe 等指标会产生 NaN）；
+        # 非有限值按"证据缺失"处理为 None，不让整份报告落库失败。
+        return None
     return value
 
 
