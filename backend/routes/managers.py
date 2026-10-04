@@ -306,7 +306,11 @@ async def get_manager_score(manager_id: str):
                 "dimension_scores": {},
             }
 
-        avg_perf = {"overall_score": sum(f["scoring"]["overall_score"] for f in fund_scores) / len(fund_scores)}
+        scored = [
+            f["scoring"]["overall_score"] for f in fund_scores
+            if isinstance(f["scoring"].get("overall_score"), (int, float))
+        ]
+        avg_perf = {"overall_score": sum(scored) / len(scored) if scored else None}
         manager_score = scoring_engine.score_manager(info, avg_perf, {}, [])
 
         return manager_score

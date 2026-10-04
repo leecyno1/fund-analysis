@@ -96,6 +96,7 @@ def _panel(index):
             "metric_window": "1y" if name in {"tracking_error", "tracking_difference"} else "latest",
             "metric_name": name,
             "metric_value": value,
+            "benchmark_code": "000300.SH" if name in {"tracking_error", "tracking_difference"} else None,
             "as_of_date": "2026-08-04",
         }
         for name, value in values.items()
@@ -330,12 +331,23 @@ def main() -> int:
         alternatives = evidence.get("alternatives") or []
         if len(alternatives) != 2 or any(option.get("wind_code") == item.get("wind_code") for option in alternatives):
             raise AssertionError(f"Every candidate needs two distinct same-category alternatives: {item}")
-        percentile = (item.get("peer_percentiles") or {}).get("metrics", {}).get("professional_score", {}).get("percentile")
-        if percentile is None:
-            raise AssertionError(f"Category score percentile is missing: {item}")
-        percentile_score = (item.get("peer_percentiles") or {}).get("metrics", {}).get("professional_score", {}).get("value")
-        if percentile_score != item.get("professional_scoring", {}).get("overall_score"):
-            raise AssertionError(f"推荐分数与统一基金评价分数不一致：{item}")
+        peer = item.get("peer_percentiles") or {}
+        peer_score = peer.get("metrics", {}).get("professional_score", {})
+        if peer_score.get("percentile") is None:
+            raise AssertionError(f"Category proxy percentile is missing: {item}")
+        proxy_metrics = {
+            metric["metric_name"]: metric["metric_value"]
+            for metric in panels[item["wind_code"]]
+            if metric["metric_window"] in {"latest", "1y"}
+        }
+        expected_proxy = service.scoring_service.score_peer_metrics("index_fund", proxy_metrics)
+        if expected_proxy is None or peer_score.get("value") != round(expected_proxy, 6):
+            raise AssertionError(f"推荐同类位置必须使用量化代理分，不得使用正式综合分：{item}")
+        source = "category_specific_peer_metric_proxy"
+        if peer_score.get("source_metric_names") != [source]:
+            raise AssertionError(f"推荐同类位置必须披露代理分来源：{peer}")
+        if peer_score.get("metric_window") != "1y":
+            raise AssertionError(f"推荐同类位置必须保留所选窗口：{peer}")
         unified = (unified_evaluations.get(item["wind_code"]) or {}).get("evaluation") or {}
         unified_score = (unified.get("evaluation") or {}).get("overall_score")
         unified_grade = (unified.get("evaluation") or {}).get("overall_grade")

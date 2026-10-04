@@ -6,6 +6,7 @@
 """
 import json
 import math
+from datetime import date, datetime
 from typing import Any, Dict, List, Optional
 
 from repositories.portfolio_repo import PortfolioRepo
@@ -126,8 +127,12 @@ class PortfolioService:
         holdings = self.repo.list_holdings(portfolio_id)
         holding_codes = {item["wind_code"] for item in holdings}
         normalized: List[Dict[str, Any]] = []
+        seen = set()
         for item in items or []:
             code = str(item.get("wind_code") or "").strip().upper()
+            if code in seen:
+                raise ValueError(f"权重清单包含重复基金: {code}")
+            seen.add(code)
             weight = item.get("weight")
             if code not in holding_codes:
                 raise ValueError(f"基金不在组合持仓中: {code}")
@@ -141,9 +146,15 @@ class PortfolioService:
             normalized.append({"wind_code": code, "weight": weight_value})
         if not normalized:
             raise ValueError("权重清单不能为空")
+        if seen != holding_codes:
+            raise ValueError("权重清单必须覆盖全部持仓")
         total = sum(item["weight"] for item in normalized)
         if abs(total - 1.0) > WEIGHT_SUM_TOLERANCE:
             raise ValueError(f"权重合计必须为 100%（当前 {total:.1%}）")
+        for item in normalized:
+            item["weight"] /= total
+            if item["weight"] > MAX_SINGLE_WEIGHT + 1e-9:
+                raise ValueError(f"归一化后单只基金权重不得超过 {MAX_SINGLE_WEIGHT:.0%}: {item['wind_code']}")
         self.repo.set_weights(portfolio_id, normalized, source)
         return self.get_portfolio(portfolio_id)
 
@@ -252,19 +263,19 @@ class PortfolioService:
         codes = [item["wind_code"] for item in holdings]
 
         nav_map = self._load_nav_series(codes, lookback_days)
-        # 共同交易日交集
         common_days = sorted(set.intersection(*(set(nav_map[code].keys()) for code in codes))) if codes else []
-        if len(common_days) < CORRELATION_MIN_DAYS:
+        interval_count = max(0, len(common_days) - 1)
+        if interval_count < CORRELATION_MIN_DAYS:
             return {
                 "status": "insufficient_sample",
-                "reason": f"持仓共同交易日仅 {len(common_days)} 天（至少 {CORRELATION_MIN_DAYS} 天），不输出回测结论。",
+                "reason": f"持仓共同净值区间仅 {interval_count} 个（至少 {CORRELATION_MIN_DAYS} 个），不输出回测结论。",
                 "holding_count": len(codes),
             }
 
-        portfolio_returns: List[float] = []
-        for day in common_days[1:]:
-            daily = sum(weights.get(code, 0.0) * nav_map[code][day] for code in codes)
-            portfolio_returns.append(daily)
+        portfolio_returns = [
+            sum(weights[code] * (nav_map[code][end] / nav_map[code][start] - 1.0) for code in codes)
+            for start, end in zip(common_days, common_days[1:])
+        ]
 
         curve = self._equity_curve(portfolio_returns)
         metrics = self._performance_metrics(portfolio_returns, common_days)
@@ -276,15 +287,14 @@ class PortfolioService:
         else:
             benchmark_source = max(weights, key=lambda code: weights.get(code, 0.0))
         benchmark_series = self._load_benchmark_series(benchmark_source, common_days[0], common_days[-1])
-        if len(benchmark_series) < CORRELATION_MIN_DAYS:
-            # 权重最大持仓无基准净值时，降级尝试组合内其他成分，避免基准静默缺失
+        if not benchmark_wind_code and not all(day in benchmark_series for day in common_days):
             fallback_source = None
             fallback_series: Dict[str, float] = {}
             for code in sorted(weights, key=lambda c: weights.get(c, 0.0), reverse=True):
                 if code == benchmark_source:
                     continue
                 candidate_series = self._load_benchmark_series(code, common_days[0], common_days[-1])
-                if len(candidate_series) >= CORRELATION_MIN_DAYS:
+                if all(day in candidate_series for day in common_days):
                     fallback_source = code
                     fallback_series = candidate_series
                     break
@@ -300,14 +310,12 @@ class PortfolioService:
             "name": benchmark_metadata.get("name"),
             "status": "insufficient",
         }
-        if len(benchmark_series) >= CORRELATION_MIN_DAYS:
-            bench_days = sorted(benchmark_series.keys())
+        if all(day in benchmark_series for day in common_days):
             bench_returns = [
-                benchmark_series[bench_days[i]] / benchmark_series[bench_days[i - 1]] - 1.0
-                for i in range(1, len(bench_days))
-                if benchmark_series[bench_days[i - 1]] not in (0, None)
+                benchmark_series[end] / benchmark_series[start] - 1.0
+                for start, end in zip(common_days, common_days[1:])
             ]
-            bench_metrics = self._performance_metrics(bench_returns, bench_days)
+            bench_metrics = self._performance_metrics(bench_returns, common_days)
             benchmark_block.update({
                 "status": "available",
                 "basis_note": (
@@ -322,7 +330,7 @@ class PortfolioService:
             "status": "available",
             "portfolio_id": portfolio_id,
             "name": portfolio["name"],
-            "weights_basis": "当前组合权重（未配齐时按等权，已在权重摘要披露）",
+            "weights_basis": "当前组合权重（未配齐时按合规等权）；每个共同净值区间恢复固定权重，不是买入持有收益",
             "weights": weights,
             "sample": {
                 "days": len(common_days),
@@ -331,7 +339,7 @@ class PortfolioService:
                 "lookback_days": lookback_days,
             },
             "metrics": metrics,
-            "curve": [
+            "curve": [{"date": str(common_days[0]), "value": 1.0}] + [
                 {"date": str(common_days[i + 1]), "value": curve[i]}
                 for i in range(len(curve))
             ],
@@ -366,13 +374,21 @@ class PortfolioService:
                 group_names[group] = name or ("未分类（待补评价/风格快照）" if group == "unclassified" else group)
         deviations = []
         if targets:
+            normalized_targets: Dict[str, Dict[str, Any]] = {}
             for target in targets:
-                key = str(target.get("peer_group_key") or "")
-                target_weight = float(target.get("target_weight") or 0)
+                identifier = str(target.get("peer_group_key") or "")
+                key = self._peer_group_key(identifier) or identifier
+                entry = normalized_targets.setdefault(key, {
+                    "peer_group_name": target.get("peer_group_name") or group_names.get(key, key),
+                    "target_weight": 0.0,
+                })
+                entry["target_weight"] += float(target.get("target_weight") or 0)
+            for key, target in normalized_targets.items():
+                target_weight = target["target_weight"]
                 actual = group_weights.pop(key, 0.0)
                 deviations.append({
                     "peer_group_key": key,
-                    "peer_group_name": target.get("peer_group_name") or group_names.get(key, key),
+                    "peer_group_name": target["peer_group_name"],
                     "target_weight": target_weight,
                     "actual_weight": round(actual, 6),
                     "deviation": round(actual - target_weight, 6),
@@ -470,8 +486,27 @@ class PortfolioService:
         all_codes = sorted(set(list(target_weights) + list(current_weights)))
         for code in all_codes:
             target = target_weights.get(code, 0.0)
+            held = code in current_weights
             current = current_weights.get(code)
+            nav_item = latest_nav.get(code) or {}
+            nav_value = nav_item.get("nav")
             if current is None:
+                if held:
+                    # 持仓存在但权重未知：不能冒充"当前未持有"而给出全额申购建议。
+                    rows.append({
+                        "wind_code": code,
+                        "fund_name": nav_item.get("name"),
+                        "action": "权重未知",
+                        "current_weight": None,
+                        "target_weight": round(target, 6),
+                        "weight_delta": None,
+                        "amount": None,
+                        "shares": None,
+                        "latest_nav": nav_value,
+                        "nav_date": nav_item.get("nav_date"),
+                        "note": "当前持仓权重未提供，无法计算申赎差额；请补充该持仓权重后再生成清单。",
+                    })
+                    continue
                 if code in target_weights:
                     current = 0.0
                 else:
@@ -479,8 +514,6 @@ class PortfolioService:
             delta = target - current
             if abs(delta) < 0.005:
                 continue
-            nav_item = latest_nav.get(code) or {}
-            nav_value = nav_item.get("nav")
             amount = round(total_amount * delta, 2) if total_amount and nav_value else None
             shares = round(amount / nav_value, 2) if amount is not None and nav_value else None
             rows.append({
@@ -495,7 +528,7 @@ class PortfolioService:
                 "latest_nav": nav_value,
                 "nav_date": nav_item.get("nav_date"),
             })
-        rows.sort(key=lambda item: abs(item["weight_delta"]), reverse=True)
+        rows.sort(key=lambda item: abs(item["weight_delta"]) if item["weight_delta"] is not None else -1.0, reverse=True)
         return {
             "status": "available",
             "portfolio_id": portfolio_id,
@@ -555,40 +588,40 @@ class PortfolioService:
 
     @staticmethod
     def _weight_summary(holdings: List[Dict[str, Any]]) -> Dict[str, Any]:
-        weighted = [item for item in holdings if item.get("weight") is not None]
-        total = sum(float(item["weight"]) for item in weighted)
+        weighted = [float(item["weight"]) for item in holdings if item.get("weight") is not None]
+        finite = [weight for weight in weighted if math.isfinite(weight)]
+        total = sum(finite)
+        complete = (
+            bool(holdings)
+            and len(finite) == len(holdings)
+            and abs(total - 1.0) <= WEIGHT_SUM_TOLERANCE
+            and all(0 < weight <= MAX_SINGLE_WEIGHT + 1e-9 for weight in finite)
+            and all(weight / total <= MAX_SINGLE_WEIGHT + 1e-9 for weight in finite)
+        )
         return {
             "holding_count": len(holdings),
             "weighted_count": len(weighted),
             "total_weight": round(total, 6),
-            "is_complete": abs(total - 1.0) <= WEIGHT_SUM_TOLERANCE if weighted else False,
+            "is_complete": complete,
         }
 
     @staticmethod
     def _effective_weights(holdings: List[Dict[str, Any]]) -> Dict[str, float]:
-        weighted = {
-            item["wind_code"]: float(item["weight"])
-            for item in holdings
-            if item.get("weight") is not None
-        }
-        if weighted and abs(sum(weighted.values()) - 1.0) <= 0.05:
-            return weighted
-        # 未设置完整权重时按等权聚合并披露
+        if PortfolioService._weight_summary(holdings)["is_complete"]:
+            total = sum(float(item["weight"]) for item in holdings)
+            return {item["wind_code"]: float(item["weight"]) / total for item in holdings}
         equal = 1.0 / len(holdings) if holdings else 0.0
+        if equal > MAX_SINGLE_WEIGHT + 1e-9:
+            raise ValueError(f"持仓数过少，等权将突破单只 {MAX_SINGLE_WEIGHT:.0%} 上限；请补齐持仓与权重")
         return {item["wind_code"]: equal for item in holdings}
 
     def _style_aggregate(self, codes: List[str], weights: Dict[str, float]) -> Dict[str, Any]:
         if not codes:
             return {"status": "insufficient", "reason": "组合暂无持仓。"}
         snapshots = self.style_repo.get_latest_map(codes)
-        covered_weight = sum(weights.get(code, 0.0) for code in codes if code in snapshots)
-        if not snapshots:
-            return {
-                "status": "insufficient",
-                "reason": "组合持仓均无公开持仓风格快照，暂不能聚合风格暴露。",
-                "coverage": 0.0,
-            }
-        factor_totals: Dict[str, Dict[str, float]] = {}
+        snapshot_weight = sum(weights.get(code, 0.0) for code in codes if code in snapshots)
+        total_weight = sum(weights.get(code, 0.0) for code in codes)
+        factor_totals: Dict[str, Dict[str, Any]] = {}
         for code in codes:
             snapshot = snapshots.get(code)
             if not snapshot:
@@ -599,85 +632,84 @@ class PortfolioService:
                     continue
                 factor = str(descriptor.get("factor") or "").strip()
                 exposure = descriptor.get("exposure")
-                if not factor or not isinstance(exposure, (int, float)):
+                coverage = descriptor.get("fund_nav_coverage")
+                if (
+                    not factor
+                    or isinstance(exposure, bool)
+                    or not isinstance(exposure, (int, float))
+                    or not math.isfinite(exposure)
+                    or isinstance(coverage, bool)
+                    or not isinstance(coverage, (int, float))
+                    or not math.isfinite(coverage)
+                    or not 0 < coverage <= 1
+                    or weight <= 0
+                ):
                     continue
                 bucket = factor_totals.setdefault(factor, {
                     "label": str(descriptor.get("label") or factor),
                     "unit": descriptor.get("unit"),
                     "weighted_exposure": 0.0,
+                    "coverage": 0.0,
                 })
-                bucket["weighted_exposure"] += float(exposure) * weight
+                covered_weight = weight * coverage
+                bucket["weighted_exposure"] += float(exposure) * covered_weight
+                bucket["coverage"] += covered_weight
         factors = [
             {
                 "factor": factor,
                 "label": bucket["label"],
                 "unit": bucket["unit"],
                 "weighted_exposure": round(bucket["weighted_exposure"], 6),
+                "covered_exposure": round(bucket["weighted_exposure"] / bucket["coverage"], 6),
+                "coverage": round(bucket["coverage"], 6),
+                "unknown_weight": round(max(0.0, total_weight - bucket["coverage"]), 6),
             }
             for factor, bucket in sorted(factor_totals.items())
         ]
         return {
             "status": "available" if factors else "insufficient",
+            "reason": None if factors else "缺少有效风格描述子或逐因子净值覆盖，暂不能聚合风格暴露。",
             "quarter_basis": "各持仓最新已披露季度（可能不完全一致）",
-            "coverage": round(covered_weight, 6),
-            "coverage_note": f"风格聚合覆盖 {covered_weight:.1%} 权重的持仓；未覆盖部分为残差。",
+            "snapshot_coverage": round(snapshot_weight, 6),
+            "coverage_note": f"有风格快照的持仓权重为 {snapshot_weight:.1%}，不等于因子净值覆盖；未知部分不按零暴露计入。",
             "factors": factors,
         }
 
     def _correlation_matrix(self, codes: List[str], weights: Dict[str, float]) -> Dict[str, Any]:
         if len(codes) < 2:
             return {"status": "insufficient", "reason": "至少两只持仓才能计算净值相关性。"}
-        from sqlalchemy import text
-
-        engine = get_engine()
-        returns_map: Dict[str, Dict[str, float]] = {}
-        with engine.connect() as conn:
-            for code in codes:
-                rows = conn.execute(
-                    text(
-                        """
-                        SELECT trade_date,
-                               COALESCE(NULLIF(accum_nav, 0), NULLIF(unit_nav, 0), NULLIF(nav, 0)) AS nav_value
-                        FROM fund_nav
-                        WHERE wind_code = :code
-                        ORDER BY trade_date DESC
-                        LIMIT :limit
-                        """
-                    ),
-                    {"code": code, "limit": CORRELATION_LOOKBACK_DAYS},
-                ).fetchall()
-                series: Dict[str, float] = {}
-                ordered: List[Any] = list(reversed(rows))
-                previous: Optional[float] = None
-                for row in ordered:
-                    nav_value = float(row[1]) if row[1] is not None else None
-                    if nav_value is None:
-                        continue
-                    if previous is not None and previous != 0:
-                        date_key = str(row[0])
-                        series[date_key] = nav_value / previous - 1.0
-                    previous = nav_value
-                returns_map[code] = series
+        nav_map = self._load_nav_series(codes, CORRELATION_LOOKBACK_DAYS)
         pairs = []
         for i, code_a in enumerate(codes):
             for code_b in codes[i + 1:]:
-                common = sorted(set(returns_map.get(code_a, {})) & set(returns_map.get(code_b, {})))
-                if len(common) < CORRELATION_MIN_DAYS:
+                common = sorted(set(nav_map.get(code_a, {})) & set(nav_map.get(code_b, {})))
+                interval_count = max(0, len(common) - 1)
+                if interval_count < CORRELATION_MIN_DAYS:
                     pairs.append({
                         "fund_a": code_a,
                         "fund_b": code_b,
                         "correlation": None,
-                        "overlap_days": len(common),
+                        "overlap_days": interval_count,
                         "status": "insufficient_overlap",
                     })
                     continue
-                values_a = [returns_map[code_a][day] for day in common]
-                values_b = [returns_map[code_b][day] for day in common]
+                values_a = [nav_map[code_a][end] / nav_map[code_a][start] - 1.0 for start, end in zip(common, common[1:])]
+                values_b = [nav_map[code_b][end] / nav_map[code_b][start] - 1.0 for start, end in zip(common, common[1:])]
+                correlation = self._pearson(values_a, values_b)
+                if correlation is None:
+                    pairs.append({
+                        "fund_a": code_a,
+                        "fund_b": code_b,
+                        "correlation": None,
+                        "overlap_days": interval_count,
+                        "status": "undefined_zero_variance",
+                    })
+                    continue
                 pairs.append({
                     "fund_a": code_a,
                     "fund_b": code_b,
-                    "correlation": round(self._pearson(values_a, values_b), 4),
-                    "overlap_days": len(common),
+                    "correlation": round(correlation, 4),
+                    "overlap_days": interval_count,
                     "status": "ok",
                 })
         return {
@@ -685,11 +717,11 @@ class PortfolioService:
             "lookback_days": CORRELATION_LOOKBACK_DAYS,
             "min_overlap_days": CORRELATION_MIN_DAYS,
             "pairs": pairs,
-            "note": "相关性基于历史日收益率（复权净值优先）；重叠不足的配对不输出结论。",
+            "note": "相关性先对齐共同净值端点，再计算相同区间收益；重叠不足的配对不输出结论。",
         }
 
     @staticmethod
-    def _pearson(xs: List[float], ys: List[float]) -> float:
+    def _pearson(xs: List[float], ys: List[float]) -> Optional[float]:
         n = len(xs)
         mean_x = sum(xs) / n
         mean_y = sum(ys) / n
@@ -697,13 +729,13 @@ class PortfolioService:
         var_x = sum((x - mean_x) ** 2 for x in xs)
         var_y = sum((y - mean_y) ** 2 for y in ys)
         if var_x == 0 or var_y == 0:
-            return 0.0
+            # 一条净值平坦（货基/停牌/常量）时相关性无定义，不能冒充 0（"完美分散"）。
+            return None
         return cov / math.sqrt(var_x * var_y)
 
     # ─────────────── 回测/监控/清单工具 ───────────────
 
     def _load_nav_series(self, codes: List[str], lookback_days: int) -> Dict[str, Dict[str, float]]:
-        """每只基金的日收益率序列（复权净值优先）：{code: {date: daily_return}}。"""
         from sqlalchemy import text
 
         engine = get_engine()
@@ -713,8 +745,7 @@ class PortfolioService:
                 rows = conn.execute(
                     text(
                         """
-                        SELECT trade_date,
-                               COALESCE(NULLIF(accum_nav, 0), NULLIF(unit_nav, 0), NULLIF(nav, 0)) AS nav_value
+                        SELECT trade_date, accum_nav, unit_nav, nav
                         FROM fund_nav
                         WHERE wind_code = :code
                         ORDER BY trade_date DESC
@@ -723,16 +754,17 @@ class PortfolioService:
                     ),
                     {"code": code, "limit": lookback_days},
                 ).fetchall()
-                ordered = list(reversed(rows))
                 series: Dict[str, float] = {}
-                previous: Optional[float] = None
-                for row in ordered:
-                    nav_value = float(row[1]) if row[1] is not None else None
-                    if nav_value is None:
-                        continue
-                    if previous is not None and previous != 0:
-                        series[str(row[0])] = nav_value / previous - 1.0
-                    previous = nav_value
+                for column in (1, 2, 3):
+                    series = {
+                        str(row[0]): float(row[column])
+                        for row in reversed(rows)
+                        if row[column] is not None
+                        and math.isfinite(float(row[column]))
+                        and float(row[column]) > 0
+                    }
+                    if series:
+                        break
                 result[code] = series
         return result
 
@@ -791,17 +823,37 @@ class PortfolioService:
         return curve
 
     @staticmethod
+    def _parse_date(value: Any) -> Optional[date]:
+        if isinstance(value, datetime):
+            return value.date()
+        if isinstance(value, date):
+            return value
+        try:
+            return date.fromisoformat(str(value)[:10])
+        except (ValueError, TypeError):
+            return None
+
+    @staticmethod
     def _performance_metrics(returns: List[float], dates: List[Any]) -> Dict[str, Any]:
         if not returns:
             return {}
         curve = PortfolioService._equity_curve(returns)
         cumulative = curve[-1] - 1.0
         days = len(returns)
-        annualized = (1.0 + cumulative) ** (252.0 / max(days, 1)) - 1.0 if days > 0 else 0.0
+        start = PortfolioService._parse_date(dates[0]) if dates else None
+        end = PortfolioService._parse_date(dates[-1]) if dates else None
+        span_years = (end - start).days / 365.25 if start and end else 0.0
+        # 年化按真实日历跨度折算，不假设净值是日频；周/月频净值用 252/期数会严重高估。
+        if span_years > 0:
+            annualized: Optional[float] = (1.0 + cumulative) ** (1.0 / span_years) - 1.0
+            periods_per_year = days / span_years
+        else:
+            annualized = None
+            periods_per_year = None
         mean_daily = sum(returns) / days
         variance = sum((item - mean_daily) ** 2 for item in returns) / max(days - 1, 1)
-        volatility = math.sqrt(variance) * math.sqrt(252.0)
-        peak = curve[0]
+        volatility = math.sqrt(variance) * math.sqrt(periods_per_year) if periods_per_year else None
+        peak = 1.0
         max_drawdown = 0.0
         for value in curve:
             if value > peak:
@@ -810,16 +862,15 @@ class PortfolioService:
             max_drawdown = min(max_drawdown, drawdown)
         return {
             "cumulative_return": round(cumulative, 6),
-            "annualized_return": round(annualized, 6),
-            "annualized_volatility": round(volatility, 6),
+            "annualized_return": round(annualized, 6) if annualized is not None else None,
+            "annualized_volatility": round(volatility, 6) if volatility is not None else None,
             "max_drawdown": round(max_drawdown, 6),
             "sample_days": days,
             "start_date": str(dates[0]) if dates else None,
             "end_date": str(dates[-1]) if dates else None,
         }
 
-    @staticmethod
-    def _holding_peer_group(wind_code: str) -> str:
+    def _holding_peer_group(self, wind_code: str) -> str:
         """持仓同类组 key：优先评价快照，其次风格快照，均无则 unclassified。"""
         from sqlalchemy import text
 
@@ -828,25 +879,46 @@ class PortfolioService:
             row = conn.execute(
                 text(
                     """
-                    SELECT peer_group_id FROM fund_evaluation_snapshots
-                    WHERE wind_code = :code AND peer_group_id IS NOT NULL
-                    ORDER BY created_at DESC LIMIT 1
+                    SELECT pg.key
+                    FROM (
+                        SELECT peer_group_id FROM fund_evaluation_snapshots
+                        WHERE wind_code = :code
+                        ORDER BY created_at DESC LIMIT 1
+                    ) snapshot
+                    JOIN peer_groups pg ON CAST(pg.id AS TEXT) = CAST(snapshot.peer_group_id AS TEXT)
                     """
                 ),
                 {"code": wind_code},
             ).fetchone()
-            if not row:
-                row = conn.execute(
-                    text(
-                        """
-                        SELECT peer_group_key FROM holding_style_snapshots
-                        WHERE wind_code = :code AND peer_group_key IS NOT NULL
-                        ORDER BY quarter DESC LIMIT 1
-                        """
-                    ),
-                    {"code": wind_code},
-                ).fetchone()
-        return str(row[0]) if row else "unclassified"
+            if row:
+                return str(row[0])
+            row = conn.execute(
+                text(
+                    """
+                    SELECT peer_group_key FROM holding_style_snapshots
+                    WHERE wind_code = :code
+                    ORDER BY quarter DESC LIMIT 1
+                    """
+                ),
+                {"code": wind_code},
+            ).fetchone()
+        return (self._peer_group_key(str(row[0])) if row and row[0] is not None else None) or "unclassified"
+
+    @staticmethod
+    def _peer_group_key(identifier: str) -> Optional[str]:
+        from sqlalchemy import text
+
+        with get_engine().connect() as conn:
+            row = conn.execute(
+                text("""
+                    SELECT key FROM peer_groups
+                    WHERE key = :key OR CAST(id AS TEXT) = :key
+                    ORDER BY CASE WHEN key = :key THEN 0 ELSE 1 END
+                    LIMIT 1
+                """),
+                {"key": identifier},
+            ).fetchone()
+        return str(row[0]) if row else None
 
     @staticmethod
     def _peer_group_name(group_key: str) -> Optional[str]:

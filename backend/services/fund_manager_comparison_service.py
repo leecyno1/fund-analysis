@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from decimal import Decimal
+import math
 from typing import Any, Dict, Iterable, List, Optional
 from uuid import UUID
 
@@ -502,12 +503,13 @@ class FundManagerComparisonService:
     @staticmethod
     def _points(rows: List[Dict[str, Any]]) -> Dict[date, float]:
         points: Dict[date, float] = {}
-        for row in rows:
-            item_date = FundManagerComparisonService._date(row.get("date") or row.get("trade_date"))
-            value = FundManagerComparisonService._positive_number(
-                row.get("accum_nav") or row.get("adj_nav") or row.get("nav") or row.get("unit_nav")
-            )
-            if item_date and value is not None:
+        dated = [(FundManagerComparisonService._date(row.get("date") or row.get("trade_date")), row) for row in rows]
+        dated = [(item_date, row) for item_date, row in dated if item_date is not None]
+        field = next((key for key in ("accum_nav", "adj_nav", "nav", "unit_nav")
+                      if any(FundManagerComparisonService._positive_number(row.get(key)) is not None for _, row in dated)), "nav")
+        for item_date, row in dated:
+            value = FundManagerComparisonService._positive_number(row.get(field))
+            if value is not None:
                 points[item_date] = value
         return points
 
@@ -545,7 +547,7 @@ class FundManagerComparisonService:
             parsed = float(value)
         except (TypeError, ValueError):
             return None
-        return parsed if parsed > 0 else None
+        return parsed if math.isfinite(parsed) and parsed > 0 else None
 
     @staticmethod
     def _number(value: Any) -> Optional[float]:

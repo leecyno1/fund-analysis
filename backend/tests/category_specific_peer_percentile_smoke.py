@@ -168,7 +168,7 @@ def main() -> int:
         raise AssertionError(f"Money-market peers must compare seven-day yield: {money}")
     if "sharpe_ratio" in money.get("metrics", {}):
         raise AssertionError(f"Money-market peers must not rank unstable Sharpe proxies: {money}")
-    if money.get("peer_methodology_version") != "category_peer_percentiles_v6":
+    if money.get("peer_methodology_version") != "category_peer_percentiles_v7":
         raise AssertionError(f"Peer methodology must be versioned: {money}")
 
     print("OK peer percentiles use passive, enhanced and cash category evidence with explicit coverage")

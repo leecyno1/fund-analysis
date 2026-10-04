@@ -66,13 +66,42 @@ class ManagerTenurePeerRankingService:
                 "peer_group_name": peer_group_name or None,
             }
 
+        requested_days = max(1, (period_end - period_start).days)
+        expected_observations = max(2, round(requested_days / 365.25 * 252) + 1)
+        # 目标经理必须满足与同行相同的净值覆盖门禁，稀疏任期不得与稠密同行同场排名。
+        # 目标区间即请求区间，period_coverage 恒为 1.0，故只校验观测数与观测覆盖率。
+        # 门禁置于同行 SQL 之前：被拒时不必白跑一次 list_peer_period_nav_summaries。
+        raw_observations = tenure.get("metric_observations")
+        target_observations = int(raw_observations or 0)
+        target_observation_coverage = target_observations / expected_observations
+        if (
+            target_observations < self.MIN_OBSERVATIONS
+            or target_observation_coverage < self.MIN_OBSERVATION_COVERAGE
+        ):
+            return {
+                **self._unavailable("target_insufficient_coverage", target_code),
+                "peer_group_id": peer_group_id,
+                "peer_group_name": peer_group_name or None,
+                "minimum_peer_count": minimum_peer_count,
+                "metric_observations": target_observations,
+                "expected_observations": expected_observations,
+                "observation_coverage": round(target_observation_coverage, 4),
+                "minimum_observations": self.MIN_OBSERVATIONS,
+                "minimum_observation_coverage_ratio": self.MIN_OBSERVATION_COVERAGE,
+                "period_start": period_start.isoformat(),
+                "period_end": period_end.isoformat(),
+                # 区分"观测数元数据缺失"与"净值确实稀疏"：两者都 fail-closed，但原因不同。
+                "highlight_reason": (
+                    "target_observation_metadata_missing" if raw_observations is None
+                    else "target_tenure_nav_coverage_below_peer_threshold"
+                ),
+            }
+
         summaries = self.classification_repo.list_peer_period_nav_summaries(
             peer_group_id,
             period_start,
             period_end,
         )
-        requested_days = max(1, (period_end - period_start).days)
-        expected_observations = max(2, round(requested_days / 365.25 * 252) + 1)
         target_entity_id = str(tenure.get("entity_id") or context.get("entity_id") or "")
         valid_peers: List[Dict[str, Any]] = []
         nav_available_count = 0

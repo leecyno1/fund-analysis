@@ -160,8 +160,11 @@ def main() -> int:
         [],
         QUALITY,
     )
-    if index_from_fund_facts.get("overall_score") is None:
-        raise AssertionError(f"Fund facts should adapt into index methodology metrics: {index_from_fund_facts}")
+    if index_from_fund_facts.get("overall_score") is not None:
+        raise AssertionError(f"Legacy facts without window evidence must not produce an index score: {index_from_fund_facts}")
+    for metric in ("tracking_error", "tracking_difference"):
+        if f"core_metric:{metric}" not in index_from_fund_facts.get("missing_data", []):
+            raise AssertionError(f"Missing windowed tracking evidence must be explicit: {index_from_fund_facts}")
 
     enhanced = service.score_from_inputs(
         {

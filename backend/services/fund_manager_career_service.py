@@ -8,6 +8,7 @@ from __future__ import annotations
 from bisect import bisect_left
 from datetime import date, datetime, timedelta
 from decimal import Decimal
+import math
 from typing import Any, Dict, List, Optional, Tuple
 from uuid import UUID
 
@@ -382,12 +383,13 @@ class FundManagerCareerService:
     @staticmethod
     def _normalize_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         normalized: Dict[date, Dict[str, Any]] = {}
-        for row in rows:
-            item_date = FundManagerCareerService._parse_date(row.get("date") or row.get("trade_date"))
-            value = FundManagerCareerService._positive_number(
-                row.get("accum_nav") or row.get("adj_nav") or row.get("nav") or row.get("unit_nav")
-            )
-            if item_date is None or value is None:
+        dated = [(FundManagerCareerService._parse_date(row.get("date") or row.get("trade_date")), row) for row in rows]
+        dated = [(item_date, row) for item_date, row in dated if item_date is not None]
+        field = next((key for key in ("accum_nav", "adj_nav", "nav", "unit_nav")
+                      if any(FundManagerCareerService._positive_number(row.get(key)) is not None for _, row in dated)), "nav")
+        for item_date, row in dated:
+            value = FundManagerCareerService._positive_number(row.get(field))
+            if value is None:
                 continue
             normalized[item_date] = {
                 "date": item_date,
@@ -460,7 +462,7 @@ class FundManagerCareerService:
             parsed = float(value)
         except (TypeError, ValueError):
             return None
-        return parsed if parsed > 0 else None
+        return parsed if math.isfinite(parsed) and parsed > 0 else None
 
     @classmethod
     def _safe(cls, value: Any) -> Any:

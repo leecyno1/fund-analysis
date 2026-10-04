@@ -122,11 +122,15 @@ class ConsistentPerformanceNavTests(unittest.TestCase):
             "sharpe_ratio": round(mean_return * 252 / volatility, 4) if volatility else 0,
             "volatility": round(volatility, 4),
             "sortino": round((mean_return * 252 - 0.02) / downside, 4) if downside else 0,
-            "calmar_ratio": 0,
+            # 单调净值无回撤，calmar 未定义应为 None，不冒充 0。
+            "calmar_ratio": None,
             "win_rate_1y": round(sum(value > 0 for value in returns) / len(returns), 4),
         }
         for key, value in expected.items():
-            self.assertAlmostEqual(actual[key], value, places=4, msg=key)
+            if value is None:
+                self.assertIsNone(actual[key], msg=key)
+            else:
+                self.assertAlmostEqual(actual[key], value, places=4, msg=key)
 
     def test_adjusted_gaps_never_borrow_accumulated_nav(self):
         for gap in (0, 10, 19):

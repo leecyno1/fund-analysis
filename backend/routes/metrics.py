@@ -47,6 +47,8 @@ def recalculate_fund_metrics(
             window=window,
             source_snapshot_id=source_snapshot_id,
         )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except SQLAlchemyError as exc:
         raise HTTPException(status_code=503, detail=f"Metric store unavailable: {exc.__class__.__name__}") from exc
     if result.get("saved", 0) == 0:

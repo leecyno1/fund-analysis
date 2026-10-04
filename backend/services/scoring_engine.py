@@ -31,10 +31,10 @@ class ScoringRule:
     weight: float = 1.0
     higher_is_better: bool = True  # 指标是否越高越好
 
-    def normalize(self, value: float) -> float:
-        """归一化到 0-100 分"""
-        if value is None or math.isnan(value):
-            return 50.0
+    def normalize(self, value: float) -> Optional[float]:
+        """归一化到 0-100 分；缺失值返回 None，不冒充中性 50。"""
+        if value is None or value != value:  # None 或任意类型 NaN
+            return None
         if self.higher_is_better:
             if value <= self.min_val:
                 return 0.0
@@ -120,14 +120,12 @@ class FundScoringEngine:
         dimension_scores[ScoreDimension.STYLE] = self._score_style(style_data, metric_scores)
 
         # 综合评分
-        overall = sum(
-            score["weighted_score"] * self.DIMENSION_WEIGHTS[d]
-            for d, score in dimension_scores.items()
-        )
+        overall = self._overall_from_dimensions(dimension_scores)
 
         return {
-            "overall_score": round(overall, 2),
-            "overall_grade": self._get_grade(overall),
+            "overall_score": overall,
+            "overall_grade": self._get_grade(overall) if overall is not None else "insufficient_evidence",
+            "status": "insufficient_evidence" if overall is None else "ok",
             "dimension_scores": dimension_scores,
             "metric_scores": {k: (round(v, 2) if v is not None else None) for k, v in metric_scores.items()},
             "scoring_time": None,
@@ -149,22 +147,20 @@ class FundScoringEngine:
             ScoreDimension.RETURN: self._score_dimension(self.RETURN_RULES, adapted, metric_scores),
             ScoreDimension.RISK: self._score_dimension(self.RISK_RULES, adapted, metric_scores),
             ScoreDimension.RISK_ADJUSTED: self._score_dimension(self.RISK_ADJUSTED_RULES, adapted, metric_scores),
-            ScoreDimension.STYLE: {"score": 0.0, "weighted_score": 0.0, "count": 0, "status": "insufficient_evidence"},
+            ScoreDimension.STYLE: {"score": None, "weighted_score": 0.0, "count": 0,
+                                   "included_in_score": False, "status": "insufficient_evidence"},
         }
-        overall = sum(
-            score["weighted_score"] * self.DIMENSION_WEIGHTS[dimension]
-            for dimension, score in dimension_scores.items()
-        )
+        overall = self._overall_from_dimensions(dimension_scores)
         positive_factors, negative_factors = self._explain_snapshot_score(adapted, dimension_scores)
         source_snapshot_ids = sorted({
             item.get("source_snapshot_id") for item in panel if item.get("source_snapshot_id")
         })
         as_of_dates = sorted({str(item.get("as_of_date")) for item in panel if item.get("as_of_date")})
 
-        return build_scoring_output(
+        output = build_scoring_output(
             target_type="fund",
             target_id=fund_code,
-            total_score=overall,
+            total_score=overall if overall is not None else 0.0,
             dimensions=serialize_scoring_output(dimension_scores),
             metric_scores=metric_scores,
             positive_factors=positive_factors,
@@ -174,23 +170,57 @@ class FundScoringEngine:
             as_of_date=as_of_dates[-1] if as_of_dates else None,
             calculation_method="metric_snapshot",
         )
+        if overall is None:
+            # 无任何维度证据时不冒充 0 分，与专业评分一致标记证据不足。
+            output["overall_score"] = None
+            output["overall_grade"] = "insufficient_evidence"
+            output["status"] = "insufficient_evidence"
+        else:
+            output["status"] = "partial" if missing_data else "ok"
+        return output
 
     def _score_dimension(self, rules: List[ScoringRule], data: Dict, metric_scores: Dict) -> Dict:
         total_weight = 0.0
         weighted_sum = 0.0
+        present = 0
         for rule in rules:
             raw_val = data.get(rule.metric_name)
             normalized = rule.normalize(raw_val)
-            metric_scores[f"{rule.metric_name}_normalized"] = round(normalized, 2)
+            metric_scores[f"{rule.metric_name}_normalized"] = None if normalized is None else round(normalized, 2)
             metric_scores[f"{rule.metric_name}_raw"] = raw_val
+            if normalized is None:
+                continue
             weighted_sum += normalized * rule.weight
             total_weight += rule.weight
+            present += 1
 
+        if present == 0:
+            return {
+                "score": None,
+                "weighted_score": 0.0,
+                "count": 0,
+                "included_in_score": False,
+                "status": "insufficient_evidence",
+            }
+        average = round(weighted_sum / total_weight, 2)
         return {
-            "score": round(weighted_sum / total_weight, 2) if total_weight > 0 else 50.0,
-            "weighted_score": round(weighted_sum / total_weight, 2) if total_weight > 0 else 50.0,
-            "count": len(rules),
+            "score": average,
+            "weighted_score": average,
+            "count": present,
+            "included_in_score": True,
         }
+
+    def _overall_from_dimensions(self, dimension_scores: Dict[Any, Dict[str, Any]]) -> Optional[float]:
+        """总分只对有证据的维度按权重归一；全无证据返回 None，不冒充 0 或中性 50。"""
+        total_weight = 0.0
+        weighted = 0.0
+        for dimension, score in dimension_scores.items():
+            if not score.get("included_in_score"):
+                continue
+            weight = self.DIMENSION_WEIGHTS.get(dimension, 0.0)
+            weighted += score["weighted_score"] * weight
+            total_weight += weight
+        return round(weighted / total_weight, 2) if total_weight > 0 else None
 
     def _metric_panel_to_values(self, panel: List[Dict[str, Any]]) -> Dict[str, float]:
         values: Dict[str, float] = {}
@@ -252,7 +282,9 @@ class FundScoringEngine:
                 negative_factors.append("风险调整后收益较弱")
 
         for dimension, result in dimension_scores.items():
-            score = result.get("score", 50)
+            score = result.get("score")
+            if score is None:
+                continue
             name = dimension.value if hasattr(dimension, "value") else str(dimension)
             if score >= 80:
                 positive_factors.append(f"{name} 维度得分较高")
@@ -267,9 +299,10 @@ class FundScoringEngine:
         if style_data:
             if style_data.get("data_status") == "unavailable" or style_data.get("style_factors_status") == "unavailable":
                 return {
-                    "score": factor_stability_score,
-                    "weighted_score": factor_stability_score,
+                    "score": None,
+                    "weighted_score": 0.0,
                     "count": 0,
+                    "included_in_score": False,
                     "status": "insufficient_evidence",
                 }
             for value in style_data.values():
@@ -282,11 +315,16 @@ class FundScoringEngine:
                 # 标准差越小，风格越稳定
                 factor_stability_score = max(0, 100 - std_dev * 50)
 
-        return {
-            "score": round(factor_stability_score, 2),
-            "weighted_score": round(factor_stability_score, 2),
+        included = len(numeric_exposures) > 1
+        result = {
+            "score": round(factor_stability_score, 2) if included else None,
+            "weighted_score": round(factor_stability_score, 2) if included else 0.0,
             "count": len(numeric_exposures),
+            "included_in_score": included,
         }
+        if not included:
+            result["status"] = "insufficient_evidence"
+        return result
 
     def _get_grade(self, score: float) -> str:
         if score >= 90:

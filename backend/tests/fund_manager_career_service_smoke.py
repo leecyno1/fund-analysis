@@ -128,14 +128,12 @@ def main():
     assert payload["metrics"]["downside_risk"] is not None
     assert payload["metrics"]["sortino_ratio"] is not None
     assert payload["metrics"]["record_breaking_days_ratio"] == 0.75
-    assert payload["peer_ranking"]["status"] == "sufficient"
-    assert payload["peer_ranking"]["peer_group_name"] == "主动权益核心"
-    assert payload["peer_ranking"]["metrics"]["total_return"]["rank"] == 3
-    assert payload["peer_ranking"]["metrics"]["total_return"]["peer_count"] == 5
-    assert payload["peer_ranking"]["metrics"]["total_return"]["percentile"] == 50.0
-    assert "max_drawdown" in payload["peer_ranking"]["metrics"]
-    assert "sharpe_ratio" in payload["peer_ranking"]["metrics"]
-    assert "record_breaking_days_ratio" in payload["peer_ranking"]["metrics"]
+    # 目标仅 4 个净值点，低于与同行一致的覆盖门禁（MIN_OBSERVATIONS=20 / 观测覆盖率 0.80）：
+    # 稀疏目标不得与稠密同行同场排名。稠密目标的排名数学由 manager_tenure_peer_ranking_service_smoke 覆盖。
+    assert payload["peer_ranking"]["status"] == "target_insufficient_coverage", payload["peer_ranking"]
+    assert payload["peer_ranking"]["metrics"] == {}
+    assert payload["peer_ranking"]["minimum_observations"] == 20
+    assert payload["peer_ranking"]["observation_coverage"] < 0.80
     assert payload["events"][0]["date"] == "2026-02-01"
     assert payload["events"][0]["chart_date"] == "2026-02-02"
     assert payload["curve"][0]["fund_return"] == 0

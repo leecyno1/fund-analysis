@@ -163,6 +163,7 @@ class FundEvaluationHistoryService:
             "calculation_method": row.get("calculation_method"),
             "peer_group_id": row.get("peer_group_id"),
             "peer_group_name": row.get("peer_group_name"),
+            "peer_methodology_version": (snapshot.get("peer_context") or {}).get("peer_methodology_version"),
             "overall_score": row.get("overall_score"),
             "overall_grade": row.get("overall_grade"),
             "peer_rank": row.get("peer_rank"),
@@ -224,7 +225,12 @@ class FundEvaluationHistoryService:
         methodology_changed = current.get("methodology_version") != previous.get("methodology_version")
         calculation_method_changed = current.get("calculation_method") != previous.get("calculation_method")
         peer_group_changed = current.get("peer_group_id") != previous.get("peer_group_id")
-        comparable = not (methodology_changed or calculation_method_changed or peer_group_changed)
+        peer_methodology_changed = (
+            current.get("peer_methodology_version") != previous.get("peer_methodology_version")
+        )
+        comparable = not (
+            methodology_changed or calculation_method_changed or peer_group_changed or peer_methodology_changed
+        )
         raw_score_delta = cls._delta(current.get("overall_score"), previous.get("overall_score"))
         raw_rank_change = cls._delta(previous.get("peer_rank"), current.get("peer_rank"))
         raw_percentile_delta = cls._delta(current.get("peer_percentile"), previous.get("peer_percentile"))
@@ -236,6 +242,7 @@ class FundEvaluationHistoryService:
         comparison_status = (
             "methodology_changed" if methodology_changed or calculation_method_changed
             else "peer_group_changed" if peer_group_changed
+            else "peer_methodology_changed" if peer_methodology_changed
             else "comparable"
         )
         current_missing = set(str(item) for item in current.get("missing_items") or [])
@@ -265,6 +272,7 @@ class FundEvaluationHistoryService:
             "methodology_changed": methodology_changed,
             "calculation_method_changed": calculation_method_changed,
             "peer_group_changed": peer_group_changed,
+            "peer_methodology_changed": peer_methodology_changed,
         }
         change["summary"] = cls._change_summary(current, previous, change)
         return change
@@ -280,6 +288,8 @@ class FundEvaluationHistoryService:
             return "评价方法已更新，本次分数和名次与上次不宜直接比较。"
         if change["comparison_status"] == "peer_group_changed":
             return "专业同类组已变化，本次分数和名次与上次不宜直接比较。"
+        if change["comparison_status"] == "peer_methodology_changed":
+            return "同类排名方法已更新，本次同类名次与上次不宜直接比较。"
         if change.get("status_changed"):
             return f"评价状态由 {previous.get('status') or '待补'} 变为 {current.get('status') or '待补'}。"
 
@@ -327,25 +337,24 @@ class FundEvaluationHistoryService:
         configured_weight = 0.0
         covered_weight = 0.0
         missing_dimensions: List[str] = []
-        scored_count = 0
+        covered_count = 0.0
         for key, raw_dimension in dimensions.items():
             dimension = raw_dimension if isinstance(raw_dimension, dict) else {}
             weight = float(dimension.get("weight") or 0)
             configured_weight += weight
-            included = dimension.get("included_in_score")
-            if included is None:
-                included = dimension.get("score") is not None
-            if included:
-                covered_weight += weight
-                scored_count += 1
-            else:
+            included = dimension.get("score") is not None and dimension.get("included_in_score") is not False
+            # 旧快照无逐项覆盖信息，仅沿用其历史计分证据。
+            coverage = min(1.0, max(0.0, float(dimension.get("evidence_coverage", 1.0)))) if included else 0.0
+            covered_weight += weight * coverage
+            covered_count += coverage
+            if coverage < 1.0:
                 missing_dimensions.append(key)
 
         coverage_percent = None
         if configured_weight > 0:
             coverage_percent = round(min(1.0, covered_weight / configured_weight) * 100, 2)
         elif dimensions:
-            coverage_percent = round(scored_count / len(dimensions) * 100, 2)
+            coverage_percent = round(covered_count / len(dimensions) * 100, 2)
         return {
             "configured_weight": round(configured_weight, 6),
             "covered_weight": round(covered_weight, 6),
@@ -358,6 +367,7 @@ class FundEvaluationHistoryService:
         keys = (
             "wind_code", "evaluation_window", "as_of_date", "status",
             "methodology_version", "calculation_method", "peer_group_id",
+            "peer_methodology_version",
             "overall_score", "overall_grade", "peer_rank", "peer_count",
             "peer_percentile", "dimension_scores", "data_quality",
             "missing_items", "source_snapshot_ids",

@@ -14,6 +14,7 @@ from uuid import UUID
 import logging
 
 from lib.holding_weight_validation import fund_nav_weight, validate_fund_nav_weights
+from services.professional_scoring_service import ProfessionalScoringService
 from services.fund_manager_tenure_context import (
     enrich_profile_with_manager_tenure,
     resolve_manager_tenure_context,
@@ -79,6 +80,53 @@ def _as_float(value: Any) -> Optional[float]:
         return parsed if math.isfinite(parsed) else None
     except (TypeError, ValueError):
         return None
+
+
+_FUNDS_NUMERIC_SORT_FIELDS = {
+    "return": lambda fund: (fund.get("performance") or {}).get("annualized_return_1y"),
+    "sharpe": lambda fund: (fund.get("performance") or {}).get("sharpe_ratio"),
+    "rank": lambda fund: (fund.get("scoring") or {}).get("overall_score"),
+    "screening_score": lambda fund: fund.get("screening_score"),
+    "evidence_coverage": lambda fund: fund.get("evidence_coverage_score"),
+}
+
+
+def _risk_sort_value(fund: dict[str, Any]) -> Optional[float]:
+    risk = fund.get("risk_metrics") or {}
+    performance = fund.get("performance") or {}
+    for candidate in (
+        risk.get("max_drawdown_1y"),
+        risk.get("max_drawdown"),
+        performance.get("max_drawdown"),
+    ):
+        number = _as_float(candidate)
+        if number is not None:
+            return abs(number)
+    return None
+
+
+def _funds_sort_value(fund: dict[str, Any], sort_by: str) -> Optional[float]:
+    if sort_by == "risk":
+        return _risk_sort_value(fund)
+    accessor = _FUNDS_NUMERIC_SORT_FIELDS.get(sort_by)
+    return _as_float(accessor(fund)) if accessor else None
+
+
+def _sort_funds(funds: list[dict[str, Any]], sort_by: str, sort_order: str) -> None:
+    """按指标排序；缺失(None)统一排到末尾，真实 0.0 按 0 处理，不把“无证据”当最优或最劣。"""
+    reverse = sort_order == "desc"
+    if sort_by == "name":
+        funds.sort(key=lambda fund: str(fund.get("name") or ""), reverse=reverse)
+        return
+    if sort_by != "risk" and sort_by not in _FUNDS_NUMERIC_SORT_FIELDS:
+        return
+    sentinel = float("-inf") if reverse else float("inf")
+
+    def sort_key(fund: dict[str, Any]) -> float:
+        value = _funds_sort_value(fund, sort_by)
+        return sentinel if value is None else value
+
+    funds.sort(key=sort_key, reverse=reverse)
 
 
 def _cache_value(value: Any) -> str:
@@ -277,7 +325,12 @@ def _operation_status(name: str, raw_state: Any, sales_status: Optional[dict[str
     }
 
 
-def _rolling_metric_panel(panel: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+def _rolling_metric_panel(
+    panel: list[dict[str, Any]], benchmark_code: Optional[str] = None
+) -> dict[str, dict[str, Any]]:
+    # 先经 select_metric_panel 消解多基准歧义：有期望基准则取其相对指标，
+    # 多基准且无期望基准时丢弃歧义相对指标，绝对指标取最新 as_of_date，避免 last-wins 选错基准。
+    panel = ProfessionalScoringService.select_metric_panel(panel, benchmark_code)
     fields = {
         "total_return",
         "annualized_return",
@@ -641,17 +694,7 @@ def list_funds(
                 logger.warning(f"Rolling metrics unavailable for {fund.get('wind_code')}: {exc}")
                 fund["rolling_metrics"] = {}
 
-        sort_keys = {
-            "return": lambda x: x.get("performance", {}).get("annualized_return_1y") or 0,
-            "risk": lambda x: abs(x.get("risk_metrics", {}).get("max_drawdown_1y") or x.get("risk_metrics", {}).get("max_drawdown") or x.get("performance", {}).get("max_drawdown") or 0),
-            "sharpe": lambda x: x.get("performance", {}).get("sharpe_ratio") or 0,
-            "name": lambda x: x.get("name", ""),
-            "rank": lambda x: x.get("scoring", {}).get("overall_score", 0),
-            "screening_score": lambda x: x.get("screening_score") or 0,
-            "evidence_coverage": lambda x: x.get("evidence_coverage_score") or 0,
-        }
-        if sort_by in sort_keys:
-            funds.sort(key=sort_keys[sort_by], reverse=(sort_order == "desc"))
+        _sort_funds(funds, sort_by, sort_order)
 
         result = _clean_nan({
             "total": db_result.get("total", 0),
@@ -694,14 +737,7 @@ def list_funds(
             except Exception as e:
                 logger.error(f"Error processing fund {code}: {e}")
 
-        sort_keys = {
-            "return": lambda x: x.get("performance", {}).get("annualized_return_1y") or 0,
-            "risk": lambda x: abs(x.get("risk_metrics", {}).get("max_drawdown_1y") or x.get("risk_metrics", {}).get("max_drawdown") or x.get("performance", {}).get("max_drawdown") or 0),
-            "sharpe": lambda x: x.get("performance", {}).get("sharpe_ratio") or 0,
-            "name": lambda x: x.get("name", ""),
-        }
-        if sort_by in sort_keys:
-            funds.sort(key=sort_keys[sort_by], reverse=(sort_order == "desc"))
+        _sort_funds(funds, sort_by, sort_order)
 
         result = _clean_nan({"total": list_result.get("total", 0), "page": page, "page_size": page_size, "funds": funds, "source": "tushare"})
         cache.set(cache_key, result, TTL.SHORT)
@@ -1232,7 +1268,6 @@ async def get_fund_detail(wind_code: str):
     """获取基金详细信息"""
     from services.cache_service import get_cache, CacheKey, TTL
     from services.data_quality_service import DataQualityService
-    from services.professional_scoring_service import ProfessionalScoringService
     from service_registry import get_data_service, get_scoring_engine
     from repositories import get_fund_repo, get_manager_repo, get_metric_snapshot_repo, get_research_profile_repo
 

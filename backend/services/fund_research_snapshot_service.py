@@ -15,6 +15,7 @@ from services.manager_tenure_coverage import (
 )
 from services.fund_scale_trend_service import FundScaleTrendService
 from services.performance_attribution_service import PerformanceAttributionService
+from services.professional_scoring_service import ProfessionalScoringService
 
 
 class FundResearchSnapshotService:
@@ -175,7 +176,9 @@ class FundResearchSnapshotService:
         )
         research_profile = dict(context.get("profile") or {})
         classification = evaluation.get("classification") or context.get("standardized_classification") or {}
-        rolling_metrics = self.project_rolling_metrics(context.get("metric_panel") or [])
+        rolling_metrics = self.project_rolling_metrics(
+            context.get("metric_panel") or [], classification.get("benchmark_code")
+        )
         multi_period_evidence = self.project_multi_period_evidence(
             rolling_metrics,
             str(
@@ -2227,7 +2230,11 @@ class FundResearchSnapshotService:
         return self._manager_tenure_peer_ranking_service
 
     @staticmethod
-    def project_rolling_metrics(panel: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    def project_rolling_metrics(
+        panel: List[Dict[str, Any]], benchmark_code: Optional[str] = None
+    ) -> Dict[str, Dict[str, Any]]:
+        # 先经 select_metric_panel 消解多基准歧义，避免相对指标 last-wins 选错基准、as_of_date 被覆盖。
+        panel = ProfessionalScoringService.select_metric_panel(panel, benchmark_code)
         result: Dict[str, Dict[str, Any]] = {}
         for item in panel:
             window = item.get("metric_window")

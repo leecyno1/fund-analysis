@@ -331,12 +331,27 @@ class FundClassificationRepo:
                     f.raw_data,
                     fe.id AS entity_id,
                     fe.canonical_code,
-                    fsc.share_class
+                    fsc.share_class,
+                    benchmark.benchmark_code
                 FROM peer_group_members pgm
                 JOIN peer_groups pg ON pg.id = pgm.peer_group_id
                 JOIN fund_entities fe ON fe.id = pgm.entity_id
                 JOIN fund_share_classes fsc ON fsc.entity_id = fe.id AND fsc.status = 'active'
                 JOIN funds f ON f.wind_code = fsc.wind_code
+                LEFT JOIN LATERAL (
+                    SELECT bm.benchmark_code
+                    FROM benchmark_mappings bm
+                    WHERE bm.entity_id = fe.id
+                      AND bm.status = 'active'
+                      AND (bm.effective_from IS NULL OR bm.effective_from <= CURRENT_DATE)
+                      AND (bm.effective_to IS NULL OR bm.effective_to >= CURRENT_DATE)
+                    ORDER BY
+                        (bm.peer_group_id = pg.id) DESC NULLS LAST,
+                        bm.updated_at DESC,
+                        bm.confidence DESC NULLS LAST,
+                        bm.effective_from DESC NULLS LAST
+                    LIMIT 1
+                ) benchmark ON TRUE
                 WHERE pgm.peer_group_id = :peer_group_id
                   AND pgm.role <> 'excluded'
                   AND fe.lifecycle_stage = 'active'
@@ -1214,8 +1229,8 @@ class FundClassificationRepo:
                     pg.key AS standardized_peer_group_key,
                     pg.name AS standardized_peer_group_name,
                     pg.minimum_peer_count,
-                    pg.benchmark_code,
-                    pg.benchmark_name,
+                    benchmark.benchmark_code,
+                    benchmark.benchmark_name,
                     sf.style_tags AS classification_style_tags,
                     {self._memo_style_tags_sql()} AS memo_style_tags,
                     {self._holding_style_tags_sql()} AS holding_style_tags,
@@ -1230,6 +1245,20 @@ class FundClassificationRepo:
                 LEFT JOIN strategy_families sf ON sf.id = fe.strategy_family_id
                 JOIN fund_share_classes fsc ON fsc.entity_id = fe.id AND fsc.status = 'active'
                 JOIN funds f ON f.wind_code = fsc.wind_code
+                LEFT JOIN LATERAL (
+                    SELECT bm.benchmark_code, bm.benchmark_name
+                    FROM benchmark_mappings bm
+                    WHERE bm.entity_id = fe.id
+                      AND bm.status = 'active'
+                      AND (bm.effective_from IS NULL OR bm.effective_from <= CURRENT_DATE)
+                      AND (bm.effective_to IS NULL OR bm.effective_to >= CURRENT_DATE)
+                    ORDER BY
+                        (bm.peer_group_id = pg.id) DESC NULLS LAST,
+                        bm.updated_at DESC,
+                        bm.confidence DESC NULLS LAST,
+                        bm.effective_from DESC NULLS LAST
+                    LIMIT 1
+                ) benchmark ON TRUE
                 {self._style_evidence_join_sql()}
                 LEFT JOIN LATERAL (
                     SELECT

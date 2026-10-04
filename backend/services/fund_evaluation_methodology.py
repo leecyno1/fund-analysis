@@ -6,8 +6,8 @@ from typing import Any, Dict, List, Optional, Tuple
 class FundEvaluationMethodology:
     """集中管理类别专属证据门禁、维度、阈值和同类代理评分。"""
 
-    METHODOLOGY_VERSION = "category_evaluation_methodology_v6"
-    PEER_METHODOLOGY_VERSION = "category_peer_percentiles_v6"
+    METHODOLOGY_VERSION = "category_evaluation_methodology_v7"
+    PEER_METHODOLOGY_VERSION = "category_peer_percentiles_v7"
 
     PROFILE_NAMES = {
         "active_equity": "主动权益基金评价",
@@ -526,7 +526,7 @@ class FundEvaluationMethodology:
             "risk_adjusted": self._risk_adjusted_dimension(metrics, selected_window),
             "consistency": self._consistency_dimension(metrics, selected_window),
             "manager_tenure": self._manager_dimension(metrics, profile),
-            "data_quality": self._dimension(quality.get("score", 0), ["数据质量评分进入综合修正"]),
+            "data_quality": self._average_dimension({"quality:score": quality.get("score")}, ["数据质量评分进入综合修正"]),
         }
         missing = []
         for window in [selected_window, "manager_tenure"]:
@@ -590,7 +590,7 @@ class FundEvaluationMethodology:
                 self._normalize_log(aum, aum_low, aum_high),
                 ["基金规模作为流动性和运营可持续性的代理证据"],
             ),
-            "data_quality": self._dimension(quality.get("score", 0), ["数据质量评分进入综合修正"]),
+            "data_quality": self._average_dimension({"quality:score": quality.get("score")}, ["数据质量评分进入综合修正"]),
         }
         missing = [f"quality:{issue}" for issue in quality.get("issues", [])]
         return self._finalize(
@@ -666,7 +666,7 @@ class FundEvaluationMethodology:
                 self._normalize_log(aum, 1.0, 100.0),
                 ["基金规模作为流动性和策略可持续性的代理证据"],
             ),
-            "data_quality": self._dimension(quality.get("score", 0), ["数据质量评分进入综合修正"]),
+            "data_quality": self._average_dimension({"quality:score": quality.get("score")}, ["数据质量评分进入综合修正"]),
         }
         missing = [f"quality:{issue}" for issue in quality.get("issues", [])]
         return self._finalize(
@@ -728,31 +728,27 @@ class FundEvaluationMethodology:
                 ]),
                 income_evidence,
             ),
-            "capital_preservation": self._dimension(
-                self._average([
-                    self._normalize(max_drawdown, -0.01, 0.0),
-                    self._normalize(volatility, 0.02, 0.001, higher_is_better=False),
-                ]),
+            "capital_preservation": self._average_dimension(
+                {
+                    f"optional_metric:{selected_window}.max_drawdown": self._normalize(max_drawdown, -0.01, 0.0),
+                    f"optional_metric:{selected_window}.annualized_volatility": self._normalize(volatility, 0.02, 0.001, higher_is_better=False),
+                },
                 ["最大回撤与波动衡量净值稳定和本金保护特征"],
             ),
-            "income_stability": self._dimension(
-                self._average([
-                    self._normalize(stability_gap, 0.02, 0.0, higher_is_better=False),
-                    self._normalize(positive_ratio, 0.95, 1.0),
-                ]),
+            "income_stability": self._average_dimension(
+                {
+                    "optional_metric:income_yield_gap": self._normalize(stability_gap, 0.02, 0.0, higher_is_better=False),
+                    f"optional_metric:{selected_window}.positive_return_ratio": self._normalize(positive_ratio, 0.95, 1.0),
+                },
                 ["七日年化与一年收益差异、正收益比例衡量收益稳定性"],
             ),
             "scale_liquidity": self._dimension(
                 self._normalize_log(aum, 5.0, 300.0),
                 ["基金规模作为流动性管理和赎回承接能力的代理证据"],
             ),
-            "data_quality": self._dimension(quality.get("score", 0), ["数据质量评分进入综合修正"]),
+            "data_quality": self._average_dimension({"quality:score": quality.get("score")}, ["数据质量评分进入综合修正"]),
         }
         missing = []
-        if volatility is None:
-            missing.append("optional_metric:1y.annualized_volatility")
-        if positive_ratio is None:
-            missing.append("optional_metric:1y.positive_return_ratio")
         if benchmark_rate is None:
             missing.append("optional_metric:latest.benchmark_annualized_rate")
         missing.extend(f"quality:{issue}" for issue in quality.get("issues", []))
@@ -775,24 +771,30 @@ class FundEvaluationMethodology:
         selected_window: str = "1y",
     ) -> Dict[str, Any]:
         total_score = 0.0
+        missing_data = list(missing_data)
+        for key, dimension in dimensions.items():
+            included = dimension.get("score") is not None and dimension.get("included_in_score") is not False
+            dimension["included_in_score"] = included
+            if not included and not dimension.get("missing_data"):
+                dimension["missing_data"] = [f"dimension:{key}"]
+            missing_data.extend(dimension.get("missing_data") or [])
         included_weight = sum(
             weight
             for key, weight in weights.items()
-            if dimensions[key].get("included_in_score") is not False
+            if dimensions[key]["included_in_score"]
         )
         for key, weight in weights.items():
             dimensions[key]["weight"] = weight
-            included = dimensions[key].get("included_in_score") is not False
+            included = dimensions[key]["included_in_score"]
             effective_weight = weight / included_weight if included and included_weight else 0.0
-            dimensions[key]["included_in_score"] = included
             dimensions[key]["effective_weight"] = round(effective_weight, 6)
             score = dimensions[key].get("score")
             dimensions[key]["weighted_score"] = (
                 round(float(score) * effective_weight, 2)
-                if included and score is not None
+                if included
                 else 0.0
             )
-            if included and score is not None:
+            if included:
                 total_score += float(score) * effective_weight
         return {
             "status": "partial" if missing_data else "ok",
@@ -832,10 +834,14 @@ class FundEvaluationMethodology:
         selected_window: str,
     ) -> Dict[str, Any]:
         low, high = profile["return_range"]
-        values = [self._normalize(metrics.get(selected_window, {}).get("annualized_return"), low, high)]
+        values = {
+            f"optional_metric:{selected_window}.annualized_return": self._normalize(
+                metrics.get(selected_window, {}).get("annualized_return"), low, high,
+            ),
+        }
         if selected_window != "3y":
-            values.append(self._normalize(metrics.get("3y", {}).get("annualized_return"), low, high))
-        return self._dimension(self._average(values), [f"{selected_window}/3y 年化收益进入收益能力评分"])
+            values["optional_metric:3y.annualized_return"] = self._normalize(metrics.get("3y", {}).get("annualized_return"), low, high)
+        return self._average_dimension(values, [f"{selected_window}/3y 年化收益进入收益能力评分"])
 
     def _risk_dimension(
         self,
@@ -845,31 +851,33 @@ class FundEvaluationMethodology:
     ) -> Dict[str, Any]:
         drawdown_low, drawdown_high = profile["drawdown_range"]
         volatility_high, volatility_low = profile["volatility_range"]
-        values = [
-            self._normalize(metrics.get(selected_window, {}).get("max_drawdown"), drawdown_low, drawdown_high),
-            self._normalize(
+        values = {
+            f"optional_metric:{selected_window}.max_drawdown": self._normalize(
+                metrics.get(selected_window, {}).get("max_drawdown"), drawdown_low, drawdown_high,
+            ),
+            f"optional_metric:{selected_window}.annualized_volatility": self._normalize(
                 metrics.get(selected_window, {}).get("annualized_volatility"),
                 volatility_high,
                 volatility_low,
                 higher_is_better=False,
             ),
-        ]
+        }
         if selected_window != "3y":
-            values.append(self._normalize(metrics.get("3y", {}).get("max_drawdown"), drawdown_low, drawdown_high))
-        return self._dimension(self._average(values), ["所选窗口最大回撤、年化波动和长期回撤进入风险控制评分"])
+            values["optional_metric:3y.max_drawdown"] = self._normalize(metrics.get("3y", {}).get("max_drawdown"), drawdown_low, drawdown_high)
+        return self._average_dimension(values, ["所选窗口最大回撤、年化波动和长期回撤进入风险控制评分"])
 
     def _risk_adjusted_dimension(
         self,
         metrics: Dict[str, Dict[str, float]],
         selected_window: str,
     ) -> Dict[str, Any]:
-        values = [
-            self._normalize(metrics.get(selected_window, {}).get("sharpe_ratio"), 0, 2.5),
-            self._normalize(metrics.get(selected_window, {}).get("calmar_ratio"), 0, 4),
-        ]
+        values = {
+            f"optional_metric:{selected_window}.sharpe_ratio": self._normalize(metrics.get(selected_window, {}).get("sharpe_ratio"), 0, 2.5),
+            f"optional_metric:{selected_window}.calmar_ratio": self._normalize(metrics.get(selected_window, {}).get("calmar_ratio"), 0, 4),
+        }
         if selected_window != "3y":
-            values.append(self._normalize(metrics.get("3y", {}).get("sharpe_ratio"), 0, 2.5))
-        return self._dimension(self._average(values), ["所选窗口夏普、Calmar 和长期夏普进入风险调整收益评分"])
+            values["optional_metric:3y.sharpe_ratio"] = self._normalize(metrics.get("3y", {}).get("sharpe_ratio"), 0, 2.5)
+        return self._average_dimension(values, ["所选窗口夏普、Calmar 和长期夏普进入风险调整收益评分"])
 
     def _consistency_dimension(
         self,
@@ -878,30 +886,26 @@ class FundEvaluationMethodology:
     ) -> Dict[str, Any]:
         selected = metrics.get(selected_window, {})
         three_year = metrics.get("3y", {})
-        return_gap = None
-        if selected_window != "3y" and selected.get("annualized_return") is not None and three_year.get("annualized_return") is not None:
-            return_gap = abs(selected["annualized_return"] - three_year["annualized_return"])
-        return self._dimension(self._average([
-            self._normalize(selected.get("positive_return_ratio"), 0.45, 0.65),
-            self._normalize(return_gap, 0.12, 0.01, higher_is_better=False),
-        ]), ["所选窗口胜率和长期收益差异进入一致性评分"])
+        values = {
+            f"optional_metric:{selected_window}.positive_return_ratio": self._normalize(selected.get("positive_return_ratio"), 0.45, 0.65),
+        }
+        if selected_window != "3y":
+            # 三年窗口不能以自身收益差为零冒充长期一致性证据。
+            return_gap = None
+            if selected.get("annualized_return") is not None and three_year.get("annualized_return") is not None:
+                return_gap = abs(selected["annualized_return"] - three_year["annualized_return"])
+            values["optional_metric:3y.annualized_return"] = self._normalize(return_gap, 0.12, 0.01, higher_is_better=False)
+        return self._average_dimension(values, ["所选窗口胜率和长期收益差异进入一致性评分"])
 
     def _manager_dimension(self, metrics: Dict[str, Dict[str, float]], profile: Dict[str, Any]) -> Dict[str, Any]:
         tenure = metrics.get("manager_tenure", {})
-        if not tenure:
-            return {
-                "score": None,
-                "weighted_score": 0.0,
-                "included_in_score": False,
-                "evidence": ["现任经理完整任期净值证据不足，该维度不计分"],
-            }
         low, high = profile["return_range"]
         drawdown_low, drawdown_high = profile["drawdown_range"]
-        return self._dimension(self._average([
-            self._normalize(tenure.get("annualized_return"), low, high),
-            self._normalize(tenure.get("max_drawdown"), drawdown_low, drawdown_high),
-            self._normalize(tenure.get("tenure_days"), 180, 900),
-        ]), ["现任经理任期内收益、回撤和任期长度进入评分"])
+        return self._average_dimension({
+            "optional_metric:manager_tenure.annualized_return": self._normalize(tenure.get("annualized_return"), low, high),
+            "optional_metric:manager_tenure.max_drawdown": self._normalize(tenure.get("max_drawdown"), drawdown_low, drawdown_high),
+            "optional_metric:manager_tenure.tenure_days": self._normalize(tenure.get("tenure_days"), 180, 900),
+        }, ["现任经理任期内收益、回撤和任期长度进入评分"] if tenure else ["现任经理完整任期净值证据不足，该维度不计分"])
 
     def _metric_scores(self, metrics: Dict[str, Dict[str, float]]) -> Dict[str, Any]:
         allowed = {
@@ -930,12 +934,24 @@ class FundEvaluationMethodology:
                 return value
         return None
 
+    def _average_dimension(self, inputs: Dict[str, Optional[float]], evidence: List[str]) -> Dict[str, Any]:
+        """Average available components; disclose gaps without changing score weights."""
+        dimension = self._dimension(self._average(list(inputs.values())), evidence)
+        if inputs:
+            missing = [path for path, score in inputs.items() if score is None]
+            dimension["missing_data"] = missing
+            dimension["evidence_coverage"] = (len(inputs) - len(missing)) / len(inputs)
+        return dimension
+
     def _dimension(self, score: Optional[float], evidence: List[str]) -> Dict[str, Any]:
-        effective_score = 50.0 if score is None else score
+        effective_score = round(max(0.0, min(100.0, score)), 2) if score is not None else None
         return {
-            "score": round(max(0.0, min(100.0, effective_score)), 2),
-            "weighted_score": round(max(0.0, min(100.0, effective_score)), 2),
+            "score": effective_score,
+            "weighted_score": effective_score if effective_score is not None else 0.0,
+            "included_in_score": effective_score is not None,
             "evidence": evidence,
+            "missing_data": [] if effective_score is not None else ["dimension:no_valid_inputs"],
+            "evidence_coverage": 1.0 if effective_score is not None else 0.0,
         }
 
     def _normalize(
@@ -964,9 +980,9 @@ class FundEvaluationMethodology:
             return None
         return self._normalize(math.log10(value), math.log10(low), math.log10(high))
 
-    def _average(self, values: List[Optional[float]]) -> float:
+    def _average(self, values: List[Optional[float]]) -> Optional[float]:
         valid = [value for value in values if value is not None]
-        return sum(valid) / len(valid) if valid else 50.0
+        return sum(valid) / len(valid) if valid else None
 
     def _number(self, value: Any) -> Optional[float]:
         if value is None:

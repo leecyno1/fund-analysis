@@ -4,8 +4,9 @@
 基于基金分类、滚动指标、现任经理任期指标和数据质量，按评价口径输出可解释评分。
 分类证据不足或尚未建立专属评价方法时显式停止，禁止默认套用主动权益评分。
 """
-from datetime import date
+from datetime import date, datetime, timezone
 from decimal import Decimal
+import math
 from typing import Any, Dict, List, Optional
 
 from services.data_quality_service import DataQualityService
@@ -96,6 +97,7 @@ class ProfessionalScoringService:
             )
             result["fof_lookthrough"] = fof_lookthrough
             return result
+        panel = self.select_metric_panel(panel, classification.get("benchmark_code") or fund.get("benchmark_code"))
         metrics = self._merge_metric_windows(
             self._metrics_by_window(panel),
             self._fund_fallback_metrics(fund),
@@ -255,7 +257,61 @@ class ProfessionalScoringService:
             "investment_decision": "excluded",
         }
 
+    @staticmethod
+    def select_metric_panel(
+        panel: List[Dict[str, Any]],
+        benchmark_code: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        relative_metrics = {
+            "benchmark_return", "excess_return", "tracking_error", "information_ratio",
+            "active_return_mean", "tracking_difference", "absolute_tracking_difference",
+            "alpha", "beta", "benchmark_annualized_rate", "benchmark_yield_spread",
+        }
+        expected = str(benchmark_code or "").strip()
+        window_benchmarks: Dict[str, set] = {}
+        for item in panel:
+            if item.get("metric_name") in relative_metrics:
+                window = item.get("metric_window") or "latest"
+                window_benchmarks.setdefault(window, set()).add(str(item.get("benchmark_code") or "").strip())
+
+        grouped: Dict[tuple, list] = {}
+        for item in panel:
+            window = item.get("metric_window") or "latest"
+            name = item.get("metric_name")
+            if not name:
+                continue
+            if name in relative_metrics:
+                if expected:
+                    if str(item.get("benchmark_code") or "").strip() != expected:
+                        continue
+                elif len(window_benchmarks[window]) > 1:
+                    continue
+            updated = item.get("updated_at")
+            updated_at = datetime.fromisoformat(str(updated)) if updated else datetime.min
+            updated_at = (updated_at.replace(tzinfo=timezone.utc) if updated_at.tzinfo is None
+                          else updated_at.astimezone(timezone.utc))
+            priority = (str(item.get("as_of_date") or "")[:10], updated_at)
+            grouped.setdefault((window, name), []).append((priority, item))
+
+        selected = []
+        for entries in grouped.values():
+            newest = max(priority for priority, _ in entries)
+            candidates = [item for priority, item in entries if priority == newest]
+            values = []
+            for item in candidates:
+                value = item.get("metric_value")
+                try:
+                    number = float(value) if not isinstance(value, bool) else math.nan
+                except (TypeError, ValueError, OverflowError):
+                    number = math.nan
+                values.append(number)
+            # 同时点的冲突或空值不能靠记录顺序裁决，也不能复活旧证据。
+            if all(math.isfinite(value) for value in values) and len(set(values)) == 1:
+                selected.extend(candidates)
+        return selected
+
     def _metrics_by_window(self, panel: List[Dict[str, Any]]) -> Dict[str, Dict[str, float]]:
+        panel = self.select_metric_panel(panel)
         metrics: Dict[str, Dict[str, float]] = {}
         partial_manager_tenure = any(
             item.get("metric_window") == "manager_tenure"
@@ -291,9 +347,7 @@ class ProfessionalScoringService:
 
     def _fund_fallback_metrics(self, fund: Dict[str, Any]) -> Dict[str, Dict[str, float]]:
         performance = fund.get("performance_data") or fund.get("performance") or {}
-        risk = fund.get("risk_metrics") or {}
         performance = performance if isinstance(performance, dict) else {}
-        risk = risk if isinstance(risk, dict) else {}
         raw_data = fund.get("raw_data") or {}
         info = raw_data.get("info") if isinstance(raw_data, dict) else {}
         info = info if isinstance(info, dict) else {}
@@ -322,28 +376,7 @@ class ProfessionalScoringService:
         if management_fee is not None or custodian_fee is not None:
             expense_ratio = (management_fee or 0.0) + (custodian_fee or 0.0)
 
-        max_drawdown = self._first_number(risk, ["max_drawdown_1y", "max_drawdown_2y", "max_drawdown"])
-        if max_drawdown is None:
-            max_drawdown = self._first_number(performance, ["max_drawdown_1y", "max_drawdown"])
-        annualized_volatility = self._first_number(
-            risk,
-            ["annualized_volatility_1y", "volatility_1y", "volatility"],
-        )
-        if annualized_volatility is None:
-            annualized_volatility = self._first_number(performance, ["annualized_volatility_1y", "volatility"])
-
-        one_year = {
-            "annualized_return": self._first_number(performance, ["annualized_return_1y", "return_1y", "annual_return"]),
-            "max_drawdown": max_drawdown,
-            "annualized_volatility": annualized_volatility,
-            "sharpe_ratio": self._first_number(performance, ["sharpe_ratio", "sharpe"]),
-            "calmar_ratio": self._first_number(performance, ["calmar_ratio"]),
-            "positive_return_ratio": self._first_number(performance, ["positive_return_ratio", "win_rate_1y"]),
-            "tracking_error": self._first_number(risk, ["tracking_error"]),
-            "information_ratio": self._first_number(risk, ["information_ratio"]),
-            "tracking_difference": self._first_number(performance, ["tracking_difference"]),
-            "excess_return": self._first_number(performance, ["excess_return"]),
-        }
+        # 旧业绩 JSON 不保留逐指标周期及基准，不能替代快照证据。
         latest = {
             "expense_ratio": expense_ratio,
             "aum": self._first_number(fund, ["total_asset", "aum"]),
@@ -352,11 +385,8 @@ class ProfessionalScoringService:
                 ["seven_day_annualized_yield", "yield_7d", "seven_day_yield"],
             ),
             "income_per_10000": self._first_number(performance, ["income_per_10000", "income_10k"]),
-            "benchmark_annualized_rate": self._first_number(performance, ["benchmark_annualized_rate"]),
-            "benchmark_yield_spread": self._first_number(performance, ["benchmark_yield_spread"]),
         }
         return {
-            "1y": {key: value for key, value in one_year.items() if value is not None},
             "latest": {key: value for key, value in latest.items() if value is not None},
         }
 

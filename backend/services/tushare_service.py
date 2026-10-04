@@ -424,10 +424,14 @@ class TushareDataService:
                     previous_accum_nav = accum_nav
                 result.append({
                     "date": date_str,
+                    "announcement_date": None if pd.isna(row.get("ann_date")) else self._format_date_value(row.get("ann_date")),
                     "nav": unit_nav,
                     "unit_nav": unit_nav,
                     "accum_nav": accum_nav,
                     "adj_nav": adjusted_nav,
+                    "adj_nav_source": (
+                        "tushare.fund_adj.adj_factor" if adj_nav_from_factor else "tushare.fund_nav.adj_nav"
+                    ) if adjusted_nav is not None else None,
                     "reported_accum_nav": _as_float(row.get("accum_nav")),
                     "metric_nav_source": metric_nav_lineage,
                     "daily_return": daily_return,
@@ -871,44 +875,54 @@ class TushareDataService:
             if len(nav_1y) >= 2:
                 nav_start = float(nav_1y.iloc[0]["metric_nav"])
                 nav_end = float(nav_1y.iloc[-1]["metric_nav"])
-                ret_1y = (nav_end / nav_start - 1) if nav_start > 0 else 0
+                ret_1y = (nav_end / nav_start - 1) if nav_start > 0 else None
+                peak_1y = nav_1y["metric_nav"].cummax()
+                drawdown_1y = (nav_1y["metric_nav"] - peak_1y) / peak_1y
+                max_dd_1y = float(drawdown_1y.min())
             else:
-                ret_1y = 0
+                ret_1y = None
+                max_dd_1y = None
+            returns_1y = nav_1y["metric_nav"].pct_change(fill_method=None).dropna()
 
             if len(nav_df) >= 2:
                 nav_start_3y = float(nav_df.iloc[0]["metric_nav"])
                 nav_end_3y = float(nav_df.iloc[-1]["metric_nav"])
-                ret_3y = (nav_end_3y / nav_start_3y - 1) if nav_start_3y > 0 else 0
+                ret_3y = (nav_end_3y / nav_start_3y - 1) if nav_start_3y > 0 else None
                 years = (datetime.strptime(end_date, "%Y%m%d") - datetime.strptime(nav_df.iloc[0]["nav_date"], "%Y%m%d")).days / 365
-                ret_3y_annualized = ((1 + ret_3y) ** (1 / max(years, 0.1)) - 1) if years > 0 else 0
+                ret_3y_annualized = ((1 + ret_3y) ** (1 / max(years, 0.1)) - 1) if (ret_3y is not None and years > 0) else None
             else:
-                ret_3y_annualized = 0
+                ret_3y_annualized = None
 
             peak = nav_df["metric_nav"].cummax()
             drawdown = (nav_df["metric_nav"] - peak) / peak
-            max_dd = drawdown.min()
+            max_dd = float(drawdown.min()) if len(nav_df) >= 2 else None
 
             daily_returns = nav_df["metric_nav"].pct_change(fill_method=None).dropna()
             if len(daily_returns) > 0:
                 annual_return = daily_returns.mean() * 252
                 annual_vol = daily_returns.std() * (252 ** 0.5)
-                sharpe = (annual_return / annual_vol) if annual_vol > 0 else 0
+                sharpe = (annual_return / annual_vol) if annual_vol > 0 else None
                 volatility = annual_vol
                 sortino = MetricFactory().calculate_downside_metrics(daily_returns.tolist())["sortino_ratio"]
             else:
-                sharpe = 0
-                volatility = 0
-                sortino = 0
+                sharpe = None
+                volatility = None
+                sortino = None
+
+            # calmar 用同窗口（近一年）收益与回撤并保留符号，亏损不得被 abs 成正；
+            # win_rate_1y 用近一年窗口，历史不足返回 None 而非填 0。
+            calmar = (ret_1y / abs(max_dd_1y)) if (ret_1y is not None and max_dd_1y is not None and max_dd_1y != 0) else None
+            win_rate_1y = (float((returns_1y > 0).sum()) / len(returns_1y)) if len(returns_1y) > 0 else None
 
             performance = {
-                "annualized_return_1y": round(ret_1y, 4),
-                "annualized_return_3y": round(ret_3y_annualized, 4),
-                "max_drawdown": round(max_dd, 4),
-                "sharpe_ratio": round(sharpe, 4),
-                "volatility": round(volatility, 4),
-                "sortino": round(sortino, 4),
-                "calmar_ratio": round(abs(ret_1y / max_dd), 4) if max_dd != 0 else 0,
-                "win_rate_1y": round((daily_returns > 0).sum() / len(daily_returns), 4) if len(daily_returns) > 0 else 0,
+                "annualized_return_1y": round(ret_1y, 4) if ret_1y is not None else None,
+                "annualized_return_3y": round(ret_3y_annualized, 4) if ret_3y_annualized is not None else None,
+                "max_drawdown": round(max_dd, 4) if max_dd is not None else None,
+                "sharpe_ratio": round(sharpe, 4) if sharpe is not None else None,
+                "volatility": round(volatility, 4) if volatility is not None else None,
+                "sortino": round(sortino, 4) if sortino is not None else None,
+                "calmar_ratio": round(calmar, 4) if calmar is not None else None,
+                "win_rate_1y": round(win_rate_1y, 4) if win_rate_1y is not None else None,
             }
             performance.update(FundNavEvidenceService().derive_money_market_facts([
                 {
@@ -946,72 +960,42 @@ class TushareDataService:
             nav_df["accum_nav"] = nav_df["accum_nav"].ffill()
 
             daily_returns = nav_df["accum_nav"].pct_change(fill_method=None).dropna()
-            vol_1y = daily_returns[-252:].std() * (252 ** 0.5) if len(daily_returns) >= 252 else 0
-            vol_2y = daily_returns.std() * (252 ** 0.5)
+            vol_2y = round(float(daily_returns.std() * (252 ** 0.5)), 4) if len(daily_returns) >= 2 else None
 
             peak = nav_df["accum_nav"].cummax()
             drawdown = (nav_df["accum_nav"] - peak) / peak
-            max_dd_1y = drawdown[-252:].min() if len(drawdown) >= 252 else drawdown.min()
-            max_dd_2y = drawdown.min()
+            max_dd_2y = round(float(drawdown.min()), 4) if len(nav_df) >= 2 else None
 
-            var_95 = daily_returns[-252:].quantile(0.05) if len(daily_returns) >= 252 else 0
-
-            beta = self._calculate_beta(wind_code, start_1y, end_date)
-            alpha = self._calculate_alpha(wind_code, start_1y, end_date)
+            # 近一年指标必须在一年窗口内独立计算：峰值/波动/分位只取近一年切片，
+            # 不能用两年峰值冒充近一年回撤，历史不足时返回 None 而非填 0。
+            nav_1y = nav_df[nav_df["nav_date"] >= start_1y]
+            returns_1y = nav_1y["accum_nav"].pct_change(fill_method=None).dropna()
+            vol_1y = round(float(returns_1y.std() * (252 ** 0.5)), 4) if len(returns_1y) >= 2 else None
+            var_95 = round(float(returns_1y.quantile(0.05)), 4) if len(returns_1y) >= 2 else None
+            if len(nav_1y) >= 2:
+                peak_1y = nav_1y["accum_nav"].cummax()
+                drawdown_1y = (nav_1y["accum_nav"] - peak_1y) / peak_1y
+                max_dd_1y = round(float(drawdown_1y.min()), 4)
+            else:
+                max_dd_1y = None
 
             return {
-                "annualized_volatility_1y": round(vol_1y, 4),
-                "annualized_volatility_2y": round(vol_2y, 4),
-                "max_drawdown_1y": round(max_dd_1y, 4),
-                "max_drawdown_2y": round(max_dd_2y, 4),
-                "var_95": round(var_95, 4),
-                "beta": round(beta, 4),
-                "alpha": round(alpha, 4),
-                "tracking_error": round(vol_1y * 0.8, 4),
-                "information_ratio": round(alpha / (vol_1y * 0.8), 4) if vol_1y > 0 else 0,
+                "annualized_volatility_1y": vol_1y,
+                "annualized_volatility_2y": vol_2y,
+                "max_drawdown_1y": max_dd_1y,
+                "max_drawdown_2y": max_dd_2y,
+                "var_95": var_95,
+                # 无基金真实基准对齐的 CAPM 输入：beta 不能一律对 000300.SH 回归并用 1.0 兜底，
+                # alpha 不能用硬编码 rf/市场收益虚构，与 tracking_error/information_ratio 一致置空。
+                "beta": None,
+                "alpha": None,
+                "tracking_error": None,
+                "information_ratio": None,
             }
         except Exception as e:
             logger.error(f"Tushare get_fund_risk_metrics error for {wind_code}: {e}")
             self._strict_fail(f"Tushare get_fund_risk_metrics failed for {wind_code}: {e}")
             return self._mock_risk_metrics(wind_code)
-
-    def _calculate_beta(self, wind_code: str, start_date: str, end_date: str) -> float:
-        try:
-            ts_code = _to_ts_code(wind_code)
-            fund_nav = self.pro.fund_nav(ts_code=ts_code, start_date=start_date, end_date=end_date)
-            if fund_nav is None or fund_nav.empty:
-                return 1.0
-
-            index_nav = self.pro.index_dailybasic(ts_code="000300.SH", start_date=start_date, end_date=end_date)
-            if index_nav is None or index_nav.empty:
-                return 1.0
-
-            fund_ret = fund_nav["accum_nav"].pct_change(fill_method=None).dropna()
-            index_ret = index_nav["pct_change"].dropna()
-
-            if len(fund_ret) > 5 and len(index_ret) > 5:
-                cov = fund_ret.cov(index_ret)
-                var = index_ret.var()
-                return round(cov / var, 4) if var != 0 else 1.0
-        except:
-            pass
-        return 1.0
-
-    def _calculate_alpha(self, wind_code: str, start_date: str, end_date: str) -> float:
-        try:
-            beta = self._calculate_beta(wind_code, start_date, end_date)
-            ts_code = _to_ts_code(wind_code)
-            fund_nav = self.pro.fund_nav(ts_code=ts_code, start_date=start_date, end_date=end_date)
-            if fund_nav is None or fund_nav.empty or len(fund_nav) < 2:
-                return 0.0
-
-            fund_ret = (float(fund_nav.iloc[-1]["accum_nav"]) / float(fund_nav.iloc[0]["accum_nav"]) - 1)
-            rf = 0.02
-            market_ret = 0.05
-            alpha = fund_ret - (rf + beta * (market_ret - rf))
-            return round(alpha, 4)
-        except:
-            return 0.0
 
     # ==================== 持仓数据 ====================
 
@@ -2116,10 +2100,10 @@ class TushareDataService:
             "max_drawdown_1y": round((h("d1") % 300 - 50) / 1000, 4),
             "max_drawdown_2y": round((h("d2") % 350 - 50) / 1000, 4),
             "var_95": round(h("var") % 150 / 1000, 4),
-            "beta": round((h("bt") % 120 - 10) / 100, 4),
-            "alpha": round((h("al") % 200 - 80) / 100, 4),
-            "tracking_error": round((h("te") % 150 + 20) / 1000, 4),
-            "information_ratio": round((h("ir") % 200 - 60) / 100, 4),
+            "beta": None,
+            "alpha": None,
+            "tracking_error": None,
+            "information_ratio": None,
         }
 
     def _mock_holdings(self, wind_code: str, quarter: str) -> List[Dict]:

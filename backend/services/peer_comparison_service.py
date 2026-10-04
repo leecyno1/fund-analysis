@@ -5,6 +5,7 @@
 """
 from datetime import date
 from decimal import Decimal
+from itertools import groupby
 from statistics import median
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -58,7 +59,7 @@ class PeerComparisonService:
         else:
             target, peer_funds, peer_group_source = self._peer_universe(wind_code, target_context)
         target_id = target.get("wind_code") or wind_code
-        peer_codes = [fund["wind_code"] for fund in peer_funds if fund.get("wind_code")]
+        peer_codes = list(dict.fromkeys(fund["wind_code"] for fund in peer_funds if fund.get("wind_code")))
         if target_context and target_context.get("metric_panel") is not None:
             metric_map = self._metric_map(
                 peer_codes,
@@ -86,6 +87,7 @@ class PeerComparisonService:
         }
 
         metrics: Dict[str, Any] = {}
+        required_metric_values: Dict[str, Dict[str, Optional[float]]] = {}
         for config in metric_configs:
             metric_name = config["metric_name"]
             values = [
@@ -98,6 +100,8 @@ class PeerComparisonService:
                 )
                 for code in peer_codes
             ]
+            if config.get("required_for_sample", True):
+                required_metric_values[metric_name] = dict(values)
             metrics[metric_name] = self._rank_metric(
                 target_id=target_id,
                 values=values,
@@ -129,7 +133,7 @@ class PeerComparisonService:
         )
 
         metric_coverage = self._metric_coverage(metrics)
-        valid_metric_peer_count = self._valid_metric_peer_count(metrics)
+        valid_metric_peer_count = self._valid_metric_peer_count(required_metric_values)
 
         return {
             "target_id": target_id,
@@ -155,6 +159,7 @@ class PeerComparisonService:
             "insufficient_metric_count": self._insufficient_metric_count(metrics),
             "peer_metric_gap": self._peer_metric_gap(
                 metrics,
+                required_metric_values,
                 peer_funds,
                 metric_map,
                 window,
@@ -162,7 +167,7 @@ class PeerComparisonService:
                 minimum_peer_count,
                 metric_configs,
             ),
-            "sample_status": self._sample_status(metrics),
+            "sample_status": self._sample_status(metrics, valid_metric_peer_count, minimum_peer_count),
             "metric_window": window,
             "professional_score_source": "category_specific_peer_metric_proxy",
             "product_scope": {
@@ -179,7 +184,7 @@ class PeerComparisonService:
         scorings: Dict[str, Dict[str, Any]],
         window: str = "1y",
     ) -> Dict[str, Dict[str, Any]]:
-        """对已批量读取的同类基金事实生成分位，不再逐只查库和重复评分。"""
+        """用预加载事实计算同类代理分位，与正式综合评分分离。"""
         grouped: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
         for context in contexts:
             fund = context.get("fund") or {}
@@ -207,11 +212,12 @@ class PeerComparisonService:
                 if not code:
                     continue
                 fund["research_profile"] = context.get("profile") or {}
+                fund["classification"] = (scorings.get(code) or {}).get("classification") or {}
                 peer_funds.append(fund)
                 preloaded_panels[code] = context.get("metric_panel") or []
-                classifications[code] = (scorings.get(code) or {}).get("classification") or {}
+                classifications[code] = fund["classification"]
 
-            peer_codes = [str(fund.get("wind_code")) for fund in peer_funds if fund.get("wind_code")]
+            peer_codes = list(dict.fromkeys(str(fund.get("wind_code")) for fund in peer_funds if fund.get("wind_code")))
             if not peer_codes:
                 continue
             metric_map = self._metric_map(peer_codes, peer_funds, preloaded_panels)
@@ -224,11 +230,19 @@ class PeerComparisonService:
                 ),
                 default=self.MIN_VALID_PEERS,
             )
+            scoring_map = self._fast_peer_score_map(
+                peer_codes,
+                metric_map,
+                window,
+                profile_key,
+                peer_funds,
+            )
             professional_values = [
-                (code, self._to_float((scorings.get(code) or {}).get("overall_score")))
+                (code, self._to_float(scoring_map.get(code, {}).get("overall_score")))
                 for code in peer_codes
             ]
             ranked_metrics: Dict[str, Dict[str, Dict[str, Any]]] = {}
+            required_metric_values: Dict[str, Dict[str, Optional[float]]] = {}
             for config in metric_configs:
                 metric_name = config["metric_name"]
                 values = [
@@ -241,6 +255,8 @@ class PeerComparisonService:
                     )
                     for code in peer_codes
                 ]
+                if config.get("required_for_sample", True):
+                    required_metric_values[metric_name] = dict(values)
                 ranked_metrics[metric_name] = self._rank_metric_map(
                     values=values,
                     higher_is_better=config["higher_is_better"],
@@ -261,8 +277,9 @@ class PeerComparisonService:
                 minimum_peer_count=minimum_peer_count,
                 metric_window=window,
                 required_for_sample=False,
-                source_metric_names=["fund_evaluation_batch_score"],
+                source_metric_names=["category_specific_peer_metric_proxy"],
             )
+            valid_metric_peer_count = self._valid_metric_peer_count(required_metric_values)
 
             for target_id in peer_codes:
                 classification = classifications.get(target_id) or {}
@@ -284,7 +301,7 @@ class PeerComparisonService:
                     "evaluation_scope": "category_relative",
                     "peer_count": len(peer_codes),
                     "classified_peer_count": len(peer_codes),
-                    "valid_metric_peer_count": self._valid_metric_peer_count(metrics),
+                    "valid_metric_peer_count": valid_metric_peer_count,
                     "minimum_valid_peer_count": minimum_peer_count,
                     "peer_metric_profile": profile_key,
                     "peer_methodology_version": getattr(
@@ -297,6 +314,7 @@ class PeerComparisonService:
                     "insufficient_metric_count": self._insufficient_metric_count(metrics),
                     "peer_metric_gap": self._peer_metric_gap(
                         metrics,
+                        required_metric_values,
                         peer_funds,
                         metric_map,
                         window,
@@ -304,9 +322,9 @@ class PeerComparisonService:
                         minimum_peer_count,
                         metric_configs,
                     ),
-                    "sample_status": self._sample_status(metrics),
+                    "sample_status": self._sample_status(metrics, valid_metric_peer_count, minimum_peer_count),
                     "metric_window": window,
-                    "professional_score_source": "fund_evaluation_batch_score",
+                    "professional_score_source": "category_specific_peer_metric_proxy",
                     "metrics": metrics,
                 }
         return results
@@ -349,6 +367,7 @@ class PeerComparisonService:
             metric_configs=self._peer_metric_configs(profile_key),
             window=window,
             target_id=target_id,
+            minimum_peer_count=minimum,
         )
         current_position = self._rank_metric(
             target_id=target_id,
@@ -535,8 +554,12 @@ class PeerComparisonService:
             peers.append(target)
 
         profile_map = profile_repo.list_profiles([fund.get("wind_code") for fund in peers if fund.get("wind_code")])
-        for fund in peers:
-            fund["research_profile"] = profile_map.get(fund.get("wind_code"), {})
+        peers = [
+            {**fund, "research_profile": target_profile, "classification": classification}
+            if fund.get("wind_code") == target_code
+            else {**fund, "research_profile": profile_map.get(fund.get("wind_code"), {})}
+            for fund in peers
+        ]
 
         return target, peers, source
 
@@ -616,8 +639,9 @@ class PeerComparisonService:
         }
         metric_map = {}
         for code in wind_codes:
-            metrics = self._metrics_by_window(loaded_panels.get(code, batch_panels.get(code, [])))
-            fund = funds_by_code.get(code)
+            fund = funds_by_code.get(code) or {}
+            benchmark_code = (fund.get("classification") or {}).get("benchmark_code") or fund.get("benchmark_code")
+            metrics = self._metrics_by_window(loaded_panels.get(code, batch_panels.get(code, [])), benchmark_code)
             if fund and hasattr(self.scoring_service, "metric_facts_from_fund"):
                 for window, fallback_metrics in self.scoring_service.metric_facts_from_fund(fund).items():
                     target = metrics.setdefault(window, {})
@@ -627,9 +651,13 @@ class PeerComparisonService:
             metric_map[code] = metrics
         return metric_map
 
-    def _metrics_by_window(self, panel: List[Dict[str, Any]]) -> Dict[str, Dict[str, float]]:
+    def _metrics_by_window(
+        self,
+        panel: List[Dict[str, Any]],
+        benchmark_code: Optional[str] = None,
+    ) -> Dict[str, Dict[str, float]]:
         metrics: Dict[str, Dict[str, float]] = {}
-        for item in panel:
+        for item in ProfessionalScoringService.select_metric_panel(panel, benchmark_code):
             window = item.get("metric_window") or "latest"
             metric_name = item.get("metric_name")
             value = self._to_float(item.get("metric_value"))
@@ -796,6 +824,7 @@ class PeerComparisonService:
     ) -> Dict[str, Dict[str, Any]]:
         """一次排序生成整组分位，避免为每只基金重复排序。"""
         minimum = self._minimum_peer_count(minimum_peer_count)
+        values = list(dict(values).items())
         valid = [(code, value) for code, value in values if value is not None]
         shared = {
             "metric_name": metric_name,
@@ -822,16 +851,23 @@ class PeerComparisonService:
 
         ordered = sorted(valid, key=lambda item: item[1], reverse=higher_is_better)
         peer_count = len(ordered)
-        ranks = {code: rank for rank, (code, _) in enumerate(ordered, start=1)}
+        ranks = {}
+        percentiles = {}
+        first_rank = 1
+        for _, tied in groupby(ordered, key=lambda item: item[1]):
+            tied_codes = [code for code, _ in tied]
+            # 并列使用竞争名次；分位使用并列位置均值，全体相等时为 50。
+            average_rank = first_rank + (len(tied_codes) - 1) / 2
+            percentile = round((peer_count - average_rank) / (peer_count - 1) * 100, 2)
+            for code in tied_codes:
+                ranks[code] = first_rank
+                percentiles[code] = percentile
+            first_rank += len(tied_codes)
         return {
             code: {
                 **shared,
                 "value": None if value is None else round(value, 6),
-                "percentile": (
-                    None
-                    if value is None
-                    else round((peer_count - ranks[code]) / (peer_count - 1) * 100, 2)
-                ),
+                "percentile": None if value is None else percentiles[code],
                 "rank": None if value is None else ranks[code],
                 "peer_count": peer_count,
                 "sample_status": "target_metric_missing" if value is None else "sufficient",
@@ -852,62 +888,26 @@ class PeerComparisonService:
         required_for_sample: bool = True,
         source_metric_names: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
-        minimum = self._minimum_peer_count(minimum_peer_count)
-        valid = [(code, value) for code, value in values if value is not None]
-        target_value = next((value for code, value in valid if code == target_id), None)
-        if len(valid) < minimum:
-            return {
-                "metric_name": metric_name,
-                "label": label,
-                "value": None if target_value is None else round(target_value, 6),
-                "percentile": None,
-                "rank": None,
-                "peer_count": len(valid),
-                "minimum_peer_count": minimum,
-                "sample_status": "insufficient_peer_sample",
-                "unit": unit,
-                "direction": "higher" if higher_is_better else "lower",
-                "metric_window": metric_window,
-                "required_for_sample": required_for_sample,
-                "source_metric_names": source_metric_names or [metric_name],
-            }
-        if target_value is None:
-            return {
-                "metric_name": metric_name,
-                "label": label,
-                "value": None,
-                "percentile": None,
-                "rank": None,
-                "peer_count": len(valid),
-                "minimum_peer_count": minimum,
-                "sample_status": "target_metric_missing",
-                "unit": unit,
-                "direction": "higher" if higher_is_better else "lower",
-                "metric_window": metric_window,
-                "required_for_sample": required_for_sample,
-                "source_metric_names": source_metric_names or [metric_name],
-            }
-        sorted_values = sorted(valid, key=lambda item: item[1], reverse=higher_is_better)
-        rank = next(index + 1 for index, item in enumerate(sorted_values) if item[0] == target_id)
-        peer_count = len(sorted_values)
-        percentile = (peer_count - rank) / (peer_count - 1) * 100
-        return {
-            "metric_name": metric_name,
-            "label": label,
-            "value": round(target_value, 6),
-            "percentile": round(percentile, 2),
-            "rank": rank,
-            "peer_count": peer_count,
-            "minimum_peer_count": minimum,
-            "sample_status": "sufficient",
-            "unit": unit,
-            "direction": "higher" if higher_is_better else "lower",
-            "metric_window": metric_window,
-            "required_for_sample": required_for_sample,
-            "source_metric_names": source_metric_names or [metric_name],
-        }
+        if not any(code == target_id for code, _ in values):
+            values = [*values, (target_id, None)]
+        return self._rank_metric_map(
+            values=values,
+            higher_is_better=higher_is_better,
+            metric_name=metric_name,
+            label=label,
+            unit=unit,
+            minimum_peer_count=minimum_peer_count,
+            metric_window=metric_window,
+            required_for_sample=required_for_sample,
+            source_metric_names=source_metric_names,
+        )[target_id]
 
-    def _sample_status(self, metrics: Dict[str, Any]) -> str:
+    def _sample_status(
+        self,
+        metrics: Dict[str, Any],
+        valid_metric_peer_count: Optional[int] = None,
+        minimum_peer_count: Optional[int] = None,
+    ) -> str:
         required_metrics = [
             metric
             for metric in metrics.values()
@@ -915,6 +915,11 @@ class PeerComparisonService:
         ]
         if not required_metrics:
             return "unavailable"
+        if (
+            valid_metric_peer_count is not None
+            and valid_metric_peer_count < self._minimum_peer_count(minimum_peer_count)
+        ):
+            return "insufficient_peer_sample"
         metric_statuses = {metric.get("sample_status") for metric in required_metrics}
         if "insufficient_peer_sample" in metric_statuses:
             return "insufficient_peer_sample"
@@ -931,13 +936,16 @@ class PeerComparisonService:
             if isinstance(metric, dict)
         }
 
-    def _valid_metric_peer_count(self, metrics: Dict[str, Any]) -> int:
-        counts = [
-            int(metric.get("peer_count") or 0)
-            for metric in metrics.values()
-            if isinstance(metric, dict) and metric.get("required_for_sample", True)
+    def _valid_metric_peer_count(
+        self,
+        required_metric_values: Dict[str, Dict[str, Optional[float]]],
+    ) -> int:
+        """统计全部必需指标均有效的基金交集，不以边际样本数代替。"""
+        valid_peer_sets = [
+            {code for code, value in values.items() if value is not None}
+            for values in required_metric_values.values()
         ]
-        return min(counts) if counts else 0
+        return len(set.intersection(*valid_peer_sets)) if valid_peer_sets else 0
 
     def _usable_metric_count(self, metrics: Dict[str, Any]) -> int:
         return sum(
@@ -959,6 +967,7 @@ class PeerComparisonService:
     def _peer_metric_gap(
         self,
         metrics: Dict[str, Any],
+        required_metric_values: Dict[str, Dict[str, Optional[float]]],
         peer_funds: Optional[List[Dict[str, Any]]] = None,
         metric_map: Optional[Dict[str, Dict[str, Dict[str, float]]]] = None,
         window: str = "1y",
@@ -985,8 +994,21 @@ class PeerComparisonService:
                 "peer_count": peer_count,
                 "missing_count": missing_count,
             })
+        sync_metrics = blocking_metrics
+        if required_metric_values:
+            complete_count = self._valid_metric_peer_count(required_metric_values)
+            complete_shortage = max(0, minimum - complete_count)
+            if complete_shortage:
+                required_more_funds = max(required_more_funds, complete_shortage)
+                blocking_metrics.append({
+                    "metric_name": "complete_required_metrics",
+                    "label": "完整必需指标",
+                    "peer_count": complete_count,
+                    "missing_count": complete_shortage,
+                })
+                sync_metrics = [{"metric_name": name} for name in required_metric_values]
         suggested_funds = self._suggest_metric_sync_funds(
-            blocking_metrics,
+            sync_metrics,
             peer_funds or [],
             metric_map or {},
             window,
@@ -1045,6 +1067,7 @@ class PeerComparisonService:
         metric_configs: List[Dict[str, Any]],
         window: str,
         target_id: str,
+        minimum_peer_count: Optional[int] = None,
     ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
         """组装同分类、同窗口的评分结果榜单，并显式保留未评分原因。"""
         required_configs = [
@@ -1097,7 +1120,7 @@ class PeerComparisonService:
                 "wind_code": code,
                 "name": fund.get("name"),
                 "fund_type": fund.get("type"),
-                "score": round(score, 2),
+                "score": score,
                 "grade": grade_for_score(score),
                 "dimension_scores": dimensions,
                 "data_coverage": coverage,
@@ -1105,10 +1128,19 @@ class PeerComparisonService:
             })
 
         scored.sort(key=lambda item: (-item["score"], item["wind_code"]))
-        peer_count = len(scored)
-        for index, item in enumerate(scored, start=1):
-            item["rank"] = index
-            item["percentile"] = round((peer_count - index) / (peer_count - 1) * 100, 2) if peer_count > 1 else 100.0
+        positions = self._rank_metric_map(
+            values=[(item["wind_code"], item["score"]) for item in scored],
+            higher_is_better=True,
+            metric_name="professional_score",
+            label="同类可比评分",
+            unit="score",
+            minimum_peer_count=minimum_peer_count,
+        )
+        for item in scored:
+            position = positions[item["wind_code"]]
+            item["rank"] = position["rank"]
+            item["percentile"] = position["percentile"]
+            item["score"] = round(item["score"], 2)
         unscored.sort(key=lambda item: (item["reason"], item["wind_code"]))
         return scored, unscored
 
@@ -1259,32 +1291,43 @@ class PeerComparisonService:
 
     def _matrix_row(self, config: Dict[str, Any], funds: List[Dict[str, Any]], window: str) -> Dict[str, Any]:
         metric_name = config["metric_name"]
+        higher_is_better = bool(config["higher_is_better"])
         values = {}
-        ranking_values = []
+        percentile_ranking = []
+        raw_ranking = []
         for fund in funds:
             if metric_name == "professional_score":
                 raw_value = self._to_float(fund.get("professional_score"))
             else:
                 raw_value = self._to_float(fund.get("metrics", {}).get(metric_name))
             percentile = fund.get("peer_percentiles", {}).get(metric_name, {}).get("percentile")
-            values[fund["wind_code"]] = {
+            code = fund["wind_code"]
+            values[code] = {
                 "value": None if raw_value is None else round(raw_value, 6),
                 "display": self._display_value(raw_value, config["unit"]),
                 "peer_percentile": percentile,
             }
-            ranking_score = percentile if percentile is not None else raw_value
-            if ranking_score is not None:
-                ranking_values.append((fund["wind_code"], ranking_score))
+            percentile_value = self._to_float(percentile)
+            if percentile_value is not None:
+                percentile_ranking.append((code, percentile_value))
+            if raw_value is not None:
+                raw_ranking.append((code, raw_value))
 
         best_code = None
-        if ranking_values:
-            best_code = sorted(ranking_values, key=lambda item: item[1], reverse=True)[0][0]
+        if percentile_ranking:
+            # 百分位已含方向（越高越优），只在有百分位的基金间比较，绝不与原始值混尺度。
+            # 平局按 wind_code 兜底，保证与输入顺序无关（同分同位）。
+            best_code = max(percentile_ranking, key=lambda item: (item[1], item[0]))[0]
+        elif raw_ranking:
+            # 无任何同类百分位时才退回原始值，并按指标方向决定优劣（回撤/波动越低越优）。
+            pick = max if higher_is_better else min
+            best_code = pick(raw_ranking, key=lambda item: (item[1], item[0]))[0]
 
         return {
             "metric_name": metric_name,
             "label": config["label"],
             "unit": config["unit"],
-            "direction": "higher" if config["higher_is_better"] else "lower",
+            "direction": "higher" if higher_is_better else "lower",
             "window": window if metric_name != "professional_score" else None,
             "best_code": best_code,
             "values": values,
