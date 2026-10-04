@@ -144,9 +144,9 @@ class RollingMetricService:
             as_of_date=as_of_date,
         )
 
-        saved = []
+        batch = []
         for record in records:
-            saved.append(metric_repo.upsert_metric(
+            batch.append(dict(
                 target_type=record["target_type"],
                 target_id=record["target_id"],
                 as_of_date=record["as_of_date"],
@@ -159,6 +159,8 @@ class RollingMetricService:
                 source_snapshot_id=source_snapshot_id,
                 details=record.get("details"),
             ))
+
+        saved = metric_repo.upsert_metrics(batch)
 
         return {
             "fund_code": fund_code,

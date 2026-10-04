@@ -184,6 +184,13 @@ class MetricFactory:
         source_snapshot_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """读取基金净值，计算指标并保存到 MetricSnapshot。"""
+        if window is not None:
+            # 延迟导入，复用滚动窗口及覆盖门槛，避免模块级循环依赖。
+            from services.rolling_metric_service import DEFAULT_WINDOWS, RollingMetricService
+
+            if window not in DEFAULT_WINDOWS:
+                raise ValueError(f"Unsupported metric window: {window!r}")
+
         from repositories import get_metric_snapshot_repo, get_nav_repo
 
         nav_repo = get_nav_repo()
@@ -196,20 +203,26 @@ class MetricFactory:
             return {"fund_code": fund_code, "saved": 0, "metrics": []}
 
         effective_as_of = as_of_date or normalized[-1][0]
-        records = self.build_metric_records(
-            target_type="fund",
-            target_id=fund_code,
-            as_of_date=effective_as_of,
-            nav_series=nav_series,
-            window=window,
-        )
-        saved = []
+        if window is None:
+            records = self.build_metric_records(
+                target_type="fund",
+                target_id=fund_code,
+                as_of_date=effective_as_of,
+                nav_series=nav_series,
+            )
+        else:
+            records = RollingMetricService(
+                windows={window: DEFAULT_WINDOWS[window]}, metric_factory=self,
+            ).calculate_for_nav_series(
+                nav_series=nav_series,
+                target_type="fund",
+                target_id=fund_code,
+                as_of_date=effective_as_of,
+            )
         for record in records:
-            saved.append(metric_repo.upsert_metric(
-                source_snapshot_id=source_snapshot_id,
-                details={"calculation_engine": "MetricFactory"},
-                **record,
-            ))
+            record.setdefault("details", {"calculation_engine": "MetricFactory"})
+            record["source_snapshot_id"] = source_snapshot_id
+        saved = metric_repo.upsert_metrics(records)
         return {"fund_code": fund_code, "saved": len(saved), "metrics": saved}
 
     def _normalize_nav_series(
@@ -217,29 +230,34 @@ class MetricFactory:
         nav_series: Iterable[Dict[str, Any]],
         as_of_date: Optional[date] = None,
     ) -> List[Tuple[date, float]]:
-        points: List[Tuple[date, float]] = []
-        for item in nav_series:
-            nav_value = item.get("accum_nav") or item.get("adj_nav") or item.get("nav") or item.get("unit_nav")
-            item_date = item.get("date") or item.get("trade_date")
-            if nav_value is None or item_date is None:
-                continue
-            try:
-                value = float(nav_value)
-            except (TypeError, ValueError):
-                continue
-            if value <= 0 or math.isnan(value) or math.isinf(value):
-                continue
-            if isinstance(item_date, datetime):
-                parsed_date = item_date.date()
-            elif isinstance(item_date, date):
-                parsed_date = item_date
-            else:
-                parsed_date = datetime.fromisoformat(str(item_date)).date()
-            if as_of_date is not None and parsed_date > as_of_date:
-                continue
-            points.append((parsed_date, value))
-        points.sort(key=lambda item: item[0])
-        return points
+        rows = list(nav_series)
+        # accum_nav 已存储上游选定的指标口径；整列选择，缺失行不得跨口径补值。
+        for field in ("accum_nav", "adj_nav", "nav", "unit_nav"):
+            points: List[Tuple[date, float]] = []
+            for item in rows:
+                nav_value = item.get(field)
+                item_date = item.get("date") or item.get("trade_date")
+                if nav_value is None or item_date is None:
+                    continue
+                try:
+                    value = float(nav_value)
+                except (TypeError, ValueError):
+                    continue
+                if value <= 0 or not math.isfinite(value):
+                    continue
+                if isinstance(item_date, datetime):
+                    parsed_date = item_date.date()
+                elif isinstance(item_date, date):
+                    parsed_date = item_date
+                else:
+                    parsed_date = datetime.fromisoformat(str(item_date)).date()
+                if as_of_date is not None and parsed_date > as_of_date:
+                    continue
+                points.append((parsed_date, value))
+            if points:
+                points.sort(key=lambda item: item[0])
+                return points
+        return []
 
     @staticmethod
     def _daily_returns(points: List[Tuple[date, float]]) -> List[float]:

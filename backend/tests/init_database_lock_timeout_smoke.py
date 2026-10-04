@@ -15,6 +15,9 @@ LOCK_TIMEOUT_SECONDS = 5
 
 
 def main() -> int:
+    if os.environ.get("FUND_ALLOW_SCHEMA_TEST") != "1":
+        print("SKIP: explicit FUND_ALLOW_SCHEMA_TEST=1 required for a DDL test")
+        return 0
     database._initialized_database_url = None
 
     blocker_engine = create_engine(get_database_url())
@@ -26,7 +29,7 @@ def main() -> int:
 
     def run_init():
         try:
-            outcome["value"] = init_database()
+            outcome["value"] = init_database("initialize")
         except Exception as exc:  # noqa: BLE001
             outcome["error"] = exc
 
@@ -54,7 +57,7 @@ def main() -> int:
 
     # 读事务释放后重跑：幂等 DDL 补齐并成功，降级可自愈
     database._initialized_database_url = None
-    if init_database() is not True:
+    if init_database("initialize") is not True:
         raise AssertionError("init_database must succeed once the blocking read transaction is released")
 
     print("OK init_database degrades fast behind long read transactions and self-heals")

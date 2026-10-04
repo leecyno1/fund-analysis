@@ -31,6 +31,8 @@ import json
 from routes import funds, fund_companies, home, managers, scoring, reports, research_reports, research_memos, research_folders, watchlists
 from routes import attribution, barra, brinson, export, data_sync, data_health, metrics, fund_pools, alerts, investment_analysis, fund_browser, market_indices, newma_desk, investment_theses, anomaly_scanner, fund_watches, research_queue, decision_postmortems, research_decision_logs, research_signals, decision_support, portfolio
 from service_registry import get_data_service, get_scoring_engine
+from repositories.nav_repo import NAV_STORAGE_CONTRACT_VERSION
+from repositories.metric_snapshot_repo import METRIC_STORAGE_CONTRACT_VERSION
 
 logging.basicConfig(
     level=os.environ.get("LOG_LEVEL", "INFO"),
@@ -93,12 +95,11 @@ async def lifespan(app: FastAPI):
     scoring_eng = get_scoring_engine()
     logger.info("Scoring engine initialized")
 
-    # 初始化 PostgreSQL 数据库表
-    try:
-        from database import init_database
-        init_database()
-    except Exception as e:
-        logger.warning(f"Database init warning: {e}")
+    from database import prepare_database, resolve_database_init_mode
+    database_mode = resolve_database_init_mode()
+    prepare_database(database_mode)
+    app.state.database_init_mode = database_mode
+    logger.info("Database startup mode: %s", database_mode)
 
     logger.info("Application startup complete")
     yield
@@ -112,6 +113,7 @@ app = FastAPI(
     lifespan=lifespan,
     default_response_class=NaNSafeJSONResponse,
 )
+app.state.database_init_mode = "not_started"
 
 _cors_origins = os.environ.get(
     "CORS_ORIGINS",
@@ -175,6 +177,12 @@ async def health_check():
         "data_source": DATA_SOURCE,
         "mock_mode": data_svc.mock_mode,
         "database": database_health,
+        "database_init_mode": app.state.database_init_mode,
+        "runtime_pid": os.getpid(),
+        "storage_contract": {
+            "nav": NAV_STORAGE_CONTRACT_VERSION,
+            "metrics": METRIC_STORAGE_CONTRACT_VERSION,
+        },
     }
     if status != "ok":
         return JSONResponse(status_code=503, content=payload)

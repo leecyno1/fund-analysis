@@ -18,6 +18,37 @@ logger = logging.getLogger(__name__)
 _engine = None
 _SessionLocal = None
 _initialized_database_url = None
+_checked_database_url = None
+
+
+def resolve_database_init_mode(mode: Optional[str] = None) -> str:
+    mode = (mode if mode is not None else os.environ.get("FUND_DATABASE_INIT_MODE", "check")).strip().lower()
+    if mode not in {"check", "initialize"}:
+        raise ValueError("FUND_DATABASE_INIT_MODE must be check or initialize")
+    return mode
+
+
+def prepare_database(mode: Optional[str] = None) -> bool:
+    """默认只检查已有库；缺库或缺字段时失败，不自动修复或迁移。"""
+    global _checked_database_url
+    mode = resolve_database_init_mode(mode)
+    if mode == "initialize":
+        if not _initialize_database_schema():
+            raise RuntimeError("数据库显式初始化失败，服务未启动")
+        return True
+    database_url = get_database_url()
+    if _checked_database_url == database_url:
+        return True
+    health = check_database_health(min_fund_count=1)
+    if health["status"] != "ok":
+        raise RuntimeError(f"基金数据库启动检查未通过：{health['status']}；未执行初始化")
+    from sqlalchemy import text
+    with get_engine().connect() as conn:
+        conn.execute(text("SELECT trade_date, unit_nav, accum_nav, adj_nav, benchmark_nav FROM fund_nav LIMIT 0"))
+        conn.execute(text("SELECT id, target_type, target_id, as_of_date, metric_name, metric_value, metric_window, benchmark_code, peer_group_key, source_snapshot_id, details, updated_at FROM metric_snapshots LIMIT 0"))
+        conn.execute(text("SELECT id, source, dataset, status, coverage_start, coverage_end, finished_at, record_count, metadata FROM data_source_snapshots LIMIT 0"))
+    _checked_database_url = database_url
+    return True
 
 
 def normalize_database_url(database_url: str) -> str:
@@ -115,8 +146,16 @@ def db_session():
         session.close()
 
 
-def init_database():
-    """初始化数据库表结构"""
+def init_database(mode: Optional[str] = None):
+    """兼容旧服务/任务入口；默认检查，只有显式 initialize 才允许 DDL。"""
+    mode = resolve_database_init_mode(mode)
+    if mode == "initialize":
+        return _initialize_database_schema()
+    return prepare_database("check")
+
+
+def _initialize_database_schema():
+    """显式初始化表结构；普通服务和定时任务不得自动进入此路径。"""
     global _initialized_database_url
 
     from sqlalchemy import text

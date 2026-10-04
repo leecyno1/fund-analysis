@@ -18,6 +18,7 @@
 #   bash scripts/scheduled_update.sh --dry-run --bucket daily
 #   bash scripts/scheduled_update.sh --only funds:backfill-browser-core
 #   bash scripts/scheduled_update.sh --bucket weekly
+#   bash scripts/scheduled_update.sh --check-weekly
 
 set -euo pipefail
 
@@ -95,12 +96,13 @@ DAILY_FIRE_HM="${DAILY_FIRE_HM:-1815}"
 
 usage() {
   cat <<USAGE
-Usage: $0 [--dry-run] [--list | --bucket <name> | --only <task_id>]
+Usage: $0 [--dry-run] [--list | --bucket <name> | --only <task_id> | --check-weekly]
 
   --list                  列出所有已注册任务和其节奏 bucket
   --bucket <name>         执行某个 bucket 内所有任务（daily/weekly/monthly/quarterly）
   --only <task_id>        执行单个任务
   --dry-run               只打印计划，不执行
+  --check-weekly           检查最近一次周任务是否齐全；缺项仅告警，不补跑
 
 Environment:
   SCHEDULED_UPDATE_LOG_ROOT   自定义日志目录（默认 logs/scheduled_update/）
@@ -112,6 +114,7 @@ USAGE
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --list)     MODE="list"; shift;;
+    --check-weekly) MODE="check-weekly"; shift;;
     --bucket)   MODE="bucket"; BUCKET="${2:-}"; shift 2;;
     --only)     MODE="only"; TASK_ID="${2:-}"; shift 2;;
     --dry-run)  DRY_RUN="1"; shift;;
@@ -195,6 +198,53 @@ list_tasks() {
     local bucket="${rest%%|*}"; local cmd="${rest#*|}"
     printf "%-40s %-10s %s\n" "$id" "$bucket" "$cmd"
   done
+}
+
+check_weekly_freshness() {
+  local weekly_ids=() row rest
+  for row in "${TASKS[@]}"; do
+    rest="${row#*|}"
+    [[ "${rest%%|*}" == "weekly" ]] && weekly_ids+=("${row%%|*}")
+  done
+  python3 - "$RUNBOOK" "$ALERT_LOG" "$DRY_RUN" "${weekly_ids[@]}" <<'PY'
+import json
+import sys
+from datetime import datetime, time, timedelta
+from pathlib import Path
+
+runbook, alert_log = map(Path, sys.argv[1:3])
+dry_run = sys.argv[3] == "1"
+expected = set(sys.argv[4:])
+now = datetime.now().astimezone()
+sunday = now.date() - timedelta(days=(now.weekday() + 1) % 7)
+boundary = datetime.combine(sunday, time(20), tzinfo=now.tzinfo)
+if boundary > now:
+    boundary -= timedelta(days=7)
+
+completed = set()
+if runbook.exists():
+    for line in runbook.read_text().splitlines():
+        try:
+            row = json.loads(line)
+            started = datetime.fromisoformat(row["start"].replace("Z", "+00:00"))
+        except (ValueError, KeyError, TypeError):
+            continue
+        if started.tzinfo is None:
+            continue
+        if row.get("status") == "ok" and started >= boundary:
+            completed.add(row.get("task"))
+
+missing = sorted(expected - completed)
+if missing:
+    marker = f"weekly_missed {boundary.date().isoformat()}"
+    message = f"[{now.isoformat()}] {marker}: missing {', '.join(missing)}"
+    if not dry_run and marker not in (alert_log.read_text() if alert_log.exists() else ""):
+        with alert_log.open("a") as stream:
+            stream.write(message + "\n")
+    print(f"[alert] {marker}: {', '.join(missing)}; 未自动补跑。")
+else:
+    print(f"[ok] weekly {boundary.date().isoformat()} 全部完成。")
+PY
 }
 
 # ------------------------- 单任务执行 -------------------------
@@ -323,6 +373,10 @@ case "$MODE" in
     list_tasks
     ;;
 
+  check-weekly)
+    check_weekly_freshness
+    ;;
+
   only)
     if [[ -z "$TASK_ID" ]]; then
       echo "--only 需要任务 ID" >&2; exit 2
@@ -340,6 +394,11 @@ case "$MODE" in
   bucket)
     if [[ -z "$BUCKET" ]]; then
       echo "--bucket 需要名称" >&2; exit 2
+    fi
+    if [[ "$BUCKET" == "daily" && "$DRY_RUN" != "1" ]]; then
+      if ! check_weekly_freshness; then
+        echo "[warn] 周任务状态检查失败；每日更新继续执行。" >&2
+      fi
     fi
     # 权威时点闸：daily 的权威调度是每日 18:15（收盘后）。早于该时点的整轮触发
     # （RunAtLoad 晨间登录、手工提前跑）直接退出，避免预跑结果让晚间正式轮被去重

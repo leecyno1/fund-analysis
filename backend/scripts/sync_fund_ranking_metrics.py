@@ -43,6 +43,7 @@ from repositories import (
     get_metric_snapshot_repo,
     get_nav_repo,
 )
+from repositories.metric_snapshot_repo import archive_invalid_nav_metrics
 from services.fund_classification_catalog import FundClassificationCatalog
 from services.fund_classification_service import FundClassificationService
 from services.fund_classification_ingestion_service import FundClassificationIngestionService
@@ -255,12 +256,12 @@ def save_latest_fund_facts(
 ) -> int:
     """把真实规模和费率写入权威指标快照，供类别专属评价使用。"""
     latest = ProfessionalScoringService().metric_facts_from_fund(fund).get("latest") or {}
-    saved = 0
+    records = []
     for metric_name, metric_unit in (("expense_ratio", "ratio"), ("aum", "cny_100m")):
         metric_value = number_or_none(latest.get(metric_name))
         if metric_value is None:
             continue
-        metric_repo.upsert_metric(
+        records.append(dict(
             target_type="fund",
             target_id=wind_code,
             as_of_date=as_of_date,
@@ -272,9 +273,8 @@ def save_latest_fund_facts(
                 "source": "funds.total_asset+funds.raw_data.tushare",
                 "calculation_engine": "ProfessionalScoringService.metric_facts_from_fund",
             },
-        )
-        saved += 1
-    return saved
+        ))
+    return len(metric_repo.upsert_metrics(records))
 
 
 def save_enrichment_metric_facts(
@@ -291,12 +291,17 @@ def save_enrichment_metric_facts(
         "benchmark_annualized_rate": "ratio",
         "benchmark_yield_spread": "ratio",
     }
-    saved = 0
+    records = []
     for metric_name, metric_unit in metric_units.items():
         metric_value = number_or_none(facts.get(metric_name))
         if metric_value is None:
             continue
-        metric_repo.upsert_metric(
+        benchmark_code = None
+        if metric_name in {"benchmark_annualized_rate", "benchmark_yield_spread"}:
+            benchmark_code = str(enrichment.get("benchmark_code") or "").strip()
+            if not benchmark_code:
+                continue
+        records.append(dict(
             target_type="fund",
             target_id=wind_code,
             as_of_date=as_of_date,
@@ -304,29 +309,31 @@ def save_enrichment_metric_facts(
             metric_value=Decimal(str(metric_value)),
             metric_unit=metric_unit,
             window="latest",
+            benchmark_code=benchmark_code,
             details={
                 "source": facts.get(f"{metric_name}_source")
                 or facts.get("seven_day_yield_source")
                 or "fund_nav_evidence_service",
                 "calculation_engine": "FundNavDataEnrichmentService",
             },
-        )
-        saved += 1
-    return saved
+        ))
+    return len(metric_repo.upsert_metrics(records))
 
 
-def invalidate_nav_derived_evaluation_facts(wind_code: str, validation: Dict[str, Any]) -> None:
-    """移除已被净值质量门禁否定的派生指标，避免旧快照继续参与评分。"""
+def invalidate_nav_derived_evaluation_facts(wind_code: str, validation: Dict[str, Any]) -> Dict[str, Any]:
+    """归档失效指标后移出活跃面板；与基金派生字段清理同一事务。"""
     performance_keys = [
         "annualized_return_1y", "return_1y", "total_return", "annualized_return_3y",
         "return_3y", "return_6m", "sharpe_ratio", "positive_return_ratio",
         "benchmark_return_1y", "excess_return", "tracking_difference", "observations_1y",
         "seven_day_annualized_yield", "income_per_10000", "benchmark_yield_spread",
+        "annualized_return_5y", "return_5y",
     ]
     risk_keys = [
         "max_drawdown_1y", "max_drawdown", "annualized_volatility_1y", "volatility_1y",
         "sortino_ratio_1y", "calmar_ratio_1y", "tracking_error", "information_ratio",
         "max_drawdown_3y", "annualized_volatility_3y",
+        "max_drawdown_5y", "annualized_volatility_5y",
     ]
     marker = {
         "ranking_metrics": {
@@ -336,12 +343,12 @@ def invalidate_nav_derived_evaluation_facts(wind_code: str, validation: Dict[str
         }
     }
     with get_engine().begin() as conn:
-        conn.execute(text("""
-            DELETE FROM metric_snapshots
-            WHERE target_type = 'fund'
-              AND target_id = :wind_code
-              AND metric_window IN ('3m', '6m', '1y', '3y')
-        """), {"wind_code": wind_code})
+        archive = archive_invalid_nav_metrics(conn, wind_code, validation)
+        if archive['archive_id'] is None:
+            archive['archive_id'] = conn.execute(text("""
+                SELECT raw_data#>>'{ranking_metrics,archive_id}' FROM funds WHERE wind_code=:wind_code
+            """), {'wind_code': wind_code}).scalar()
+        marker['ranking_metrics'].update(archive)
         conn.execute(text("""
             UPDATE funds
             SET performance_data = COALESCE(performance_data, '{}'::jsonb) - CAST(:performance_keys AS text[]),
@@ -355,6 +362,9 @@ def invalidate_nav_derived_evaluation_facts(wind_code: str, validation: Dict[str
             "risk_keys": risk_keys,
             "marker": json.dumps(marker, ensure_ascii=False),
         })
+    from services.cache_service import invalidate_fund_cache
+    invalidate_fund_cache(wind_code)
+    return archive
 
 
 def mark_ranking_sync_unavailable(wind_code: str, reason: str) -> None:
@@ -1354,8 +1364,9 @@ def sync_one_fund(
     )
     nav_series = enrichment["nav_series"]
     if enrichment.get("nav_data_status") != "valid":
-        nav_repo.upsert_nav_series(wind_code, nav_series, replace_range=True)
-        invalidate_nav_derived_evaluation_facts(
+        if not nav_repo.upsert_nav_series(wind_code, nav_series, replace_range=True):
+            return {"wind_code": wind_code, "status": "failed", "reason": "净值写入失败，未更新评价指标"}
+        invalidation = invalidate_nav_derived_evaluation_facts(
             wind_code,
             enrichment.get("nav_validation") or {"status": "invalid"},
         )
@@ -1363,8 +1374,10 @@ def sync_one_fund(
             "wind_code": wind_code,
             "status": "skipped",
             "reason": f"净值质量门禁：{enrichment.get('nav_validation')}",
+            "metric_invalidation": invalidation,
         }
-    nav_repo.upsert_nav_series(wind_code, nav_series, replace_range=True)
+    if not nav_repo.upsert_nav_series(wind_code, nav_series, replace_range=True):
+        return {"wind_code": wind_code, "status": "failed", "reason": "净值写入失败，未更新评价指标"}
     rolling_result = rolling_service.calculate_and_save_for_fund(
         wind_code,
         benchmark_code=enrichment.get("benchmark_code"),
