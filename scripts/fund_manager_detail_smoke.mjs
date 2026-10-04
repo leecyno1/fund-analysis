@@ -56,9 +56,9 @@ if (!career.metrics || !Object.hasOwn(career.metrics, 'downside_risk') || !Objec
 if (!career.benchmark || career.benchmark.status !== 'available') throw new Error('verified benchmark curve missing for benchmark-ready product')
 if (!Object.hasOwn(career.metrics, 'benchmark_return') || !Object.hasOwn(career.metrics, 'excess_return')) throw new Error('manager career relative metrics missing')
 if (!career.peer_ranking || career.peer_ranking.methodology_version !== 'manager_tenure_same_period_peer_rank_v3') throw new Error('manager career same-period peer ranking missing')
-if (!['sufficient', 'insufficient_peer_sample'].includes(career.peer_ranking.status)) throw new Error(`manager career peer ranking unavailable: ${career.peer_ranking.status}`)
+if (!['sufficient', 'insufficient_peer_sample', 'target_insufficient_coverage'].includes(career.peer_ranking.status)) throw new Error(`manager career peer ranking unavailable: ${career.peer_ranking.status}`)
 if (career.peer_ranking.status === 'sufficient' && (!career.peer_ranking.metrics?.total_return?.rank || !career.peer_ranking.metrics?.total_return?.peer_count)) throw new Error('manager career peer rank evidence missing')
-if (!Object.hasOwn(career.peer_ranking.metrics || {}, 'max_drawdown') || !Object.hasOwn(career.peer_ranking.metrics || {}, 'sharpe_ratio') || !Object.hasOwn(career.peer_ranking.metrics || {}, 'record_breaking_days_ratio')) throw new Error('manager career risk or holding-experience peer ranks missing')
+if (career.peer_ranking.status === 'sufficient' && (!Object.hasOwn(career.peer_ranking.metrics || {}, 'max_drawdown') || !Object.hasOwn(career.peer_ranking.metrics || {}, 'sharpe_ratio') || !Object.hasOwn(career.peer_ranking.metrics || {}, 'record_breaking_days_ratio'))) throw new Error('manager career risk or holding-experience peer ranks missing')
 if (!Array.isArray(career.events)) throw new Error('manager career memo events missing')
 
 const page = (await requireResponse(`/managers/${encodeURIComponent(managerId)}`)).text

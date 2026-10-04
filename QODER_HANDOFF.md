@@ -438,3 +438,82 @@ python3 ../.quest-recovery/export.py
 **接手第一天建议动作**：跑第 9 节双端全量冒烟确认基线（应 121+151 全绿）→ 查 `logs/scheduled_update/runbook.jsonl` 最近一晚 11 任务是否全 ok → 按第 5 节 09-26 注记的 SQL 看两条覆盖曲线进度。之后按第 11 节优先级走。
 
 **遗留一句话**：代码零缺口、测试全绿、数据在涨；唯一环境隐患是 3000 端口可能被 newma-desk 抢占（处置流程见 2.2），唯一方向性待办是覆盖到顶后的下一步迭代方向（由用户定）。
+
+## 15. Desk 共享保存契约同步（2026-10-03，代码阶段）
+
+用户本轮仅授权同步独立后端保存链路；本节覆盖前文关于此链路“尚未同步”的状态，不代表整个项目已经全量同步或运行验收完成。
+
+- 保留当前全部未提交改动，尤其计算、评分、同类比较、经理和组合的新增修复；没有整文件覆盖这些业务服务，也没有改变其计算公式。
+- `NavRepo` 新增按实际 schema 读写五个可空来源字段：公告日、原始累计净值、复权来源、基准代码和基准来源。旧库/部分字段库兼容，不执行 DDL；独立读取仍返回原来的 date 对象。净值整批和覆盖窗口同事务，失败不再逐行吞掉；未传基准与明确清空基准分开处理，改数值不能继承旧身份。
+- `MetricSnapshotRepo.upsert_metrics` 将同一批指标放在一个事务；复用 Desk 的对象事务锁和 NULL 安全自然键，修订保留旧数值/单位/来源/详情，幂等写不增加历史。保存路径不再隐式 `init_database()`。未给新方法的值不能继承旧方法标签。
+- 指标工厂、滚动、经理任期和排行两类辅助事实各自一次批保存。排行先检查净值保存成功，再处理评价；失败不继续计算或清理。失效指标复用现有数据源快照 metadata 归档后移出活跃面板，保留独立事实；归档/移出/基金派生字段清理同事务，重复失效保留最近档案 ID，仓储提供基金作用域只读查询。
+- 公告日与复权来源从当前供应商输出逐点传递，不伪造缺失公告日；基准只按共同日期附值/身份，缺失或不匹配明确清空。缓存失效补齐净值图，限制详情到目标基金，保留其他基金详情和图；全局列表仍清理。
+- 新增 `backend/tests/storage_contract_offline_test.py` 19 项离线/模拟事务验收；既有 round1 18、评价数值 61、经理净值 5、同类数值 47、缺证评分 10、组合数值 35，共 195 项通过。仅把两个既有离线测试的单条保存 mock 更新为批接口，原数值/门禁断言保留。没有连接真实 PostgreSQL，不能将模拟事务验收说成真实库验收。
+- 未迁移数据库、未抓取/重算真实数据、未改持仓、未重启独立 3000/8005 或 Desk 服务、未部署、未提交或推 Git。此前已确认的共享来源列缺口没有在本轮消除；磁盘代码兼容不表示常驻进程已加载。
+
+后续先清点并核验全部常驻及定时 writer 是否加载本契约（运行门槛仍 `not_verified`），再单独申请迁移/必要重启授权。净值保存与后续指标归档仍为两段事务；独立项目当前计算口径与 Desk 的全部差异也未在本轮合并，不能宣称全同步任务原子化或全项目同步完成。
+
+## 16. 运行门槛只读核验（2026-10-03）
+
+- 独立 8005：PID 14742，工作目录为本项目 backend，2026-09-30 22:11:32（上海时间）启动，无 `--reload`；两个仓储 2026-10-03 12:23:33、缓存 12:32:13 修改，晚于进程启动。路由启动时导入 repositories，因此不能将磁盘修复说成已在独立服务生效。健康 GET 为 200 / ok / 非 mock / Tushare / 数据库 ok，但不报告数据库启动模式或保存契约版本。
+- Desk 8035：PID 2717，2026-10-03 11:32:01 启动，晚于捆绑两个仓储及缓存修改；健康为 200 / ok / 非 mock / 数据库 ok，报告 `database_init_mode=check`。这仅支持本次启动时间核对，健康仍没有已加载保存契约版本信号。
+- 每日调度最新 11 项记录均 ok，截至 2026-10-02 18:35:20；无本轮代码修改之后的记录，不能算新契约动态验收。每周最新 5 项记录停在 2026-09-20 20:16:14，runbook 无 9 月 27 日周任务记录，当前 launchd weekly 为 `runs=0 / never exited / not running`。原因未确定，不能断言代码错误或自行补跑。
+- 启用前新增阻点：本项目 `main.py` 的 lifespan 仍调用 `init_database()`，排行、经理任期等脚本亦调用该入口；其中包含 CREATE/ALTER DDL。直接重启或补跑可能触发未授权的改库。`start_backend.sh` 和 requirements 仍要求 pymongo，但 backend Python 源码未找到 pymongo/MongoClient 引用；当前 venv 有该包，并不是当前启动失败的证据，而是应收口的旧依赖。
+- 强制只读 PostgreSQL 迁移预览确认仍缺五个来源列，净值/基准四位小数；仅生成计划，没有执行 SQL 变更。共享 writer 门槛继续 `not_verified`。
+- 本轮仅检查进程、调度配置/脱敏日志字段、健康 GET 和只读 schema；未重启、未暂停/补跑任务、未迁移或修改业务数据、未提交推送。只追加交接记录，不改变业务代码。下一步需用户明确允许把独立服务/任务启动默认收口到只检查数据库，并单独重启独立 8005；不包含数据库迁移、真实数据补跑或重算授权。
+
+## 17. 安全启动已启用（2026-10-03，用户明确授权）
+
+- 公共 `init_database()` 默认改为检查已有库，服务、定时脚本和旧仓储调用统一走这个入口，不再隐式建表。原 DDL 逻辑保留在私有初始化函数；只有显式 `initialize` 参数或 `FUND_DATABASE_INIT_MODE=initialize` 才进入。普通启动缺库、缺基础字段或空基金库时失败，不静默迁移；已检查的同一配置可复用，不重复逐条检查。
+- lifespan 改用 `prepare_database()`，检查失败不再吞为 warning 后继续启动。健康接口报告实际成功启动的模式、PID，以及启动时导入的保存契约：净值 `batch_provenance_v1`、指标 `batch_revision_archive_v1`；这些标识仅代表相关代码契约，不代表 schema/历史证据完整。
+- 启动脚本默认导出 check，删去 pymongo 启动检查和 requirements 的旧依赖；不卸载本机包。两份环境模板说明日常 check 与显式初始化边界。旧真实 DDL 锁测试新增显式启用门槛，并明确调用 initialize；本轮没有运行该 DDL 测试。
+- 新增 9 项纯离线启动检查：默认/旧仓储调用不 DDL、缺库/缺字段阻断、无效模式拒绝、显式初始化隔离、初始化失败不启动、配置切换重新检查、实际启动模式与版本报告、启动错误不吞。连同保存 19、round1 当前 21、评价 61、经理 5、同类 47、缺证 10、组合 35，共 207 项通过。应用完整导入在禁止创建数据库引擎的保护下通过，启动脚本选中项目 venv；强制只读实际启动预检通过。
+- 仅重启 `com.fund-analysis.backend`：旧 PID 14742 → 新 PID 52066，2026-10-03 17:48:57（上海时间）启动，工作目录仍是独立项目 backend。实际健康 GET 为 200 / ok / check / 非 mock / 数据库 ok，返回上述两个新保存契约。Desk 8035 PID 2717、独立前端 3000 PID 5725、Desk 前端 3035 PID 14662 未变。
+- 两套服务实际 GET 已有 000015.OF 指标均返回 95 条；没有调用重算、刷新、扫描或同步端点。强制只读复核仍缺五个来源列、净值仍四位小数；没有 DDL/业务数据变更、持仓修改、定时任务补跑、部署或 Git 推送。
+
+独立常驻后端的新代码已加载，不再是第 16 节的旧进程状态。后台任务的代码入口已收口，但新契约下的真实定时执行尚未验收；周任务遗漏尚未处理。共享 writer 迁移门槛不能据此自动标记全部通过；来源列和精度迁移仍需另行授权。首次空库必须走明确授权的初始化与初始数据导入流程，普通 check 不会替操作人创建数据。
+
+## 18. 上线前最后一轮数值/证据修复（2026-10-04，代码阶段，未提交）
+
+用户要求"检查所有功能，未上线前做最后一轮迭代和优化完善"。先把上一轮 15 项审查发现逐条**对当前代码复核**（发现 C4/C5、B4/B5 等已被前序未提交工作或提交 `74a4fd8` 部分处理，审查清单已过期），再对**确认仍开放**的缺陷按 TDD 修复。基线由 219 项离线测试增至 **249 项全绿**；前端 `tsc --noEmit` 退出 0；`import routes.funds / fund_research_snapshot_service / fund_browser_service` 无循环依赖；`fund_recommendation_service_smoke`、`fund_manager_career_service_smoke`、`category_specific_peer_percentile_smoke`、`research_memos_route_import_smoke`、`ai_report_provider_credentials_smoke`、`fund_evaluation_compact_prompt_smoke`、`fund_evaluation_holding_style_prompt_smoke` 均通过；`git diff --check` 干净。
+
+已修（每项先红后绿，新增/扩展离线测试）：
+
+- **C1** `portfolio_service._performance_metrics`：年化原按 `252/期数` 假设日频、波动按 `sqrt(252)`，对周/月频净值严重高估（如 3 年月频 +20% 被年化成 258%）。改为按 `dates` 真实日历跨度年化（`years=(末-首)/365.25`），波动按实际每年期数缩放；跨度为 0 时年化/波动返回 `None` 而非伪造。前端 `PerfMetrics.annualized_return/annualized_volatility` 类型收紧为 `number | null`（渲染处早已 `!= null` 兜底）。
+- **C3** `portfolio_service._pearson`：零方差（货基/停牌/常量净值）原返回 `0.0` 且 `_correlation_matrix` 标 `status=ok`，等于把"平坦净值"冒充"零相关=完美分散"。改为返回 `None`，配对标 `undefined_zero_variance`，不输出 0.0 结论（前端相关性对 `null` 已显示"样本不足"）。
+- **C5** `portfolio_service.trade_list`：持仓存在但权重未知时原令 `current=0.0` → `delta=target` → **全额申购**建议。改为权重未知的持仓不冒充"未持有"，输出 `action=权重未知 / current_weight=null / amount=null / note`，排序对 `null` 差额置末。前端 `TradeList` item 的 `current_weight/weight_delta` 类型收紧为 `number | null`（`pct(null)→'—'` 已兜底）。
+- **B1** `ai_report._build_fund_prompt`：`w=h.get("weight",0)` 在键存在值为 `None` 时返回 `None`，`"{:.2%}".format(None)` → TypeError → 基金报告 500。改为非有限权重输出"权重待补"，不崩溃不伪造 0.00%。
+- **B2** `evidence_report`：持仓权重缺失时 `float(None or 0)=0` 使前十大/行业集中度闸门（`>=0.70 / >=0.50`）**静默放行**，叙述还渲染"前十大合计 0.00%"。新增 `_holding_weight_known/_concentration_disclosed`，有持仓但无可信权重时闸门给"集中度无法核验，不能视为分散"，叙述改为"无法核验"，不再伪造 0.00%。
+- **B3** `research_memo_service`：`_safe_scoring` 异常原返回 `overall_score=50/grade=D` 虚构评分并写入 memo 证据；`_build_inferences` 用 `or 50` 且缺分仍 `confidence=high`。改为异常/缺失 → `overall_score=None / status=unavailable`，investability 给"评分缺失，需补数后复核"，缺分时 confidence 降为 `low`，不写虚构分。
+- **B4** `routes/reports`（基金 + 经理两处）：落库异常被 `logger.warning` 吞掉 → 返回 200 + `id=None`，前端 `app/api/analysis/generate/route.ts` 无条件播报"已生成并写入本地数据库"。改为响应与 metadata 带 `saved=report_id is not None`，前端按 `persisted` 如实播报"已生成但写入失败，本次未保存"。
+- **B5** `research_memo_service._to_float/_json_safe`：无 `isfinite`，NaN/Inf 透传 → Starlette `allow_nan=False` → memo 响应 500。改为非有限 float → `None`。
+- **A1** `peer_comparison_service._matrix_row`：`ranking_score = percentile if not None else raw_value` 把 0–100 百分位与原始比率混尺度排序，且 `best_code` 恒 `reverse=True` 忽略 `higher_is_better`（波动/回撤等"越低越好"取到最差）。改为：有百分位只在有百分位者间取最高（百分位已含方向）；无任何百分位才退回原始值并按方向取 `max/min`；无证据 → `best_code=None`，不混尺度不虚构赢家。
+- **A3** `routes/funds` 列表页两处 `sort_keys` 全用 `or 0`：缺失收益/回撤/夏普/评分被当 0，risk 升序把"无回撤证据"当最低风险（最优）、真实 0.0 回撤被当 falsy 跳过。抽出 `_sort_funds/_funds_sort_value/_risk_sort_value`（复用既有 None 安全的 `_as_float`），缺失 → `None` 统一排末尾、真实 0.0 按 0，两处调用点合一去重。
+- **A5** `routes/funds._rolling_metric_panel` 与 `fund_research_snapshot_service.project_rolling_metrics`：原逐条 `last-wins` 覆盖 `metric_value/as_of_date`，多基准基金会选错基准的 `excess_return/information_ratio`。改为先过已验证的 `ProfessionalScoringService.select_metric_panel(panel, benchmark_code)`：有期望基准取其相对指标、多基准且无期望基准则丢弃歧义相对指标、绝对指标取最新 `as_of_date`。`project_rolling_metrics` 调用点透传 `classification.benchmark_code`；`_rolling_metric_panel` 三处调用点暂无廉价基准来源，传 `None`（单基准占多数→行为不变，多基准→丢歧义而非选错，符合"缺失不冒充证据"）。两文件加模块级 `ProfessionalScoringService` 导入，已验无循环依赖，并删去 `routes/funds` 基金详情函数内一处冗余局部导入。
+
+新增离线测试文件：`report_ai_evidence_offline_test.py`(9)、`fund_list_sort_offline.py`(5)、`rolling_metric_panel_offline.py`(7)；扩展 `portfolio_numerical_correctness_test.py`(+5)、`peer_numeric_correctness_offline.py`(+4)。
+
+复核后**未改代码、仅记录**的项（附建议，供上线裁决）：
+
+- **A2**（`fund_browser_service._matched_rule` 数值规则只判 `actual is None`、不比对 `threshold`；无 `peer_group` 分支 `browse_funds` 丢弃 asset_min/return_*/drawdown/sharpe/style/sort_by）：`_matched_rule` 仅生成"命中理由"文案，真正阈值过滤在 `list_recommendation_funds` 的 SQL；且前端 BFF `app/api/fund-browser/route.ts` 仅在 `peerGroup` 存在时才转发筛选参数（`if (peerGroup && value)`），故经 UI **不可达**——带 peerGroup 时 SQL 已正确过滤，解释文案也恰好成立。属**直连 API 的潜在契约缺口**（无 peerGroup 却带筛选会静默丢参），非上线阻断项。建议后续在 backend 对"无 peer_group 却带数值筛选"显式拒绝或补齐 `browse_funds` 过滤，并让 `_matched_rule` 按 operator 比对 threshold（需 DB 测试）。
+- **A4**（`lib/fund-research/market/market-workbench.ts` 的 `getReturn1y/getSharpe1y` 读 `performanceData.return1y`、`riskMetrics.sharpe1y`、`rollingMetrics.sharpe1y` 等不存在的键）：已静态确认 `toCamelFund` 只驼峰化顶层字段，`performanceData/riskMetrics/rollingMetrics` 内层保留后端 **snake_case**，且 `rollingMetrics` 按窗口键（`{'1y':{sharpe_ratio,...}}`）。故 1y 收益/夏普恒取不到 → 市场页显示"—"、研究清单误判。正确路径应为 `performanceData.annualized_return_1y`、`riskMetrics.sharpe_ratio`、`rollingMetrics['1y'].sharpe_ratio`（`getMaxDrawdown1y` 因含 `riskMetrics.max_drawdown_1y` 尚可工作）。**属 UI 改动，需先起前端在浏览器验证市场页确实点亮后再改**，本轮不下未经验证的前端改动。
+- **C2**（`fund_recommendation_service` 准入用 `professional_scoring.overall_score`、展示/排序用 `evaluation.overall_score` 且 `float(None or 0)`）：两分数**按设计分离**（正式综合分 vs 分类专业分，见前序 ADR/迭代），`or 0` 仅影响排序兜底（缺综合分排末位），展示层显示 `None`→前端"—"，非伪造。样本不足基金是否应作为候选并排在真实高分之前属**产品口径决策**，不宜在上线前擅改。
+- **C4**（`portfolio_service._with_evaluation_summary` 取最新 `created_at` 快照、不按 `evaluation_window` 过滤）：现已**返回 `evaluation_window` 字段**，前端可标注窗口，属可接受的透明化；若产品要求组合汇总与详情页严格同窗口，再按 canonical window 固定（会改变展示口径，需单独确认）。
+
+边界：全程未写生产库、未重启任何服务、未推送/提交 Git、未改 schema/迁移、未重算或回填真实数据。所有改动保留为未提交状态，与既有未提交工作共存。上线（部署/重启/重算/提交推送）仍需用户单独授权。建议提交前对本轮 9 文件改动做一次独立代码复核。
+
+### 18.1 独立代码复核与补齐（2026-10-04）
+
+对本轮 11 项修复做了独立只读复核：确认 11 项各自正确、249 项离线测试与 `tsc` 全绿、None 传播与"缺失不冒充"一致。复核另发现 3 处需补齐，已按 TDD 修好（基线 249→**255**）：
+
+- **#1（Critical）** `evidence_report.build_fund_research_report` 的行业合计表在持仓权重全缺失时仍渲染 `_format_percent(0.0)="0.00%"`，与同函数叙述层"无法核验"自相矛盾，属残留伪造。抽出 `_industry_rows` 助手：权重未披露时行业列渲染"待补"。
+- **#2（Important）** `_concentration_disclosed` 用 `any()`，部分权重缺失时前十大/行业集中度把未知权重当 0 求和 → 低估，可能静默过 0.70/0.50 闸门。新增 `_holding_weight_coverage`；覆盖率 0 → "无法核验"，0<覆盖<1 → 追加"为已知权重下限，可能被低估"caution（闸门与叙述层一致）。
+- **#6（Minor）** `peer_comparison_service._matrix_row` 的 `max/min` 平局取输入首个 → 顺序相关。key 加 `wind_code` 次序，保证"同分同位"与输入顺序无关。
+
+复核提出但**判定不改、仅记录**的项：
+
+- **#3** `routes/reports.py:846` `generate_fund_evaluation_analysis` 落库失败会抛出 → 外层 `except` → HTTP 500（**诚实失败**，客户端知情），并非 B4 的"200+id=None 谎称已存"；这正是 B4 原始记录里引用的"正确写法"。与已改为优雅降级（200+`saved:false`）的基金/经理报告端点存在**策略不一致**（500 会丢失已生成的报告），但非正确性缺陷。若统一为优雅降级，须先核验该端点前端消费方不会因 `saved:false` 反而谎称已存，属可选一致性跟进，不在上线前擅改。
+- **#4（Minor）** `_rolling_metric_panel` 三处调用点（列表/同类/详情）暂传 `benchmark_code=None`，多基准基金会丢弃相对指标（安全：宁缺勿错）；快照路径已正确透传 `classification.benchmark_code`。后续可在详情页廉价拿到基准处透传，恢复多基准基金的 excess_return/IR 展示。
+- **#5（Minor）** `research_memo_service` 仅对 `evidence_table` 过 `_json_safe`，`audit.data_quality_score`、观察项 `current` 未过；因其上游已用 `_to_float`/`_safe_scoring` 做 None 化，风险低，可作纵深防御后续整体过一遍 `_json_safe`。
+
+复核后再次确认：255 项离线测试全绿、`tsc --noEmit` 退出 0、`evidence_report` 真实 import 通过、3 个 AI 报告/评价 prompt smoke 通过、`git diff --check` 干净。仍未提交、未重启、未写库、未部署。

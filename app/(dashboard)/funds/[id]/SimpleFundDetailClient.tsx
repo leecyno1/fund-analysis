@@ -224,10 +224,10 @@ type FundEvaluationStatistics = {
     windCode: string
     name: string
     fundType: string
-    rank: number
+    rank: number | null
     score: number
     grade: string
-    percentile: number
+    percentile: number | null
     isCurrent: boolean
     dimensionScores: Array<{ key: string; score: number }>
     dataCoverage: {
@@ -1096,10 +1096,10 @@ function normalizeEvaluationStatistics(value: unknown): FundEvaluationStatistics
         windCode: String(item.wind_code ?? item.windCode ?? ''),
         name: String(item.name || item.wind_code || item.windCode || ''),
         fundType: String(item.fund_type ?? item.fundType ?? ''),
-        rank: Number(item.rank || 0),
+        rank: numberValue(item.rank),
         score: Number(item.score || 0),
         grade: String(item.grade || ''),
-        percentile: Number(item.percentile || 0),
+        percentile: numberValue(item.percentile),
         isCurrent: Boolean(item.is_current ?? item.isCurrent),
         dimensionScores: Object.entries(dimensionScores).flatMap(([key, rawScore]) => {
           const score = numberValue(rawScore)
@@ -1111,7 +1111,7 @@ function normalizeEvaluationStatistics(value: unknown): FundEvaluationStatistics
           coverageRate: Number(dataCoverage.coverage_rate ?? dataCoverage.coverageRate ?? 0),
         },
       }
-    }).filter((item) => item.windCode && item.rank > 0),
+    }).filter((item) => item.windCode),
     unscoredPeerCount: Number(root.unscored_peer_count ?? root.unscoredPeerCount ?? 0),
     unscoredSummary: Object.fromEntries(
       Object.entries(unscoredSummary).map(([key, count]) => [key, Number(count || 0)]),
@@ -1293,14 +1293,14 @@ function EvaluationStatisticsPanel({ fundCode, window, windowLabel }: { fundCode
                   <tbody className="divide-y divide-[#edf0ed]">
                     {rankingRows.map((item) => (
                       <tr key={item.windCode} className={item.isCurrent ? 'bg-[#f0f7f3]' : 'bg-white'}>
-                        <td className="px-4 py-3 font-bold text-[#245f4a]">{item.rank}</td>
+                        <td className="px-4 py-3 font-bold text-[#245f4a]">{item.rank == null ? '暂不可用' : item.rank}</td>
                         <td className="px-4 py-3">
                           <div className="font-bold text-[#2c3b34]">{item.name}</div>
                           <div className="mt-1 text-[10px] text-[#8b9590]">{item.windCode}{item.fundType ? ` · ${item.fundType}` : ''}{item.isCurrent ? ' · 当前基金' : ''}</div>
                         </td>
                         <td className="px-4 py-3">
                           <div className="font-bold text-[#173f35]">{item.score.toFixed(1)} <span className="text-[10px] text-[#748079]">{item.grade}</span></div>
-                          <div className="mt-1 text-[10px] text-[#8b9590]">百分位 {item.percentile.toFixed(0)}%</div>
+                          <div className="mt-1 text-[10px] text-[#8b9590]">百分位 {item.percentile == null ? '暂不可用' : `${item.percentile.toFixed(0)}%`}</div>
                         </td>
                         <td className="px-4 py-3">
                           <div className="flex max-w-[21rem] flex-wrap gap-1.5">

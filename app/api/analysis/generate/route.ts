@@ -260,8 +260,14 @@ export async function POST(request: NextRequest) {
 
         const generationMode = reportPayload.metadata?.mode || reportPayload.metadata?.data_sources?.generation_mode || 'unknown'
         const generationLabel = generationMode === 'deterministic_evidence_backed' ? '本地证据报告' : '模型增强报告'
+        const persisted = Boolean(reportPayload.id || reportPayload.metadata?.report_id)
 
-        send({ type: 'progress', message: `${generationLabel}已生成并写入本地数据库，正在输出...` })
+        send({
+          type: 'progress',
+          message: persisted
+            ? `${generationLabel}已生成并写入本地数据库，正在输出...`
+            : `${generationLabel}已生成，但写入本地数据库失败，本次未保存，正在输出...`,
+        })
         for (const paragraph of report.split('\n\n')) {
           send({ type: 'content', text: `${paragraph}\n\n` })
         }

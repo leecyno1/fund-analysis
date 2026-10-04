@@ -74,10 +74,19 @@ type Analysis = {
   }
   style_aggregate: {
     status: string
-    coverage: number
+    quarter_basis?: string
+    snapshot_coverage?: number
     coverage_note?: string
-    reason?: string
-    factors?: Array<{ factor: string; label: string; unit: string | null; weighted_exposure: number }>
+    reason?: string | null
+    factors?: Array<{
+      factor: string
+      label: string
+      unit: string | null
+      weighted_exposure: number
+      covered_exposure: number
+      coverage: number
+      unknown_weight: number
+    }>
   }
   correlation: {
     status: string
@@ -90,8 +99,8 @@ type Analysis = {
 
 type PerfMetrics = {
   cumulative_return: number
-  annualized_return: number
-  annualized_volatility: number
+  annualized_return: number | null
+  annualized_volatility: number | null
   max_drawdown: number
   sample_days: number
   start_date: string | null
@@ -150,13 +159,14 @@ type TradeList = {
     wind_code: string
     fund_name: string | null
     action: string
-    current_weight: number
+    current_weight: number | null
     target_weight: number
-    weight_delta: number
+    weight_delta: number | null
     amount: number | null
     shares: number | null
     latest_nav: number | null
     nav_date: string | null
+    note?: string | null
   }>
   boundary?: string
 }
@@ -829,21 +839,31 @@ export default function PortfolioClient() {
                   <p className="mt-1 text-sm text-[#748079]">{analysis?.overlap?.reason || '至少两只持仓才能比较重叠。'}</p>
                 )}
 
-                <h4 className={`${label} mt-4`}>风格暴露聚合（权重加权，最新披露季度）</h4>
+                <h4 className={`${label} mt-4`}>风格暴露聚合</h4>
+                {analysis?.style_aggregate?.quarter_basis ? (
+                  <p className="mt-1 text-xs text-[#748079]">{analysis.style_aggregate.quarter_basis}</p>
+                ) : null}
                 {styleFactors.length ? (
                   <div className="mt-1 grid gap-x-6 gap-y-1 text-sm sm:grid-cols-2">
                     {styleFactors.map((factor) => (
-                      <div key={factor.factor} className="flex items-baseline justify-between border-b border-[#f0f4f1] py-1">
-                        <span className="text-[#3d5347]">{factor.label}</span>
-                        <span className="font-medium text-[#1f2d26]">{factor.weighted_exposure.toFixed(3)}</span>
+                      <div key={factor.factor} className="border-b border-[#f0f4f1] py-1">
+                        <div className="flex flex-wrap items-baseline justify-between gap-x-2">
+                          <span className="text-[#3d5347]">{factor.label}</span>
+                          <span className="font-medium text-[#1f2d26]">已覆盖部分均值 {factor.covered_exposure.toFixed(3)}</span>
+                        </div>
+                        <div className="mt-1 flex flex-wrap gap-x-3 text-xs text-[#748079]">
+                          <span>已知贡献 {factor.weighted_exposure.toFixed(3)}</span>
+                          <span>NAV覆盖 {pct(factor.coverage)}</span>
+                          <span>未知权重 {pct(factor.unknown_weight)}</span>
+                        </div>
                       </div>
                     ))}
                   </div>
                 ) : (
                   <p className="mt-1 text-sm text-[#748079]">{analysis?.style_aggregate?.reason || '暂无风格快照可聚合。'}</p>
                 )}
-                {analysis?.style_aggregate?.status === 'available' ? (
-                  <p className="mt-1 text-xs text-[#748079]">覆盖 {pct(analysis.style_aggregate.coverage)} 权重的持仓；未覆盖部分为残差。</p>
+                {analysis?.style_aggregate?.coverage_note ? (
+                  <p className="mt-1 text-xs text-[#748079]">{analysis.style_aggregate.coverage_note}</p>
                 ) : null}
 
                 <h4 className={`${label} mt-4`}>净值收益率相关性</h4>
