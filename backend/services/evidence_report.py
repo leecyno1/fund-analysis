@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from decimal import Decimal
+import math
 from typing import Any, Dict, Iterable, List, Optional
 
 
@@ -172,6 +173,40 @@ def _holding_industry(holding: Dict[str, Any]) -> str:
 
 def _holding_weight(holding: Dict[str, Any]) -> Any:
     return holding.get("weight")
+
+
+def _holding_weight_known(holding: Dict[str, Any]) -> bool:
+    weight = _holding_weight(holding)
+    if isinstance(weight, bool) or not isinstance(weight, (int, float, str, Decimal)):
+        return False
+    try:
+        return math.isfinite(float(weight))
+    except (TypeError, ValueError):
+        return False
+
+
+def _concentration_disclosed(holdings: List[Dict[str, Any]]) -> bool:
+    """有持仓但无任何可信权重时，集中度不可核验，不能按 0 处理而静默放行。"""
+    return not holdings or any(_holding_weight_known(holding) for holding in holdings)
+
+
+def _holding_weight_coverage(holdings: List[Dict[str, Any]]) -> float:
+    """已知可信权重的持仓占比；无持仓视为 1.0（无可核验对象）。"""
+    if not holdings:
+        return 1.0
+    known = sum(1 for holding in holdings if _holding_weight_known(holding))
+    return known / len(holdings)
+
+
+def _industry_rows(
+    holdings: List[Dict[str, Any]], industry_buckets: List[tuple[str, float]], limit: int = 8
+) -> str:
+    # 权重全部缺失时行业合计是 0.0 的强制求和，渲染成 0.00% 等于伪造"零集中度"，改为"待补"。
+    disclosed = _concentration_disclosed(holdings)
+    return "\n".join(
+        f"| {industry} | {_format_percent(weight) if disclosed else '待补'} |"
+        for industry, weight in industry_buckets[:limit]
+    )
 
 
 def _industry_buckets(holdings: List[Dict[str, Any]]) -> List[tuple[str, float]]:
@@ -593,9 +628,11 @@ def build_buy_before_decision_summary(
     peer_status = (peer_percentiles or {}).get("sample_status") or "unavailable"
     peer_metrics = (peer_percentiles or {}).get("metrics") or {}
     tenure_available = bool(_metric_panel(manager_tenure_metrics or [], "manager_tenure"))
-    sorted_holdings = sorted(holdings or [], key=lambda item: float(_holding_weight(item) or 0), reverse=True)
+    holdings_list = holdings or []
+    sorted_holdings = sorted(holdings_list, key=lambda item: float(_holding_weight(item) or 0), reverse=True)
     top_ten_weight = sum(float(_holding_weight(holding) or 0) for holding in sorted_holdings[:10])
-    top_industry = (_industry_buckets(holdings or []) or [("行业待补", 0.0)])[0]
+    top_industry = (_industry_buckets(holdings_list) or [("行业待补", 0.0)])[0]
+    weight_coverage = _holding_weight_coverage(holdings_list)
 
     hard_blocks = []
     caution_flags = []
@@ -610,10 +647,16 @@ def build_buy_before_decision_summary(
     if not tenure_available:
         caution_flags.append("现任经理任期切片缺失，不能把历史业绩归因给当前经理")
         next_actions.append("同步经理任职关系并生成 manager_tenure 指标")
-    if top_ten_weight >= 0.70:
-        caution_flags.append(f"前十大持仓集中度 {_format_percent(top_ten_weight)}，持有体验依赖少数重仓")
-    if top_industry[1] >= 0.50:
-        caution_flags.append(f"第一行业 {top_industry[0]} {_format_percent(top_industry[1])}，不能按普通分散型基金理解")
+    if holdings_list and weight_coverage == 0.0:
+        caution_flags.append("持仓权重缺失，前十大与行业集中度无法核验，不能视为分散")
+        next_actions.append("补齐本地持仓权重后再核验集中度闸门")
+    else:
+        if top_ten_weight >= 0.70:
+            caution_flags.append(f"前十大持仓集中度 {_format_percent(top_ten_weight)}，持有体验依赖少数重仓")
+        if top_industry[1] >= 0.50:
+            caution_flags.append(f"第一行业 {top_industry[0]} {_format_percent(top_industry[1])}，不能按普通分散型基金理解")
+        if holdings_list and weight_coverage < 1.0:
+            caution_flags.append(f"持仓权重覆盖 {weight_coverage:.0%}，前十大/行业集中度为已知权重下限，可能被低估")
 
     weak_peer_metrics = [
         metric.get("label") or metric_name
@@ -773,20 +816,24 @@ def build_fund_research_report(
         f"| {index + 1} | {_holding_identity(holding)} | {_holding_code(holding)} | {_holding_industry(holding)} | {_format_percent(_holding_weight(holding))} |"
         for index, holding in enumerate(sorted_holdings[:10])
     )
-    industry_rows = "\n".join(
-        f"| {industry} | {_format_percent(weight)} |"
-        for industry, weight in industry_buckets[:8]
-    )
-    top_ten_risk = (
-        f"前十大合计 {_format_percent(top_ten_weight)}，持仓集中度显著偏高，单一赛道回撤会直接影响持有体验。"
-        if top_ten_weight >= 0.70
-        else f"前十大合计 {_format_percent(top_ten_weight)}，仍需和同类基金比较集中度。"
-    )
-    industry_risk = (
-        f"第一行业 {top_industry[0]} {_format_percent(top_industry[1])}，行业主题暴露很高，不能按普通分散型基金理解。"
-        if top_industry[1] >= 0.50
-        else f"第一行业 {top_industry[0]} {_format_percent(top_industry[1])}，需继续观察行业漂移。"
-    )
+    industry_rows = _industry_rows(holdings, industry_buckets)
+    weight_coverage = _holding_weight_coverage(holdings)
+    if holdings and weight_coverage == 0.0:
+        top_ten_risk = "持仓权重缺失，前十大集中度无法核验，不能据此判断分散程度。"
+        industry_risk = "持仓权重缺失，第一行业暴露无法核验，不能按普通分散型基金理解。"
+    else:
+        top_ten_risk = (
+            f"前十大合计 {_format_percent(top_ten_weight)}，持仓集中度显著偏高，单一赛道回撤会直接影响持有体验。"
+            if top_ten_weight >= 0.70
+            else f"前十大合计 {_format_percent(top_ten_weight)}，仍需和同类基金比较集中度。"
+        )
+        industry_risk = (
+            f"第一行业 {top_industry[0]} {_format_percent(top_industry[1])}，行业主题暴露很高，不能按普通分散型基金理解。"
+            if top_industry[1] >= 0.50
+            else f"第一行业 {top_industry[0]} {_format_percent(top_industry[1])}，需继续观察行业漂移。"
+        )
+        if holdings and weight_coverage < 1.0:
+            top_ten_risk += f"（已知权重覆盖 {weight_coverage:.0%}，为下限，可能被低估）"
 
     generated_at = datetime.now(UTC).isoformat()
     lines = [

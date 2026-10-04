@@ -5,6 +5,7 @@
 """
 from datetime import date, datetime
 from decimal import Decimal
+import math
 from typing import Any, Dict, List, Optional
 
 from services.data_quality_service import DataQualityService
@@ -177,8 +178,9 @@ class ResearchMemoService:
             return self.scoring_service.score_fund(wind_code)
         except Exception as exc:
             return {
-                "overall_score": 50,
-                "overall_grade": "D",
+                "overall_score": None,
+                "overall_grade": None,
+                "status": "unavailable",
                 "missing_data": [f"专业评分失败：{exc}"],
                 "calculation_method": "professional_metric_snapshot_v1_fallback",
             }
@@ -204,13 +206,18 @@ class ResearchMemoService:
         three_year: Dict[str, Any],
         evidence_ids: Dict[str, str],
     ) -> List[Dict[str, Any]]:
-        overall_score = self._to_float(scoring.get("overall_score")) or 50
+        overall_score = self._to_float(scoring.get("overall_score"))
         quality_score = self._to_float(quality.get("score")) or 0
         one_year_return = self._to_float(one_year.get("annualized_return"))
         three_year_return = self._to_float(three_year.get("annualized_return"))
         drawdown = self._to_float(one_year.get("max_drawdown"))
 
-        investability = "可进入候选池复核" if overall_score >= 70 and quality_score >= 70 else "仅适合观察或补数后复核"
+        if overall_score is None:
+            investability = "评分缺失，需补数后复核"
+        elif overall_score >= 70 and quality_score >= 70:
+            investability = "可进入候选池复核"
+        else:
+            investability = "仅适合观察或补数后复核"
         return_gap = None
         if one_year_return is not None and three_year_return is not None:
             return_gap = abs(one_year_return - three_year_return)
@@ -219,7 +226,7 @@ class ResearchMemoService:
             {
                 "statement": f"综合评分和数据质量共同指向：当前结论为“{investability}”。",
                 "basis_evidence_ids": [evidence_ids["score"], evidence_ids["quality"]],
-                "confidence": "medium" if quality_score < 85 else "high",
+                "confidence": "low" if overall_score is None else ("medium" if quality_score < 85 else "high"),
                 "assumption": "专业评分权重已按基金类型、滚动窗口和经理任期切片调整。",
             },
             {
@@ -382,13 +389,16 @@ class ResearchMemoService:
         if value is None:
             return None
         try:
-            return float(Decimal(str(value)))
+            number = float(Decimal(str(value)))
         except Exception:
             return None
+        return number if math.isfinite(number) else None
 
     def _json_safe(self, value: Any) -> Any:
         if isinstance(value, Decimal):
-            return float(value)
+            value = float(value)
+        if isinstance(value, float) and not math.isfinite(value):
+            return None
         if isinstance(value, (datetime, date)):
             return value.isoformat()
         if isinstance(value, dict):

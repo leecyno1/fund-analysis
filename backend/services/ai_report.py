@@ -4,6 +4,7 @@
 import os
 import json
 import logging
+import math
 import re
 import urllib.error
 import urllib.request
@@ -280,9 +281,14 @@ class ClaudeReportGenerator:
             for h in holdings[:10]:
                 sname = h.get("stock_name", "")
                 scode = h.get("stock_code", "")
-                w = h.get("weight", 0)
+                w = h.get("weight")
                 ind = h.get("industry", "N/A")
-                parts.append("- {}({}): {:.2%}, 行业:{}".format(sname, scode, w, ind))
+                weight_text = (
+                    "{:.2%}".format(w)
+                    if isinstance(w, (int, float)) and not isinstance(w, bool) and math.isfinite(w)
+                    else "权重待补"
+                )
+                parts.append("- {}({}): {}, 行业:{}".format(sname, scode, weight_text, ind))
 
         # 调研纪要
         if reports:

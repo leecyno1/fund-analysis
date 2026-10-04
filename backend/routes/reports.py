@@ -1103,12 +1103,14 @@ async def generate_fund_report(
 
         return {
             "id": report_id,
+            "saved": report_id is not None,
             "report": report_content,
             "metadata": {
                 "target_type": "fund",
                 "target_id": wind_code,
                 "report_type": f"fund_{report_depth}_analysis",
                 "report_id": report_id,
+                "saved": report_id is not None,
                 "data_sources": report_record["data_sources"],
                 "word_count": len(report_content),
                 "purchasePlan": safe_purchase_plan,
@@ -1154,11 +1156,11 @@ async def generate_manager_report(
             score = scoring_engine.score_fund(p, r, s)
             fund_details.append({**fund, "performance": p, "risk": r, "style": s, "scoring": score})
 
-        avg_perf = {
-            "overall_score": sum(f["scoring"]["overall_score"] for f in fund_details) / len(fund_details)
-            if fund_details
-            else None,
-        }
+        scored = [
+            f["scoring"]["overall_score"] for f in fund_details
+            if isinstance(f["scoring"].get("overall_score"), (int, float))
+        ]
+        avg_perf = {"overall_score": sum(scored) / len(scored) if scored else None}
         manager_score = scoring_engine.score_manager(manager_data, avg_perf, {}, [])
 
         # 获取调研报告（PostgreSQL，与调研库读路径同库）
@@ -1245,12 +1247,14 @@ async def generate_manager_report(
 
         return {
             "id": report_id,
+            "saved": report_id is not None,
             "report": report_content,
             "metadata": {
                 "target_type": "manager",
                 "target_id": manager_id,
                 "report_type": f"manager_{depth}_analysis",
                 "report_id": report_id,
+                "saved": report_id is not None,
                 "data_sources": report_record["data_sources"],
                 "word_count": len(report_content),
                 "provider": generator.provider,
