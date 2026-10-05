@@ -534,3 +534,28 @@ python3 ../.quest-recovery/export.py
   - C5：`POST /trade-list` 对权重未知持仓返回 `action=权重未知 / current_weight=null / amount=null` + 补权重提示，不再冒充全额申购；权重匹配的持仓不产生动作。
 
 边界：本轮已提交并推送两远端、已重启独立 8005/3000（均 check 模式，未触发 DDL、未迁移、未重算或回填真实数据、未改持仓）。Desk 8035/3035 与 Orchestra 未触碰。遗留待办仍为 §18.1 记录的 A2(直连 API 潜在缺口)、#3(报告落库策略一致性)、#4(详情页滚动面板透传基准)、#5(memo 整体 _json_safe)，均非上线阻断项。
+
+### 18.3 上线后实时 UAT 走查与遗留项处置（2026-10-04）
+
+对常驻系统（backend 3717 / frontend 8169）做只读 UAT，逐条在真实数据上确认本轮修复生效、无回归、**全站零 500**：
+
+- A4：`/market` 30 行"· 夏普"全部真实值、`—` 占位 0；初筛分恢复夏普分量。
+- C1：实盘回测 `available`，364 日频区间跨 1.49 年，累计 46.6% → 年化 29.3%（=1.466^(1/1.489)−1，日历口径正确）。
+- C3：相关性表真实系数 0.41–0.78、重叠 498–499 天，无伪造 0.0；组合页 0 崩溃/NaN。
+- C5：`POST /trade-list` 权重未知持仓 → `action=权重未知 / current_weight=null / amount=null`，不冒充全额申购。
+- A3：`/api/funds?sort_by=rank&desc` 有分者在前、`None` 排末尾（不当 0）；`sort_by=risk&asc` 真实 0.0 回撤在前。
+- A1：`POST /compare-matrix` best_code 按同类百分位取；calmar 行中有原始值 15.25 但无百分位者被正确排除，不与百分位混尺度。
+- A5：`/research-snapshot` 滚动窗口齐全，1y 带 benchmark_code 与相对指标。
+- B3/B5：`/research-memos/fund/{code}` 返回 200、结构完整、无虚构分、无 NaN 500。
+- 详情链路：页面 SSR 200/7s，`/evaluation`(partial,15.1/E)、`/period-performance`、`/peer-percentiles`(sufficient,3620) 均 200。
+- 全站健康扫描：health/home/funds/fund-browser/recommendation-*/evaluation*/portfolios/managers/market-indices/data-health/scoring/alerts/watchlists/research-reports/research-queue 有效路径全 200；初扫的 404/307/422 经核实均为探针路径问题（裸根无 GET、尾斜杠重定向、必填参数缺失），非回归。
+
+**A4 暴露的极端夏普已核实为合理，非缺陷**：货币基金（天弘余额宝 000198、建信嘉薪宝 000686）近一年年化约 0.88%/1.03%，低于反推的风险无风险利率约 2.0%（三只基金 implied rf 一致 2.00–2.04%），且年化波动极小（0.037%/0.046%），故 sharpe=(负超额)/(极小波动)=−30/−21，数学正确；`getMarketScreeningScore` 用 `max(0,min(20,sharpe*10))` 将负夏普归零，不会扭曲初筛分。债券基金 000111 夏普 1.50 与输入自洽。
+
+**遗留项处置结论**（均不值得为其单独再触发一次生产重启/重建，保持记录）：
+- #4：详情页 `_rolling_metric_panel`(:1313) 在 `score_fund`(:1325) 之前执行，透传 benchmark_code 需重排或额外查分类，中等风险；且多基准基金占比小、滚动面板为辅助展示、权威评价(#61)已给正确相对指标 → 低价值，暂不改。
+- #5：memo 整体过 `_json_safe` 属纵深防御，上游 `_to_float`/`_safe_scoring` 已 None 化、实时 memo 返回 200，无观测缺陷 → 暂不改。
+- A2：直连 API 无 peer_group 却带筛选会静默丢参，但前端 BFF 仅在选了同类组时转发筛选，UI 不可达；补阈值过滤属侵入式 repo/SQL 改动，加拒绝守卫又会改变端点行为 → 保持记录，待有直连 API 消费需求再处理。
+- #3：`/reports/fund/{code}/evaluation-analysis`(:846) 落库失败抛 500（诚实失败，非 B4 的谎报成功），与另两端点的优雅降级(200+saved:false)仅策略不一致；统一为降级需先核验其前端消费方不因此谎称已存 → 非缺陷，保持记录。
+
+原始验收口径"同分同位、缺失不冒充证据、相同净值结果一致、首期损失正确计入回撤"均已在离线（255+21）与实时 UAT 双层验证达成。系统上线闭环完成、健康常驻。
