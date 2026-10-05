@@ -82,28 +82,25 @@ export function firstText(value: unknown, paths: string[][]) {
 
 export function getReturn1y(fund: Fund) {
   return firstNumber(fund, [
-    ['performanceData', 'return1y'],
     ['performanceData', 'return_1y'],
-    ['rollingMetrics', 'return1y'],
-    ['rollingMetrics', 'return_1y'],
+    ['performanceData', 'annualized_return_1y'],
+    ['rollingMetrics', '1y', 'total_return'],
+    ['rollingMetrics', '1y', 'annualized_return'],
   ])
 }
 
 export function getMaxDrawdown1y(fund: Fund) {
   return firstNumber(fund, [
-    ['riskMetrics', 'maxDrawdown1y'],
     ['riskMetrics', 'max_drawdown_1y'],
-    ['rollingMetrics', 'maxDrawdown1y'],
-    ['rollingMetrics', 'max_drawdown_1y'],
+    ['rollingMetrics', '1y', 'max_drawdown'],
   ])
 }
 
 export function getSharpe1y(fund: Fund) {
+  // 后端 riskMetrics 无 sharpe 字段；夏普在 performanceData.sharpe_ratio 与 rollingMetrics['1y'].sharpe_ratio。
   return firstNumber(fund, [
-    ['riskMetrics', 'sharpe1y'],
-    ['riskMetrics', 'sharpe_1y'],
-    ['rollingMetrics', 'sharpe1y'],
-    ['rollingMetrics', 'sharpe_1y'],
+    ['performanceData', 'sharpe_ratio'],
+    ['rollingMetrics', '1y', 'sharpe_ratio'],
   ])
 }
 
