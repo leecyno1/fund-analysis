@@ -57,8 +57,11 @@ def _runbook_path() -> Path:
     base = os.environ.get("SCHEDULED_UPDATE_LOG_ROOT")
     if base:
         return Path(base) / "runbook.jsonl"
-    # fall back to repo-root relative path (backend cwd is repo root during dev)
-    return Path.cwd() / "logs" / "scheduled_update" / "runbook.jsonl"
+    # 锚定项目根（backend/routes/data_health.py → parents[2]），与 scheduled_update.sh 的
+    # ROOT_DIR/logs 一致。不能用 Path.cwd()：生产 launchd 下后端 cwd 是 backend/，会解析到
+    # backend/logs 而漏读真实 runbook，使调度监控常年 runbook_present=false（监控盲点）。
+    repo_root = Path(__file__).resolve().parents[2]
+    return repo_root / "logs" / "scheduled_update" / "runbook.jsonl"
 
 
 @router.get("/scheduler")
