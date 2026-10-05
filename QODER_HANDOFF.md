@@ -516,4 +516,21 @@ python3 ../.quest-recovery/export.py
 - **#4（Minor）** `_rolling_metric_panel` 三处调用点（列表/同类/详情）暂传 `benchmark_code=None`，多基准基金会丢弃相对指标（安全：宁缺勿错）；快照路径已正确透传 `classification.benchmark_code`。后续可在详情页廉价拿到基准处透传，恢复多基准基金的 excess_return/IR 展示。
 - **#5（Minor）** `research_memo_service` 仅对 `evidence_table` 过 `_json_safe`，`audit.data_quality_score`、观察项 `current` 未过；因其上游已用 `_to_float`/`_safe_scoring` 做 None 化，风险低，可作纵深防御后续整体过一遍 `_json_safe`。
 
-复核后再次确认：255 项离线测试全绿、`tsc --noEmit` 退出 0、`evidence_report` 真实 import 通过、3 个 AI 报告/评价 prompt smoke 通过、`git diff --check` 干净。仍未提交、未重启、未写库、未部署。
+复核后再次确认：255 项离线测试全绿、`tsc --noEmit` 退出 0、`evidence_report` 真实 import 通过、3 个 AI 报告/评价 prompt smoke 通过、`git diff --check` 干净。
+
+### 18.2 提交与上线执行（2026-10-04，用户授权"授权，继续"）
+
+§18/18.1 的"未提交/未重启"状态已被本节取代。用户授权后执行：
+
+- **提交**：预上线已验证批次（§15-18，59 文件）因多会话累积、同文件交织无法按单项拆分，按子系统分 4 簇入库——`4f1a9a8`(存储契约+安全启动+调度告警)、`62f3d93`(评价/组合/同类/筛选数值与证据)、`d95ff89`(报告/AI/纪要事实链)、`08a75a9`(前端可空渲染+交接)。提交前密钥扫描干净、逐簇 `git status` 复核暂存范围。
+- **A4 修复**：以 `/api/fund-browser` 实时响应核对真实键名后，修 `market-workbench.ts` 的 `getSharpe1y/getReturn1y/getMaxDrawdown1y`（后端 `risk_metrics` 无 sharpe、`rolling_metrics` 按窗口键），新增 `scripts/market_workbench_offline_test.mjs` 5 项先红后绿，提交 `40d6355`。
+- **推送**：`origin`(github) 与 `gitee`(绕代理) 均推至 `40d6355`，两远端同步。
+- **重启后端 8005**：`launchctl kickstart -k com.fund-analysis.backend`，PID 52066 → **3717**；健康 `/api/health` = 200 / ok / **database_init_mode=check**(未触发 DDL) / 非 mock / fund_count 32437 / 保存契约 batch_provenance_v1+batch_revision_archive_v1。
+- **重建+重启前端 3000**：`npm run build` 退出 0（全路由编译），`kickstart -k com.fund-analysis.frontend` PID 5725 → **8169**，`/` 与 `/market` 均 200。
+- **浏览器/接口验收**（内嵌浏览器 + 只读接口）：
+  - A4：`/market` 30 行"· 夏普"全部渲染真实值（如 000198.OF −30.37、000686.OF −21.23），`—` 占位 0 处（修复前恒为 null）；初筛分恢复夏普分量。
+  - C1：组合 b4a552f8 实盘回测 `available`，364 个日频区间跨 2025-04-03→2026-09-29(1.49 年)，累计 46.6% → **年化 29.3%**（=1.466^(1/1.489)−1，日历跨度口径正确），波动 18.6%、回撤 −9.2%、基准超额 35.6%，`_parse_date` 处理真实日期无异常。
+  - C3：`/portfolio` 相关性表渲染真实系数（0.41–0.78，重叠 498–499 天），无伪造 0.0；页面 0 崩溃/NaN。
+  - C5：`POST /trade-list` 对权重未知持仓返回 `action=权重未知 / current_weight=null / amount=null` + 补权重提示，不再冒充全额申购；权重匹配的持仓不产生动作。
+
+边界：本轮已提交并推送两远端、已重启独立 8005/3000（均 check 模式，未触发 DDL、未迁移、未重算或回填真实数据、未改持仓）。Desk 8035/3035 与 Orchestra 未触碰。遗留待办仍为 §18.1 记录的 A2(直连 API 潜在缺口)、#3(报告落库策略一致性)、#4(详情页滚动面板透传基准)、#5(memo 整体 _json_safe)，均非上线阻断项。
