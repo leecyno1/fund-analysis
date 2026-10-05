@@ -559,3 +559,18 @@ python3 ../.quest-recovery/export.py
 - #3：`/reports/fund/{code}/evaluation-analysis`(:846) 落库失败抛 500（诚实失败，非 B4 的谎报成功），与另两端点的优雅降级(200+saved:false)仅策略不一致；统一为降级需先核验其前端消费方不因此谎称已存 → 非缺陷，保持记录。
 
 原始验收口径"同分同位、缺失不冒充证据、相同净值结果一致、首期损失正确计入回撤"均已在离线（255+21）与实时 UAT 双层验证达成。系统上线闭环完成、健康常驻。
+
+### 18.4 上线后数据覆盖调研 + 修复调度监控盲点（2026-10-05）
+
+上线后做只读数据覆盖调研，顺带发现并修复一个真实运维缺陷：
+
+- **修复：调度监控 runbook 路径盲点（提交 `5efad18`，已推送两远端 + 重启 8005 生效验证）**。`routes/data_health._runbook_path` 原回退用 `Path.cwd()/logs/...`（注释误设"dev 下 cwd 即项目根"），但生产 launchd 后端 cwd=`backend/`，解析到不存在的 `backend/logs/...`；而 `scheduled_update.sh` 实际写 `<项目根>/logs/`。结果 `/api/data-health/scheduler` 常年 `runbook_present=false`、`last_by_task/recent_runs` 全空——调度明明健康却在监控接口完全不可见（即 §18.1 记录的 P3）。改为按 `__file__` 锚定项目根（parents[2]），保留 `SCHEDULED_UPDATE_LOG_ROOT` 覆盖；新增 `data_health_runbook_offline` 3 项先红后绿，后端离线合计 **258** 全绿。重启后实时验证：`runbook_present=true`、`last_by_task` 19 项全 ok、buckets=daily/weekly/quarterly。
+- **调度健康确认**：最新日调度 2026-10-05 全 11 任务 ok（含 evaluation:snapshots --limit 150、funds:backfill-peer-evaluation、ops:backup-postgres）；周级 universe/manager 同步 2026-10-04 有 ok 记录（§16 的周任务遗漏似已由 RunAtLoad 补偿恢复）。launchd daily 上次退出码 78 是 §17 周任务缺失告警的整体退出信号，非日任务失败（runbook 逐任务全 ok）。
+- **数据覆盖现状（实时 recommendation-coverage）**：classified 9678、metric_ready **5058(52%)**、style_ready **1272(13%)**、recommendation_ready 5016(52%)；主缺口 `required_category_evidence_missing`（如混合偏股 3620 只中 3088 缺必要类别证据）。研究待确认队列 pending 132（manager 69 / fund 38 / style_label 22 / classification 3）。
+- **小瑕疵**：`/api/data-health/summary` 仍显示一条 source=`unit-test`、dataset=fund_nav、status=failed("boom") 的陈旧快照（2026-09-30），是某单测向真实库写入的残留，污染数据健康视图；建议清理该行并让相关单测改用隔离库/事务回滚。
+
+**数据攻坚优先级建议（均需单独授权：涉及写库/重算或 LLM 成本，本轮只调研未执行）**：
+1. **P1 指标/评价覆盖 52%→更高**：日调度已在配额内回填（evaluation:snapshots --limit 150）。杠杆=提配额或一次性批量补算缺 `required_category_evidence` 的约 4600 只；直接抬升 recommendation_ready。需授权 heavier compute + 写 metric_snapshots/evaluation_snapshots。
+2. **P2 风格覆盖 13%**：holding_style_snapshots 依赖持仓 + Barra 计算；补持仓覆盖后批量算风格快照。需授权写库。
+3. **P3 经理画像 ~1.8%（§11.6，执行前需再确认当前值）**：manager_profiles 是经理研究/排序天花板，需 LLM 批量生成。先小批量试跑 + 质量抽检，再定配额。需授权 LLM 调用与成本。
+4. **P4 货基快照基准补标（前序 #64：约 219 未标注 /165 缺失）**：先确认货基是否应有分类映射基准（部分货基本就无合适基准，不应强补），再决定补标范围。需授权写库。
