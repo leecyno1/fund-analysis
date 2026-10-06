@@ -51,18 +51,6 @@ class ResearchSignalsService:
         """活跃研究范围：活跃论点 + 研究队列中的基金。"""
         from sqlalchemy import text
         sql = text("""
-            SELECT DISTINCT wind_code, manager_name FROM (
-                SELECT t.fund_wind_code AS wind_code, NULL AS manager_name
-                FROM investment_theses t WHERE t.state IN ('candidate','researching','observing')
-                UNION
-                SELECT q.fund_wind_code, NULL FROM research_queue_items q WHERE q.status IN ('queued','researching')
-            ) focus
-            LEFT JOIN LATERAL (
-                SELECT m.name AS manager_name FROM managers m LIMIT 0
-            ) mm ON FALSE
-        """)
-        # 简化：直接取基金代码集合
-        sql = text("""
             SELECT fund_wind_code FROM (
                 SELECT fund_wind_code FROM investment_theses WHERE state IN ('candidate','researching','observing')
                 UNION
@@ -85,14 +73,14 @@ class ResearchSignalsService:
         # 取关注基金的经理，再找这些经理最近 days 天的新纪要
         sql = text("""
             WITH focus_managers AS (
-                SELECT DISTINCT unnest(m.manager_ids) AS manager_id
+                SELECT DISTINCT unnest(f.manager_ids) AS manager_id
                 FROM funds f
                 WHERE f.wind_code = ANY(:codes)
             )
             SELECT r.id, r.title, r.manager_name, r.report_date, r.created_at
             FROM research_reports r
             WHERE r.created_at >= NOW() - (:days || ' days')::INTERVAL
-              AND (r.manager_id IN (SELECT manager_id FROM focus_managers) OR r.manager_name IS NOT NULL)
+              AND r.manager_id IN (SELECT manager_id FROM focus_managers)
             ORDER BY r.created_at DESC
             LIMIT 50
         """)
@@ -158,7 +146,7 @@ class ResearchSignalsService:
         # 匹配：纪要关联的经理 = 关注基金的经理
         sql = text("""
             WITH focus_managers AS (
-                SELECT DISTINCT unnest(m.manager_ids) AS manager_id, f.wind_code
+                SELECT DISTINCT unnest(f.manager_ids) AS manager_id, f.wind_code
                 FROM funds f
                 WHERE f.wind_code = ANY(:codes)
             )

@@ -228,12 +228,17 @@ class AlertScanService:
         ).strip().upper()
 
     @staticmethod
-    def _metric_map(panel: List[Dict[str, Any]]) -> Dict[str, Decimal]:
+    def _metric_map(panel: List[Dict[str, Any]], window: str = "1y") -> Dict[str, Decimal]:
+        # 回撤等告警按固定窗口取值：panel 同一指标含多窗口(1y/3m/3y/6m/manager_tenure)，
+        # 只按 metric_name 归并会被遍历顺序（get_latest_panel 按窗口字典序）覆盖，
+        # 导致 max_drawdown 取到 manager_tenure/6m 而非 1y，告警阈值判断错位。
         result: Dict[str, Decimal] = {}
         for item in panel:
             name = item.get("metric_name")
             value = item.get("metric_value")
             if name is None or value is None:
+                continue
+            if item.get("metric_window") != window:
                 continue
             try:
                 result[name] = Decimal(str(value))
