@@ -574,3 +574,28 @@ python3 ../.quest-recovery/export.py
 2. **P2 风格覆盖 13%**：holding_style_snapshots 依赖持仓 + Barra 计算；补持仓覆盖后批量算风格快照。需授权写库。
 3. **P3 经理画像 ~1.8%（§11.6，执行前需再确认当前值）**：manager_profiles 是经理研究/排序天花板，需 LLM 批量生成。先小批量试跑 + 质量抽检，再定配额。需授权 LLM 调用与成本。
 4. **P4 货基快照基准补标（前序 #64：约 219 未标注 /165 缺失）**：先确认货基是否应有分类映射基准（部分货基本就无合适基准，不应强补），再决定补标范围。需授权写库。
+
+### 18.5 日调度扫描服务审查：预警/异动/信号子系统存在成簇缺陷（2026-10-05）
+
+对 6 个日调度扫描服务（alert_scan / anomaly_scanner_service / fund_bond_anomaly_service / fund_watch_service / fund_watchlist_service / research_signals_service，共约 1226 行）做只读审查（含实盘只读取证）。结论：**该子系统缺陷成簇**，多处信号"死了却报 success"或"缺失冒充正常"，与主评价链路（已修）质量差距明显。已修其中 3 项（提交 `43b1fd1`，已推送+重启 8005 生效，后端离线 261 全绿）：
+
+- **C1（已修）** `alert_scan._metric_map` 只按 metric_name 归并、忽略 metric_window，get_latest_panel 按窗口字典序返回 → max_drawdown 取到 manager_tenure/6m 而非 1y，回撤告警(阈值 -0.15)对错窗口判断（实盘 016191.OF 取证）。改为按固定窗口(默认 1y)取值。
+- **C3（已修）** `research_signals_service._scan_manager_new_memo`/`_scan_memo_evidence_radar` 用 `unnest(m.manager_ids) FROM funds f`（别名 m 未定义）→ PG 报错 → except 吞成 [] → 两个信号**长期恒 0 却报 success**。改为 `unnest(f.manager_ids)`（funds.manager_ids 已确认存在），只读执行验证 SQL 有效。
+- **C4（已修）** `_scan_manager_new_memo` 的 `OR r.manager_name IS NOT NULL` 使关注经理过滤形同虚设，删除；并清理 `_focus_funds` 死 SQL。
+
+**其余待修（按优先级；多为 DB 相关，需专门迭代 + 部分需数据语义决策/授权）**：
+
+- **C2（高，实盘取证）** `fund_watch_service.py:148-149`：`funds.total_asset` 已归一为**亿元**（tushare_service._asset_to_yi），但阈值按**元**存（实盘 watch 7033f441：threshold=2e10、note"规模突破200亿"），比较单位不一致 → 该 watch **永远无法触发**。修：比较前统一单位（total_asset×1e8 或阈值/1e8），并在 create_watch 校验/换算；注意既有 watch 阈值语义，避免改比较口径后存量 watch 反向失效。
+- **C5+C6（高）** `anomaly_scanner_service.py`：`manager_change` 读**不存在的表** `fund_change_history`（database.py/迁移里都没有）→ 恒 0；且 :102/144/167/207 一律 `except Exception: return []`，scan() 输出的 total_anomalies/by_type **无 errors/status 字段** → schema/DB 失败与"确实没异常"无法区分（C5 即活例，属"缺失冒充正常"）。修：manager_change 改读 `manager_fund_tenures`（参照 alert_scan），各扫描捕获错误并在 scan() 汇总 `status: partial|ok` + `errors[type]`。
+- **C9+I1（高，实盘取证）** `anomaly_scanner_service.py:173-194` 集中度异动混用 weight_basis（fund_nav vs equity_portfolio）且无每(基金,季度)行数下限 → 实盘输出荒谬（013122.OF 0.9498→0.128、018370.OF 0.0258→0.472）。:109-131 的 dd_3m/dd_3y 各取自身最新 as_of_date（跨窗口错位，实盘 001042.OF 2026-08-11 vs 09-29），且 `ORDER BY ratio DESC` 无 tiebreaker → top-N 在一堆 100% 里任取（实盘 8/8 行都是 ratio 100.0）。修：按 weight_basis 过滤 + 要求 COUNT(*)>=10；drawdown 对齐共同 as_of_date；排序加 (abs(dd_3m), ratio) 次序。
+- **C7+C8（中高）** `alert_scan.scan` 对每状态成员 `[:max_members_per_status]`（默认 20）截断，而 list_members 按 updated_at/created_at DESC → 只扫"最近改动"的 20 个、把陈旧高风险成员丢掉，却返回 `status:completed` 无 scanned/total 计数（静默部分覆盖）；`routes/alerts.py:113` `include_peer_metrics=Query(False)` → peer_percentile 告警在生产**从不运行**。修：scan() 输出 scanned/total/skipped 计数；确认 peer_percentile 告警是否应默认开启（涉及成本）。
+- **I2（中）** `alert_scan._has_open` 异常时 return False → 去重"失败即放行" → 重复告警；应 fail-closed。
+- **I3（中）** alert_scan 经理变更/同类分位路径吞异常，而 event_exists/list_fund_manager_departures 不吞，routes/alerts.py 只捕 SQLAlchemyError → 非 SQLA 异常会在部分写入后 500；应逐成员包裹并记 skipped。
+- **I4（中）** `fund_watch_service`：`current_value is None→continue` 与 `except:pass` 使无法评估的 watch 静默消失，scan() 报 `triggered_count:0`（读作"全部正常"）无 unevaluated 计数；create_watch 不校验 metric_field（DDL 文档写的 max_drawdown_1y 及死代码 METRIC_SOURCES 会造出永远静默的 watch）。
+- **I5（中）** `fund_bond_anomaly_service.py:239-243`：`accum_nav` 只要 >=2 条就切基准，会把以 unit_nav 为主的基金切到稀疏 accum_nav、丢掉 NULL 行 → 观测不足 → 监控静默不跑；切基准前应要求覆盖占比。
+- **I6（中）** `fund_bond_anomaly_service.py:96,138/153/203`：无同类时 market_adjustment 全 False → market_regime="normal" → 标"**同类债市正常**"，对不可观测的市场状态伪造正常（_base() 本应返回 unknown）；应以 peer_fund_count>=minimum_peer_count 为门槛。
+- **I7（中，疑似）** `fund_bond_anomaly_service.py:146-149`：cumprod/rolling(26) 前 .dropna() 会剔除不合格日期，"26 个观测"可能跨数月、同类指数跨缺口连乘。
+- **Minor**：research_signals :143-145 falsy-zero（prev 恰为 0.0 时 previous_residual=None 但描述打印 0.00%）、:133 prev.rn=2 无期间邻近守卫（2026Q2 vs 2019Q4 也算"恶化"）、:122-134 ABS() 使恶化方向盲、anomaly_scanner :23/51-55 passive 过滤在 LIMIT 之后（passive 基金占额度→漏报）+ '159' 重复 + '161' 误纳 LOF、:64-90 无 AUM 绝对下限（实盘 top5 全是 sub-1亿 微基金 +799%/+489%，真实大额赎回反被淹没）；fund_watch :138 utcnow()、一次性 triggered 状态使再次突破不再告警（疑似设计如此）；fund_watchlist 无 fund 行的成员渲染成 {} 无缺数标记。
+- **测试写库污染**：`tests/data_snapshot_repo_smoke.py` 向真实库写 source="unit-test"/error="boom" 的 fund_nav 快照且不清理 → 污染 `/api/data-health/summary`（stale_datasets 显示 fund_nav failed，误导运维）。DataSourceSnapshotRepo 无 delete 方法。修：给 smoke 加 finally 清理（需 repo 增删除能力或直连 DELETE 自建记录），并清理既有残留行（需授权写库）；相关 repo smoke 应改用隔离库/事务回滚。
+
+建议：把该子系统作为一个**专门迭代**统一修复（多为 DB/SQL 相关，需只读复核 + 部分需数据语义决策如 C2 单位、C5 换表、C8 是否默认开 peer 告警），并补该子系统的离线/集成回归（目前 alert/anomaly/signal 缺数值与信号级测试，是这批缺陷长期未被发现的根因——错误被 except 吞掉且 scan 报 success）。
