@@ -55,6 +55,7 @@ import FundShareClassPanel, { type FundShareClassSnapshot } from './FundShareCla
 import FundManagerHistoryPanel, { type FundManagerHistorySnapshot } from './FundManagerHistoryPanel'
 import FundManagerTenurePerformancePanel, { type FundManagerTenurePerformance } from './FundManagerTenurePerformancePanel'
 import GenerateFundReportButton from './GenerateFundReportButton'
+import ResearchPipelinePanel from './ResearchPipelinePanel'
 
 export type FundNavPoint = {
   date: string
@@ -478,6 +479,25 @@ export type FundPlainLanguageBrief = {
   boundary: string
 }
 
+export type ResearchPipelineStep = {
+  order: number
+  key: string
+  label: string
+  status: 'ready' | 'partial' | 'blocked'
+  summary: string
+  gap: string | null
+  link: string
+  capture: { up: number | null; down: number | null } | null
+}
+
+export type ResearchPipeline = {
+  status: string
+  readyCount: number
+  total: number
+  firstGap: { label: string; gap: string } | null
+  steps: ResearchPipelineStep[]
+}
+
 type Props = {
   fund: CamelFund
   nav: FundNavPoint[]
@@ -505,6 +525,7 @@ type Props = {
   holdingStyle: FundHoldingStyle
   holdingExperience: FundHoldingExperience
   productProfile: FundProductProfile
+  researchPipeline: ResearchPipeline
 }
 
 const windows = [
@@ -1454,7 +1475,7 @@ const contractTenorLabels: Record<string, string> = {
   over_10y: '10年以上',
 }
 
-export default function SimpleFundDetailClient({ fund, nav, evaluationWindows, evaluationHistory, assessmentSummary, detailHighlights, plainLanguageBrief, researchMemos, dataQuality, shareClasses, managerHistory, managerTenurePerformance, assetAllocation, drawdownRecovery, derivedSeries, periodPerformance, fofHoldings, bondAnomaly, bondDuration, bondHoldings, holderStructure, holdingSnapshot, holdingChanges, holdingStyle, holdingExperience, productProfile }: Props) {
+export default function SimpleFundDetailClient({ fund, nav, evaluationWindows, evaluationHistory, assessmentSummary, detailHighlights, plainLanguageBrief, researchMemos, dataQuality, shareClasses, managerHistory, managerTenurePerformance, assetAllocation, drawdownRecovery, derivedSeries, periodPerformance, fofHoldings, bondAnomaly, bondDuration, bondHoldings, holderStructure, holdingSnapshot, holdingChanges, holdingStyle, holdingExperience, productProfile, researchPipeline }: Props) {
   const [window, setWindow] = useState<(typeof windows)[number]['value']>('1y')
   const selectedWindow = windows.find((item) => item.value === window) || windows[1]
   const evaluation = evaluationWindows[window] || evaluationWindows['1y']
@@ -1575,6 +1596,8 @@ export default function SimpleFundDetailClient({ fund, nav, evaluationWindows, e
       </section>
 
       <PlainLanguageBriefPanel brief={plainLanguageBrief} />
+
+      <ResearchPipelinePanel pipeline={researchPipeline} />
 
       <FundDataQualityPanel snapshot={dataQuality} />
 

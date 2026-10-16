@@ -12,6 +12,8 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 class MetricFactory:
     """统一指标计算服务。"""
 
+    MIN_CAPTURE_OBSERVATIONS = 10
+
     def __init__(self, trading_days: int = 252, risk_free_rate: float = 0.02):
         self.trading_days = trading_days
         self.risk_free_rate = risk_free_rate
@@ -127,12 +129,59 @@ class MetricFactory:
         annualized_active = (sum(active_returns) / len(active_returns)) * self.trading_days if active_returns else 0
         information_ratio = annualized_active / tracking_error if tracking_error else 0
 
+        capture = self.calculate_capture_ratios(fund_returns, benchmark_returns)
+
         return {
             "benchmark_return": benchmark_total,
             "excess_return": fund_total - benchmark_total,
             "tracking_error": tracking_error,
             "information_ratio": information_ratio,
             "active_return_mean": sum(active_returns) / len(active_returns) if active_returns else 0,
+            "up_capture_ratio": capture["up_capture_ratio"],
+            "down_capture_ratio": capture["down_capture_ratio"],
+        }
+
+    @staticmethod
+    def calculate_capture_ratios(
+        fund_returns: List[float],
+        benchmark_returns: List[float],
+    ) -> Dict[str, Any]:
+        """上涨/下跌捕获率（裸 ratio，1.10=捕获 110% 上行）。
+
+        口径：基准上涨日(b>0)与下跌日(b<0)分桶，取各桶内基金与基准的几何日收益均值之比；
+        基准持平日剔除。收益 <= -100% 的观测剔除（否则几何均值失效）。
+        缺失不冒充：任一侧有效观测 < MIN_CAPTURE_OBSERVATIONS、基准几何均值 <= 0 或非有限 → None。
+        """
+        def _capture(bucket):
+            if len(bucket) < MetricFactory.MIN_CAPTURE_OBSERVATIONS:
+                return None
+            fund_log = [math.log(1.0 + f) for f, _ in bucket]
+            bench_log = [math.log(1.0 + b) for _, b in bucket]
+            fund_geo = math.exp(sum(fund_log) / len(fund_log)) - 1.0
+            bench_geo = math.exp(sum(bench_log) / len(bench_log)) - 1.0
+            # 上涨桶 bench_geo>0、下跌桶 bench_geo<0 均属正常；仅除零为非法。
+            if bench_geo == 0.0 or not (math.isfinite(fund_geo) and math.isfinite(bench_geo)):
+                return None
+            ratio = fund_geo / bench_geo
+            return ratio if math.isfinite(ratio) else None
+
+        up_bucket = []
+        down_bucket = []
+        for fund_ret, bench_ret in zip(fund_returns, benchmark_returns):
+            if not (math.isfinite(fund_ret) and math.isfinite(bench_ret)):
+                continue
+            if 1.0 + fund_ret <= 0 or 1.0 + bench_ret <= 0:
+                continue
+            if bench_ret > 0:
+                up_bucket.append((fund_ret, bench_ret))
+            elif bench_ret < 0:
+                down_bucket.append((fund_ret, bench_ret))
+
+        return {
+            "up_capture_ratio": _capture(up_bucket),
+            "down_capture_ratio": _capture(down_bucket),
+            "up_observations": len(up_bucket),
+            "down_observations": len(down_bucket),
         }
 
     def build_metric_records(
@@ -162,6 +211,8 @@ class MetricFactory:
 
         records = []
         for metric_name, metric_value in metrics.items():
+            if metric_value is None:
+                continue
             records.append({
                 "target_type": target_type,
                 "target_id": target_id,
@@ -171,7 +222,8 @@ class MetricFactory:
                 "metric_unit": "count" if metric_name == "observations" else "ratio",
                 "window": window,
                 "benchmark_code": benchmark_code if metric_name in {
-                    "benchmark_return", "excess_return", "tracking_error", "information_ratio", "active_return_mean"
+                    "benchmark_return", "excess_return", "tracking_error", "information_ratio",
+                    "active_return_mean", "up_capture_ratio", "down_capture_ratio",
                 } else None,
             })
         return records

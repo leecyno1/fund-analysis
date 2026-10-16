@@ -13,6 +13,8 @@ import SimpleFundDetailClient, {
   type FundDetailHighlight,
   type FundPlainLanguageBrief,
   type FundEvaluationHistoryItem,
+  type ResearchPipeline,
+  type ResearchPipelineStep,
 } from './SimpleFundDetailClient'
 import type { FundHoldingSnapshot } from './FundHoldingProfile'
 import type { FundAssetAllocationSnapshot } from './FundAssetAllocationPanel'
@@ -327,7 +329,7 @@ function normalizeEvaluationHistoryItem(value: unknown): FundEvaluationHistoryIt
 async function loadFundDetail(code: string) {
   const endDate = new Date().toISOString().slice(0, 10)
   const navParams = new URLSearchParams({ start_date: dateYearsAgo(4), end_date: endDate })
-  const [snapshotResult, navResult, holdingsResult, assetAllocationResult, shareClassesResult, managerHistoryResult, fofHoldingsResult, bondDurationResult, bondAnomalyResult, bondHoldingsResult, holderStructureResult, holdingChangesResult, evaluationHistoryResult, derivedSeriesResult] = await Promise.allSettled([
+  const [snapshotResult, navResult, holdingsResult, assetAllocationResult, shareClassesResult, managerHistoryResult, fofHoldingsResult, bondDurationResult, bondAnomalyResult, bondHoldingsResult, holderStructureResult, holdingChangesResult, evaluationHistoryResult, derivedSeriesResult, pipelineResult] = await Promise.allSettled([
     fetch(`${backendApiBaseUrl}/api/funds/${encodeURIComponent(code)}/research-snapshot?window=1y&include_research=true&include_attribution=true&live_attribution=false`, { cache: 'no-store' }),
     fetch(`${backendApiBaseUrl}/api/funds/${encodeURIComponent(code)}/nav?${navParams.toString()}`, { cache: 'no-store' }),
     fetch(`${backendApiBaseUrl}/api/funds/${encodeURIComponent(code)}/holdings`, { cache: 'no-store' }),
@@ -342,6 +344,7 @@ async function loadFundDetail(code: string) {
     fetch(`${backendApiBaseUrl}/api/funds/${encodeURIComponent(code)}/holding-changes`, { cache: 'no-store' }),
     fetch(`${backendApiBaseUrl}/api/funds/${encodeURIComponent(code)}/evaluation-history?limit=60`, { cache: 'no-store' }),
     fetch(`${backendApiBaseUrl}/api/funds/${encodeURIComponent(code)}/derived-series?window=1y`, { cache: 'no-store' }),
+    fetch(`${backendApiBaseUrl}/api/funds/${encodeURIComponent(code)}/research-pipeline`, { cache: 'no-store' }),
   ])
 
   if (snapshotResult.status !== 'fulfilled' || !snapshotResult.value.ok) return null
@@ -601,6 +604,37 @@ async function loadFundDetail(code: string) {
     }).filter((point) => point.date && point.value != null),
     boundary: textValue(derivedSeriesPayload.boundary),
     missingItems: stringArray(derivedSeriesPayload.missing_items),
+  }
+
+  const pipelinePayload = pipelineResult.status === 'fulfilled' && pipelineResult.value.ok
+    ? asRecord(await pipelineResult.value.json().catch(() => ({})))
+    : {}
+  const researchPipeline: ResearchPipeline = {
+    status: textValue(pipelinePayload.status) || 'blocked',
+    readyCount: Number(pipelinePayload.ready_count || 0),
+    total: Number(pipelinePayload.total || 0),
+    firstGap: (() => {
+      const gap = asRecord(pipelinePayload.first_gap)
+      return textValue(gap.label) ? { label: textValue(gap.label), gap: textValue(gap.gap) } : null
+    })(),
+    steps: (Array.isArray(pipelinePayload.steps) ? pipelinePayload.steps : []).map((value) => {
+      const step = asRecord(value)
+      const evidence = asRecord(step.evidence)
+      const capture = asRecord(evidence.capture)
+      return {
+        order: Number(step.order || 0),
+        key: textValue(step.key),
+        label: textValue(step.label),
+        status: (textValue(step.status) || 'blocked') as ResearchPipelineStep['status'],
+        summary: textValue(step.summary),
+        gap: textValue(step.gap) || null,
+        link: textValue(step.link),
+        capture: capture.up_capture_ratio != null ? {
+          up: numberOrNull(capture.up_capture_ratio),
+          down: numberOrNull(capture.down_capture_ratio),
+        } : null,
+      }
+    }).filter((step) => step.key && step.order > 0),
   }
 
   const periodPerformanceSummaryPayload = asRecord(periodPerformancePayload.summary)
@@ -1451,7 +1485,7 @@ async function loadFundDetail(code: string) {
     navDate: fund.navDate || latestRawNavPoint?.date || latestNavPoint?.date || null,
   }
 
-  return { fund: resolvedFund, nav, evaluationWindows, evaluationHistory, assessmentSummary, detailHighlights, plainLanguageBrief, researchMemos, dataQuality, shareClasses, managerHistory, managerTenurePerformance, assetAllocation, drawdownRecovery, derivedSeries, periodPerformance, fofHoldings, bondAnomaly, bondDuration, bondHoldings, holderStructure, holdingSnapshot, holdingChanges, holdingStyle, holdingExperience, productProfile }
+  return { fund: resolvedFund, nav, evaluationWindows, evaluationHistory, assessmentSummary, detailHighlights, plainLanguageBrief, researchMemos, dataQuality, shareClasses, managerHistory, managerTenurePerformance, assetAllocation, drawdownRecovery, derivedSeries, periodPerformance, fofHoldings, bondAnomaly, bondDuration, bondHoldings, holderStructure, holdingSnapshot, holdingChanges, holdingStyle, holdingExperience, productProfile, researchPipeline }
 }
 
 export default async function FundDetailPage({ params }: { params: Promise<{ id: string }> }) {

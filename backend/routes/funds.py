@@ -1110,6 +1110,26 @@ async def get_fund_drawdown_recovery(wind_code: str):
         raise HTTPException(status_code=500, detail="基金回撤修复分析暂时不可用")
 
 
+@router.get("/{wind_code}/research-pipeline")
+async def get_fund_research_pipeline(wind_code: str):
+    """研究动线：身份→业绩→归因→持仓→同类→异常→结论的有序就绪度。
+
+    只读组装现有数据（含净值可算的上下行捕获率），不新算评分；缺失降级不冒充。
+    """
+    import anyio
+
+    from services.research_pipeline_service import FundResearchPipelineService
+
+    try:
+        result = await anyio.to_thread.run_sync(
+            lambda: FundResearchPipelineService().build(wind_code)
+        )
+        return _clean_nan(result)
+    except Exception as exc:
+        logger.error(f"Get fund research pipeline error for {wind_code}: {exc}")
+        raise HTTPException(status_code=500, detail="研究动线暂时不可用")
+
+
 @router.get("/{wind_code}/derived-series")
 async def get_fund_derived_series(
     wind_code: str,
