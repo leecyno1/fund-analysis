@@ -599,3 +599,14 @@ python3 ../.quest-recovery/export.py
 - **测试写库污染**：`tests/data_snapshot_repo_smoke.py` 向真实库写 source="unit-test"/error="boom" 的 fund_nav 快照且不清理 → 污染 `/api/data-health/summary`（stale_datasets 显示 fund_nav failed，误导运维）。DataSourceSnapshotRepo 无 delete 方法。修：给 smoke 加 finally 清理（需 repo 增删除能力或直连 DELETE 自建记录），并清理既有残留行（需授权写库）；相关 repo smoke 应改用隔离库/事务回滚。
 
 建议：把该子系统作为一个**专门迭代**统一修复（多为 DB/SQL 相关，需只读复核 + 部分需数据语义决策如 C2 单位、C5 换表、C8 是否默认开 peer 告警），并补该子系统的离线/集成回归（目前 alert/anomaly/signal 缺数值与信号级测试，是这批缺陷长期未被发现的根因——错误被 except 吞掉且 scan 报 success）。
+
+### 18.6 研究动线视图 + 上涨/下跌捕获率（2026-10-16，吸收外部方法论）
+
+参照一篇"照国金研报搭基金研究流水线"的方法论（身份识别→拆业绩→拆收益来源→持仓追踪→同类池→异常点→结论；80% 标准化+20% 判断），对照项目后落地两项增强（提交 `3ea3084`，已推两远端，后端 PID 67994 / 前端已重建重启）：
+
+- **B4 上涨/下跌捕获率（新指标，净值可算）**：`MetricFactory.calculate_capture_ratios(fund_returns, benchmark_returns)` 按基准上涨日(b>0)/下跌日(b<0)分桶，取各桶基金与基准几何日收益均值之比（裸 ratio，1.10=捕获 110% 上行；持平日剔除；收益<=-100% 观测剔除）。**缺失不冒充**：任一侧有效观测 < MIN_CAPTURE_OBSERVATIONS(10)、基准几何均值=0 或非有限 → None。接入 `calculate_relative_metrics`（输出 up/down_capture_ratio）并加入 `build_metric_records` 的 benchmark_code 白名单；**`build_metric_records` 新增 None 过滤**，捕获率缺失时不落假记录。新增 `tests/capture_ratio_offline.py` 5 项（先红后绿）。实盘验证（只读）：000512 接近指数跟踪(上0.998/下0.926)、000756 双向放大(上1.83/下1.63 高Beta)、000309 上行多捕下行少捕(上1.06/下0.82)。
+- **A1 研究动线视图（重组呈现现有能力）**：`GET /api/funds/{code}/research-pipeline` 把既有能力串成有序 7 步（身份→业绩→归因→持仓→同类→异常→结论），每步就绪度 ready/partial/blocked + 缺口 + 面板锚点。核心是纯函数 `research_pipeline_service.build_pipeline_steps(facts)`（不依赖 services，可离线测），取数层 `fund_research_pipeline_facts.gather_pipeline_facts` 每项独立 try/except 优雅降级、全只读；归因步遵守 ADR-0004（只解释不评分）。新增 `tests/research_pipeline_offline.py` 9 项。详情页加 `ResearchPipelinePanel`（挂在概览指标后，复用既有面板）。债基/货基因无股票持仓，归因+持仓正确显示 blocked（诚实非缺陷）。
+
+验证：后端离线 **270 全绿**（261+9 动线；含 metric_factory 主消费方 fund_evaluation_numeric 64 项）；只读库冒烟 000309 权益 7/7 全就绪、000198 货基 3/7 首缺口=身份识别；HTTP 端点通（200）；前端 `tsc --noEmit` 0 错；浏览器确认面板渲染含"已就绪 7/7 步"与"上行捕获 106% / 下行捕获 82%"。
+
+**该方法论尚未吸收、列为后续候选**：市场环境分段业绩（牛/熊/震荡分段跑赢率，步骤2）、归因→"主收益来源+可复制性"判定结论层（步骤3，守 ADR-0004）、宣称理念 vs 实际持仓行为一致性交叉验证（步骤4，较重/涉 LLM）、异常→带问题看纪要的主动联动（步骤7，依赖 §18.5 扫描子系统先修）。捕获率目前仅在 research-pipeline 端点实时计算，未入 metric_snapshots 滚动管道（入管道需下次自然重算，属可选增强）。
