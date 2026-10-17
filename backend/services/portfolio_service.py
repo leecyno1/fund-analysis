@@ -492,7 +492,7 @@ class PortfolioService:
             nav_value = nav_item.get("nav")
             if current is None:
                 if held:
-                    # 持仓存在但权重未知：不能冒充"当前未持有"而给出全额申购建议。
+                    # 持仓存在但权重未知：不能冒充"当前未持有"而按全额生成交易动作。
                     rows.append({
                         "wind_code": code,
                         "fund_name": nav_item.get("name"),

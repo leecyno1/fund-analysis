@@ -55,7 +55,7 @@ assertIncludes(navEvidenceService, 'derive_money_market_facts', 'NAV evidence de
 assertIncludes(navEvidenceService, 'attach_benchmark_nav', 'NAV evidence aligns real benchmark dates')
 assertIncludes(navEvidenceService, 'nav_shape_conflicts_with_declared_fund_type', 'NAV evidence blocks fund-type conflicts')
 assertIncludes(navEvidenceService, 'mapping_missing', 'NAV evidence exposes missing benchmark mapping')
-assertIncludes(metricFactory, 'item.get("accum_nav") or item.get("adj_nav")', 'metric factory prefers consistent accumulated NAV for return metrics')
+assertIncludes(metricFactory, 'for field in ("accum_nav", "adj_nav", "nav", "unit_nav")', 'metric factory selects one consistent NAV column without cross-basis fill')
 assertIncludes(tushareService, '"adj_nav": adjusted_nav', 'Tushare NAV sync keeps adjusted NAV evidence')
 assertIncludes(tushareService, '("adj_nav", "accum_nav", "unit_nav")', 'Tushare NAV sync chooses one consistent performance column by adj-first priority')
 assertIncludes(tushareService, 'def get_benchmark_nav', 'Tushare adapter exposes index benchmark NAV')

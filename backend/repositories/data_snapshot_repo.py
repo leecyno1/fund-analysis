@@ -124,6 +124,18 @@ class DataSourceSnapshotRepo:
             conn.commit()
         return _row_to_dict(row)
 
+    def delete_snapshot(self, snapshot_id: str) -> bool:
+        """按 id 删除快照；供测试清理自建记录，避免污染生产数据健康视图。"""
+        from sqlalchemy import text
+
+        with self.engine.connect() as conn:
+            result = conn.execute(
+                text("DELETE FROM data_source_snapshots WHERE id = CAST(:snapshot_id AS UUID)"),
+                {"snapshot_id": snapshot_id},
+            )
+            conn.commit()
+            return result.rowcount > 0
+
     def get_latest_by_dataset(self, dataset: str, source: Optional[str] = None) -> Optional[Dict[str, Any]]:
         from sqlalchemy import text
 

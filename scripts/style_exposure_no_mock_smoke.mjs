@@ -50,7 +50,7 @@ assertNotIncludes(styleSection, '"BETA": 0.8', 'real-mode Tushare style must not
 assertIncludes(scoringEngine, 'style_factors_status") == "unavailable"', 'scoring engine recognizes unavailable style factors')
 assertIncludes(scoringEngine, 'status": "insufficient_evidence"', 'scoring engine labels missing style evidence')
 assertIncludes(scoringEngine, 'factor_stability_score = 0.0', 'scoring engine gives no neutral credit to missing style evidence')
-assertIncludes(scoringEngine, 'ScoreDimension.STYLE: {"score": 0.0, "weighted_score": 0.0, "count": 0', 'metric snapshot scoring gives no style credit when missing')
+assertIncludes(scoringEngine, 'ScoreDimension.STYLE: {"score": None, "weighted_score": 0.0, "count": 0', 'metric snapshot scoring leaves style score empty (no neutral credit) when missing')
 assertIncludes(scoringEngine, 'count": len(numeric_exposures)', 'scoring engine counts only numeric style factors')
 
 assertIncludes(evidenceReport, 'Barra 风格因子不可用', 'fund report discloses missing Barra style factors')
