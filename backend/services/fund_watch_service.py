@@ -8,7 +8,7 @@
 夜扫逻辑由 /api/watches/scan 触发（可接入 scheduled_update.sh）。
 """
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 try:
@@ -19,13 +19,16 @@ except ModuleNotFoundError:
 
 VALID_OPERATORS = {">=", "<=", ">", "<", "=="}
 
-# 支持的指标字段 → 从哪个数据源取值
-METRIC_SOURCES = {
-    "total_asset": ("funds", "total_asset"),
-    "max_drawdown": ("metric_snapshots", "max_drawdown_1y"),
-    "annualized_return": ("metric_snapshots", "annualized_return_1y"),
-    "top_ten_weight": ("holdings_summary", "top_ten_weight"),
-    "institution_ratio": ("fund_holder_structures", "institution_ratio"),
+
+# 支持的指标字段必须与 _get_current_value 的分支一致，否则会造出"永远静默"的 watch。
+SUPPORTED_METRIC_FIELDS = {
+    "total_asset",
+    "max_drawdown",
+    "annualized_return",
+    "annualized_volatility",
+    "sharpe_ratio",
+    "institution_ratio",
+    "top_ten_weight",
 }
 
 
@@ -65,8 +68,11 @@ class FundWatchService:
         threshold = payload.get("threshold")
         if not wind_code or not metric_field or threshold is None:
             raise ValueError("fund_wind_code, metric_field and threshold are required")
+        if metric_field not in SUPPORTED_METRIC_FIELDS:
+            raise ValueError(f"metric_field must be one of {sorted(SUPPORTED_METRIC_FIELDS)}")
         if operator not in VALID_OPERATORS:
             raise ValueError(f"operator must be one of {sorted(VALID_OPERATORS)}")
+        threshold = self._normalize_threshold(metric_field, threshold)
 
         watch_id = str(uuid.uuid4())
         sql = text("""
@@ -114,11 +120,21 @@ class FundWatchService:
 
         watches = self.list_watches(status="active")
         triggered: List[Dict[str, Any]] = []
+        unevaluated: List[Dict[str, Any]] = []
+        evaluated = 0
 
         for watch in watches:
-            current_value = self._get_current_value(watch["fund_wind_code"], watch["metric_field"])
+            raw_value = self._get_current_value(watch["fund_wind_code"], watch["metric_field"])
+            current_value = self._comparable_value(watch["metric_field"], raw_value)
             if current_value is None:
+                unevaluated.append({
+                    "id": watch["id"],
+                    "fund_wind_code": watch["fund_wind_code"],
+                    "metric_field": watch["metric_field"],
+                    "reason": "unsupported_metric" if watch["metric_field"] not in SUPPORTED_METRIC_FIELDS else "metric_unavailable",
+                })
                 continue
+            evaluated += 1
             if self._check_threshold(current_value, watch["operator"], watch["threshold"]):
                 # 标记为 triggered
                 with self.engine.begin() as conn:
@@ -135,8 +151,11 @@ class FundWatchService:
                 triggered.append(watch)
 
         return {
-            "scanned_at": datetime.utcnow().isoformat() + "Z",
+            "scanned_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             "active_watches": len(watches),
+            "evaluated_count": evaluated,
+            "unevaluated_count": len(unevaluated),
+            "unevaluated": unevaluated,
             "triggered_count": len(triggered),
             "triggered": triggered,
         }
@@ -181,6 +200,27 @@ class FundWatchService:
         except Exception:
             pass
         return None
+
+    @staticmethod
+    def _normalize_threshold(metric_field: str, threshold: Any) -> float:
+        """total_asset 阈值统一为元。
+
+        funds.total_asset 以亿元存储，前端 formatThreshold 按 value/1e8 显示"亿"，
+        故规范比较单位是元。历史/手工输入若小于 1e6（如 200），视为亿元并换算。
+        """
+        value = float(threshold)
+        if metric_field == "total_asset" and 0 < value < 1_000_000:
+            return value * 1e8
+        return value
+
+    @staticmethod
+    def _comparable_value(metric_field: str, raw_value: Any) -> Optional[float]:
+        if raw_value is None:
+            return None
+        value = float(raw_value)
+        if metric_field == "total_asset":
+            return value * 1e8  # 亿元 → 元
+        return value
 
     @staticmethod
     def _check_threshold(value: float, operator: str, threshold: float) -> bool:

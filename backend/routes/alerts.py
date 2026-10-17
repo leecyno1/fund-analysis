@@ -110,8 +110,17 @@ def update_alert_event(event_id: str, payload: UpdateAlertEventRequest) -> Dict[
 
 @router.post("/scan")
 def scan_alerts(
-    max_members_per_status: int = Query(20, ge=1, le=200),
-    include_peer_metrics: bool = Query(False),
+    max_members_per_status: int = Query(
+        20, ge=1, le=200,
+        description="每个状态最多扫描的成员数；超出部分计入 coverage.skipped_members(reason=status_quota)",
+    ),
+    include_peer_metrics: bool = Query(
+        False,
+        description=(
+            "是否计算同类分位告警。默认关闭：同类分位冷态约 5-7 秒/只，"
+            "每日调度 300s 超时下开启可能超时；需要时显式传 true。"
+        ),
+    ),
 ) -> Dict[str, Any]:
     from services.alert_scan import AlertScanService
 

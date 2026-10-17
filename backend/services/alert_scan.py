@@ -39,70 +39,107 @@ class AlertScanService:
     def scan(self) -> Dict[str, Any]:
         created_events: List[Dict[str, Any]] = []
         pools = self.pool_repo.list_pools()
+        total_members = 0
+        scanned_members = 0
+        skipped: List[Dict[str, Any]] = []
+        member_errors = 0
 
         for pool in pools:
             for status in ["watch", "core", "candidate"]:
                 members = self.pool_repo.list_members(pool["id"], status=status)
+                total_members += len(members)
                 if self.max_members_per_status is not None:
-                    members = members[:max(0, self.max_members_per_status)]
+                    quota = max(0, self.max_members_per_status)
+                    for member in members[quota:]:
+                        skipped.append({
+                            "pool_id": pool["id"], "status": status,
+                            "fund_id": member.get("fund_id"),
+                            "reason": "status_quota",
+                        })
+                    members = members[:quota]
                 for member in members:
-                    metric_map = self._metric_map(self.metric_repo.get_latest_panel("fund", self._member_wind_code(member)))
-                    drawdown = metric_map.get("max_drawdown")
-                    if drawdown is not None and drawdown <= Decimal("-0.15") and not self._has_open(member["fund_id"], "drawdown"):
-                        created_events.append(self.alert_repo.create_event(
-                            rule_id=None,
-                            fund_id=member["fund_id"],
-                            pool_member_id=member["id"],
-                            event_type="drawdown",
-                            severity="high" if drawdown <= Decimal("-0.2") else "medium",
-                            title="回撤超过阈值",
-                            message=f"当前最大回撤 {drawdown}，已超过监控阈值",
-                            status="new",
-                            details={"current_drawdown": float(drawdown), "pool_id": pool["id"]},
-                        ))
-                    review_date = self._parse_date(member.get("next_review_date"))
-                    if review_date is not None and review_date < self.today and not self._has_open(member["fund_id"], "review_due"):
-                        overdue_days = (self.today - review_date).days
-                        created_events.append(self.alert_repo.create_event(
-                            rule_id=None,
-                            fund_id=member["fund_id"],
-                            pool_member_id=member["id"],
-                            event_type="review_due",
-                            severity="high" if overdue_days >= 30 and status == "core" else "medium",
-                            title="基金池成员复核到期",
-                            message=f"下次复核日 {review_date.isoformat()} 已过期 {overdue_days} 天",
-                            status="new",
-                            details={"pool_id": pool["id"], "member_status": status, "overdue_days": overdue_days},
-                        ))
-                    weak_peer_metrics = self._weak_peer_metrics(member["fund_id"]) if self.include_peer_metrics else []
-                    if weak_peer_metrics and not self._has_open(member["fund_id"], "peer_percentile"):
-                        created_events.append(self.alert_repo.create_event(
-                            rule_id=None,
-                            fund_id=member["fund_id"],
-                            pool_member_id=member["id"],
-                            event_type="peer_percentile",
-                            severity="high" if any(item["percentile"] <= 20 for item in weak_peer_metrics) else "medium",
-                            title="同类分位进入尾部区间",
-                            message="；".join([f"{item['label']} 分位 {item['percentile']}" for item in weak_peer_metrics]),
-                            status="new",
-                            details={"pool_id": pool["id"], "member_status": status, "weak_peer_metrics": weak_peer_metrics},
-                        ))
-                    manager_change_event = self._manager_change_event(member, pool, status)
-                    if manager_change_event is not None:
-                        created_events.append(manager_change_event)
-                    created_events.extend(self._manager_departure_events(member, pool, status))
+                    try:
+                        created_events.extend(self._process_member(member, pool, status))
+                        scanned_members += 1
+                    except Exception as exc:
+                        # 单个成员失败不得中断整轮扫描，也不得静默吞掉。
+                        member_errors += 1
+                        skipped.append({
+                            "pool_id": pool["id"], "status": status,
+                            "fund_id": member.get("fund_id"),
+                            "reason": f"{type(exc).__name__}: {exc}",
+                        })
 
         return {
-            "status": "completed",
+            "status": "completed" if member_errors == 0 else "partial",
             "created": len(created_events),
             "events": created_events,
+            "coverage": {
+                "total_members": total_members,
+                "scanned_members": scanned_members,
+                "skipped_members": len(skipped),
+                "member_errors": member_errors,
+                "max_members_per_status": self.max_members_per_status,
+                "peer_metrics_included": bool(self.include_peer_metrics),
+            },
+            "skipped": skipped,
         }
+
+    def _process_member(self, member: Dict[str, Any], pool: Dict[str, Any], status: str) -> List[Dict[str, Any]]:
+        events: List[Dict[str, Any]] = []
+        metric_map = self._metric_map(self.metric_repo.get_latest_panel("fund", self._member_wind_code(member)))
+        drawdown = metric_map.get("max_drawdown")
+        if drawdown is not None and drawdown <= Decimal("-0.15") and not self._has_open(member["fund_id"], "drawdown"):
+            events.append(self.alert_repo.create_event(
+                rule_id=None,
+                fund_id=member["fund_id"],
+                pool_member_id=member["id"],
+                event_type="drawdown",
+                severity="high" if drawdown <= Decimal("-0.2") else "medium",
+                title="回撤超过阈值",
+                message=f"当前最大回撤 {drawdown}，已超过监控阈值",
+                status="new",
+                details={"current_drawdown": float(drawdown), "pool_id": pool["id"]},
+            ))
+        review_date = self._parse_date(member.get("next_review_date"))
+        if review_date is not None and review_date < self.today and not self._has_open(member["fund_id"], "review_due"):
+            overdue_days = (self.today - review_date).days
+            events.append(self.alert_repo.create_event(
+                rule_id=None,
+                fund_id=member["fund_id"],
+                pool_member_id=member["id"],
+                event_type="review_due",
+                severity="high" if overdue_days >= 30 and status == "core" else "medium",
+                title="基金池成员复核到期",
+                message=f"下次复核日 {review_date.isoformat()} 已过期 {overdue_days} 天",
+                status="new",
+                details={"pool_id": pool["id"], "member_status": status, "overdue_days": overdue_days},
+            ))
+        weak_peer_metrics = self._weak_peer_metrics(member["fund_id"]) if self.include_peer_metrics else []
+        if weak_peer_metrics and not self._has_open(member["fund_id"], "peer_percentile"):
+            events.append(self.alert_repo.create_event(
+                rule_id=None,
+                fund_id=member["fund_id"],
+                pool_member_id=member["id"],
+                event_type="peer_percentile",
+                severity="high" if any(item["percentile"] <= 20 for item in weak_peer_metrics) else "medium",
+                title="同类分位进入尾部区间",
+                message="；".join([f"{item['label']} 分位 {item['percentile']}" for item in weak_peer_metrics]),
+                status="new",
+                details={"pool_id": pool["id"], "member_status": status, "weak_peer_metrics": weak_peer_metrics},
+            ))
+        manager_change_event = self._manager_change_event(member, pool, status)
+        if manager_change_event is not None:
+            events.append(manager_change_event)
+        events.extend(self._manager_departure_events(member, pool, status))
+        return events
 
     def _has_open(self, fund_id: str, event_type: str) -> bool:
         try:
             return bool(self.alert_repo.has_open_event(fund_id, event_type))
         except Exception:
-            return False
+            # fail-closed：去重校验失败时宁可跳过，也不重复制造告警。
+            return True
 
     def _manager_change_event(self, member: Dict[str, Any], pool: Dict[str, Any], status: str) -> Optional[Dict[str, Any]]:
         wind_code = self._member_wind_code(member)

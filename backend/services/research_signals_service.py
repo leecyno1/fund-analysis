@@ -30,16 +30,30 @@ class ResearchSignalsService:
         return self._engine
 
     def scan(self, days: int = 14) -> Dict[str, Any]:
-        """扫描三类研究信号。"""
-        focus = self._focus_funds()
-        signals: Dict[str, List[Dict[str, Any]]] = {
-            "manager_new_memo": self._scan_manager_new_memo(focus, days),
-            "attribution_degradation": self._scan_attribution_degradation(focus),
-            "memo_evidence_radar": self._scan_memo_evidence_radar(focus, days),
-        }
+        """扫描三类研究信号；单类失败标记 partial 并暴露 errors，而非静默归零。"""
+        errors: Dict[str, str] = {}
+        try:
+            focus = self._focus_funds()
+        except Exception as exc:
+            focus = []
+            errors["focus_funds"] = f"{type(exc).__name__}: {exc}"
+        scanners = [
+            ("manager_new_memo", lambda: self._scan_manager_new_memo(focus, days)),
+            ("attribution_degradation", lambda: self._scan_attribution_degradation(focus)),
+            ("memo_evidence_radar", lambda: self._scan_memo_evidence_radar(focus, days)),
+        ]
+        signals: Dict[str, List[Dict[str, Any]]] = {}
+        for key, scanner in scanners:
+            try:
+                signals[key] = scanner()
+            except Exception as exc:
+                signals[key] = []
+                errors[key] = f"{type(exc).__name__}: {exc}"
         total = sum(len(v) for v in signals.values())
         return {
             "scan_date": date.today().isoformat(),
+            "status": "ok" if not errors else "partial",
+            "errors": errors,
             "window_days": days,
             "focus_fund_count": len(focus),
             "total_signals": total,
@@ -57,12 +71,9 @@ class ResearchSignalsService:
                 SELECT fund_wind_code FROM research_queue_items WHERE status IN ('queued','researching')
             ) f
         """)
-        try:
-            with self.engine.connect() as conn:
-                rows = conn.execute(sql).fetchall()
-            return [{"wind_code": str(r[0])} for r in rows]
-        except Exception:
-            return []
+        with self.engine.connect() as conn:
+            rows = conn.execute(sql).fetchall()
+        return [{"wind_code": str(r[0])} for r in rows]
 
     def _scan_manager_new_memo(self, focus: List[Dict[str, Any]], days: int) -> List[Dict[str, Any]]:
         """关注经理的新纪要。"""
@@ -84,22 +95,19 @@ class ResearchSignalsService:
             ORDER BY r.created_at DESC
             LIMIT 50
         """)
-        try:
-            with self.engine.connect() as conn:
-                rows = conn.execute(sql, {"codes": codes, "days": days}).fetchall()
-            return [
-                {
-                    "type": "manager_new_memo",
-                    "report_id": str(r[0]),
-                    "title": str(r[1] or ""),
-                    "manager_name": str(r[2] or ""),
-                    "report_date": str(r[3]) if r[3] else None,
-                    "description": f"{r[2] or '经理'} 有新纪要入库",
-                }
-                for r in rows
-            ]
-        except Exception:
-            return []
+        with self.engine.connect() as conn:
+            rows = conn.execute(sql, {"codes": codes, "days": days}).fetchall()
+        return [
+            {
+                "type": "manager_new_memo",
+                "report_id": str(r[0]),
+                "title": str(r[1] or ""),
+                "manager_name": str(r[2] or ""),
+                "report_date": str(r[3]) if r[3] else None,
+                "description": f"{r[2] or '经理'} 有新纪要入库",
+            }
+            for r in rows
+        ]
 
     def _scan_attribution_degradation(self, focus: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """归因残差恶化：最新一期残差绝对值大于上一期。"""
@@ -116,26 +124,43 @@ class ResearchSignalsService:
                 FROM attribution_explanations
                 WHERE entity_id = ANY(:codes)
             )
-            SELECT cur.entity_id, cur.residual, prev.residual
+            SELECT cur.entity_id, cur.residual, prev.residual, cur.period_end, prev.period_end
             FROM ranked cur
             JOIN ranked prev ON cur.entity_id = prev.entity_id AND prev.rn = 2
-            WHERE cur.rn = 1 AND ABS(cur.residual) > ABS(prev.residual)
+            WHERE cur.rn = 1
+              AND cur.residual IS NOT NULL AND prev.residual IS NOT NULL
+              AND ABS(cur.residual) > ABS(prev.residual)
+              -- 只在相邻可比期间比较，避免 2026Q2 对 2019Q4 这类跨年错配。
+              AND prev.period_end >= cur.period_end - INTERVAL '200 days'
         """)
-        try:
-            with self.engine.connect() as conn:
-                rows = conn.execute(sql, {"codes": codes}).fetchall()
-            return [
-                {
-                    "type": "attribution_degradation",
-                    "wind_code": str(r[0]),
-                    "current_residual": float(r[1]) if r[1] else None,
-                    "previous_residual": float(r[2]) if r[2] else None,
-                    "description": f"归因残差扩大：{float(r[2]):.2%} → {float(r[1]):.2%}，论点需复查",
-                }
-                for r in rows
-            ]
-        except Exception:
-            return []
+        with self.engine.connect() as conn:
+            rows = conn.execute(sql, {"codes": codes}).fetchall()
+        items = []
+        for r in rows:
+            cur_residual = float(r[1]) if r[1] is not None else None
+            prev_residual = float(r[2]) if r[2] is not None else None
+            sign_flipped = (
+                cur_residual is not None and prev_residual is not None
+                and (cur_residual < 0) != (prev_residual < 0)
+            )
+            items.append({
+                "type": "attribution_degradation",
+                "wind_code": str(r[0]),
+                "current_residual": cur_residual,
+                "previous_residual": prev_residual,
+                "current_period": str(r[3]) if r[3] else None,
+                "previous_period": str(r[4]) if r[4] else None,
+                "residual_delta": (
+                    cur_residual - prev_residual
+                    if cur_residual is not None and prev_residual is not None else None
+                ),
+                "sign_flipped": sign_flipped,
+                "description": (
+                    f"归因残差扩大：{prev_residual:+.2%}（{r[4]}）→ {cur_residual:+.2%}（{r[3]}）"
+                    + ("，方向反转" if sign_flipped else "")
+                ),
+            })
+        return items
 
     def _scan_memo_evidence_radar(self, focus: List[Dict[str, Any]], days: int) -> List[Dict[str, Any]]:
         """纪要新证据雷达：新纪要标题/经理匹配到关注基金。"""
@@ -157,19 +182,16 @@ class ResearchSignalsService:
             ORDER BY r.created_at DESC
             LIMIT 50
         """)
-        try:
-            with self.engine.connect() as conn:
-                rows = conn.execute(sql, {"codes": codes, "days": days}).fetchall()
-            return [
-                {
-                    "type": "memo_evidence_radar",
-                    "report_id": str(r[0]),
-                    "title": str(r[1] or ""),
-                    "manager_name": str(r[2] or ""),
-                    "wind_code": str(r[3]),
-                    "description": f"{r[3]} 的经理 {r[2] or ''} 有新纪要，论点证据可更新",
-                }
-                for r in rows
-            ]
-        except Exception:
-            return []
+        with self.engine.connect() as conn:
+            rows = conn.execute(sql, {"codes": codes, "days": days}).fetchall()
+        return [
+            {
+                "type": "memo_evidence_radar",
+                "report_id": str(r[0]),
+                "title": str(r[1] or ""),
+                "manager_name": str(r[2] or ""),
+                "wind_code": str(r[3]),
+                "description": f"{r[3]} 的经理 {r[2] or ''} 有新纪要，论点证据可更新",
+            }
+            for r in rows
+        ]

@@ -1,5 +1,6 @@
 """基于真实净值和标准化同类组监控债基异常波动。"""
 
+import math
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -93,7 +94,11 @@ class FundBondAnomalyService:
             "daily_return": result["daily_return"],
             "weekly_return": result["weekly_return"],
             "market_regime": result["market_regime"],
-            "market_regime_label": "同类债市调整" if result["market_regime"] == "adjustment" else "同类债市正常",
+            "market_regime_label": {
+                "adjustment": "同类债市调整",
+                "normal": "同类债市正常",
+                "unknown": "同类债市状态未知",
+            }.get(result["market_regime"], "同类债市状态未知"),
             "anomaly_counts": result["anomaly_counts"],
             "events": result["events"],
             "chart": result["chart"],
@@ -143,14 +148,22 @@ class FundBondAnomalyService:
             peer_count = aligned.count(axis=1)
             peer_mean = aligned.mean(axis=1, skipna=True)
             peer_std = aligned.std(axis=1, ddof=0, skipna=True)
-            eligible_return = peer_mean.where(peer_count >= minimum_peer_count).dropna()
-            eligible_index = (1 + eligible_return).cumprod()
+            # 不 dropna：在完整日历上连乘/滚动，缺口日按 0 收益拉平，避免 26 个"有效观测"
+            # 实际跨越数月，以及跨缺口连乘。
+            eligible_return = peer_mean.where(peer_count >= minimum_peer_count)
+            eligible_index = (1 + eligible_return.fillna(0.0)).cumprod()
             eligible_mean = eligible_index.shift(1).rolling(self.ROLLING_DAYS, min_periods=self.ROLLING_DAYS).mean()
             eligible_std = eligible_index.shift(1).rolling(self.ROLLING_DAYS, min_periods=self.ROLLING_DAYS).std(ddof=0)
             eligible_lower = eligible_mean - self.MARKET_BAND_SIGMA * eligible_std
+            valid_obs = eligible_return.notna().rolling(
+                self.ROLLING_DAYS, min_periods=self.ROLLING_DAYS,
+            ).sum()
             peer_index = eligible_index.reindex(target.index)
             market_lower = eligible_lower.reindex(target.index)
-            market_adjustment = (eligible_index < eligible_lower).reindex(target.index, fill_value=False)
+            market_adjustment = (
+                (eligible_index < eligible_lower)
+                & (valid_obs >= self.ROLLING_DAYS * 0.75)
+            ).reindex(target.index, fill_value=False)
             peer_threshold = peer_mean - self.PEER_OUTLIER_SIGMA * peer_std
 
         peer_outlier = (
@@ -199,8 +212,16 @@ class FundBondAnomalyService:
         latest_is_anomaly = bool(frame.iloc[-1]["anomaly"])
         recent_is_anomaly = bool(frame["anomaly"].tail(5).any())
         current_signal = "abnormal" if latest_is_anomaly else "recent_abnormal" if recent_is_anomaly else "normal"
-        valid_market = frame["market_adjustment"].dropna()
-        market_regime = "adjustment" if len(valid_market) and bool(valid_market.iloc[-1]) else "normal"
+        # 同类模型未就绪时不得把"不可观测"伪装成"同类债市正常"。
+        peer_model_ready_latest = (
+            minimum_peer_count > 0
+            and int(frame.iloc[-1]["peer_count"] or 0) >= minimum_peer_count
+            and bool(frame["peer_index"].notna().any())
+        )
+        if peer_model_ready_latest:
+            market_regime = "adjustment" if bool(frame.iloc[-1]["market_adjustment"]) else "normal"
+        else:
+            market_regime = "unknown"
 
         first_nav = float(frame["nav"].dropna().iloc[0])
         valid_peer_index = frame["peer_index"].dropna()
@@ -228,6 +249,7 @@ class FundBondAnomalyService:
             "daily_return": self._round(frame.iloc[-1]["daily_return"], 8),
             "weekly_return": self._round(target.tail(6).iloc[-1] / target.tail(6).iloc[0] - 1, 8) if len(target) >= 6 else None,
             "market_regime": market_regime,
+            "peer_model_ready_latest": peer_model_ready_latest,
             "anomaly_counts": counts,
             "events": events,
             "chart": chart,
@@ -236,17 +258,34 @@ class FundBondAnomalyService:
 
     @staticmethod
     def _levels(rows: List[Dict[str, Any]]) -> Tuple[pd.Series, str]:
-        accum_count = sum(row.get("accum_nav") is not None for row in rows)
-        nav_basis = "accum_nav" if accum_count >= 2 else "unit_nav"
-        values = {}
+        """选择净值口径：仅当复权净值覆盖 >= 90% 时才整列切换，避免稀疏复权列丢行。"""
+        parsed = []
         for row in rows:
-            raw = row.get("accum_nav") if nav_basis == "accum_nav" else (row.get("nav") or row.get("unit_nav"))
             try:
-                value = float(raw)
                 item_date = pd.Timestamp(str(row.get("date") or row.get("trade_date"))[:10])
             except (TypeError, ValueError):
                 continue
-            if value > 0:
+            unit_raw = row.get("nav") if row.get("nav") is not None else row.get("unit_nav")
+            accum_raw = row.get("accum_nav")
+            try:
+                unit = float(unit_raw) if unit_raw is not None else None
+                accum = float(accum_raw) if accum_raw is not None else None
+            except (TypeError, ValueError):
+                continue
+            if (unit is not None and unit > 0) or (accum is not None and accum > 0):
+                parsed.append((item_date, unit, accum))
+        if not parsed:
+            return pd.Series(dtype=float), "unit_nav"
+        accum_count = sum(1 for _, _, accum in parsed if accum is not None and accum > 0)
+        nav_basis = (
+            "accum_nav"
+            if accum_count >= max(2, math.ceil(len(parsed) * 0.9))
+            else "unit_nav"
+        )
+        values = {}
+        for item_date, unit, accum in parsed:
+            value = accum if nav_basis == "accum_nav" else unit
+            if value is not None and value > 0:
                 values[item_date] = value
         return pd.Series(values, dtype=float).sort_index(), nav_basis
 
