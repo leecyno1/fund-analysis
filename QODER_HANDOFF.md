@@ -610,3 +610,25 @@ python3 ../.quest-recovery/export.py
 验证：后端离线 **270 全绿**（261+9 动线；含 metric_factory 主消费方 fund_evaluation_numeric 64 项）；只读库冒烟 000309 权益 7/7 全就绪、000198 货基 3/7 首缺口=身份识别；HTTP 端点通（200）；前端 `tsc --noEmit` 0 错；浏览器确认面板渲染含"已就绪 7/7 步"与"上行捕获 106% / 下行捕获 82%"。
 
 **该方法论尚未吸收、列为后续候选**：市场环境分段业绩（牛/熊/震荡分段跑赢率，步骤2）、归因→"主收益来源+可复制性"判定结论层（步骤3，守 ADR-0004）、宣称理念 vs 实际持仓行为一致性交叉验证（步骤4，较重/涉 LLM）、异常→带问题看纪要的主动联动（步骤7，依赖 §18.5 扫描子系统先修）。捕获率目前仅在 research-pipeline 端点实时计算，未入 metric_snapshots 滚动管道（入管道需下次自然重算，属可选增强）。
+
+### 18.7 扫描子系统 P0 缺陷簇修复 + 测试基线恢复（2026-10-16）
+
+承接 §18.5 的待修清单，本轮把扫描子系统（预警/异动/信号/观察/债券异动）作为专门迭代统一修复，并恢复测试与数据卫生基线。提交 `0e1d168`（P0）与 `963bbf2`（测试卫生），已推两远端，后端重启（PID 61755，check 模式）。
+
+**P0 已修（均有离线回归）**：
+- **C2 观察项单位**：`funds.total_asset` 是亿元而 watch 阈值约定为元（前端 `formatThreshold` 用 `value/1e8` 显示亿），原比较恒不成立。`_get_current_value` 现把亿元换算为元；`create_watch` 把 <1e6 的阈值视为亿元换算，存量 watch 语义不变。单测 8 项。
+- **C5/C6 异动扫描**：`manager_change` 从不存在的 `fund_change_history` 改读 `manager_fund_tenures`（实盘由恒 0 变真实离任）；单类失败不再 `return []` 伪装"0 异常"，`scan()` 输出 `status/errors`。实盘只读验证 4 类各 20 条。
+- **C9/I1 异动口径**：集中度仅比较 `weight_basis='fund_nav'`，要求两期披露行数 >=10 且完整度之比 >=0.5（实盘 013122 的 10 行 vs 100 行、018370 的 5 行 vs 78 行假突变已消失）；回撤严格对齐同一 `as_of_date` 并按回撤深度 tiebreak；规模异动加双端 1 亿下限与绝对变动下限，并按季度节奏取"至少 20 天前、400 天内"最近快照（原 20–50 天窗口内 aum 全同值导致结构性失效）。
+- **C7/I2/I3 预警**：`scan()` 输出 `coverage{total_members,scanned_members,skipped_members,member_errors,peer_metrics_included}`；去重查询失败改为 fail-closed（宁可跳过不重复告警）；逐成员 try/except 隔离并记 skipped，单成员异常不再中断整轮。
+- **C8 peer 分位告警**：实测冷态 5–7 秒/只，日调度 300s 超时下默认开启会超时；保留默认关闭，但在路由 Query 描述与 scan `coverage.peer_metrics_included` 中显式暴露（不再是静默死角）。
+- **I5/I6/I7 债券异动**：复权净值需 >=90% 覆盖才整列切换（原 >=2 条即切，稀疏复权列会丢行）；同类模型未就绪时 `market_regime=unknown`、标签"同类债市状态未知"（不再把不可观测伪装成"正常"）；同类指数在完整日历上连乘/滚动，缺口日按 0 收益拉平并要求窗口内 >=75% 有效观测，避免"26 个观测跨数月"与跨缺口连乘。
+- **research_signals**：归因残差修正 0.0 被当缺失、加 200 天期间邻近守卫、输出 `residual_delta/sign_flipped`；`scan()` 暴露 `status/errors`，focus 查询失败不再静默归零。
+- 新增离线回归 23 项（watch 8 / anomaly 4 / alert coverage 3 / bond 5 / signals 3），后端离线合计 **293 全绿**。
+
+**P1 测试/数据卫生**：
+- 修复 4 个陈旧前端冒烟锚点（data_sync_rolling_metrics 的旧 `or` 表达式、style_exposure 断言旧 `score:0.0` 而现行为正确的 `None`、trading_copy_guard 对边界注释的全文误报、acceptance 级联）。前端冒烟恢复 **124/124 全绿**。
+- 清理 `data_source_snapshots` 中 40 行 `source=unit-test` 历史快照（备份于仓库外 `.quest-recovery/data_source_snapshots_unit_test_20261016.json`），`/api/data-health/summary` 的 `stale_datasets` 已清空；`data_snapshot_repo_smoke` 增加 finally 自清理与 `delete_snapshot`。
+
+**数据覆盖现状（2026-10-16 实时）**：classified 9,679/9,679（100%），metric_ready **8,683（89.7%）**、recommendation_ready 8,641（89.3%）——较 §18.4 的 52% 已完成自动积累爬坡；style_ready 仍 **1,273（13.2%）**，是下一阶段主要数据缺口。
+
+**仍未处理（低优先级/需决策）**：① 3000 端口抢占隐患（newma-desk 侧改动）；② 风格覆盖 13% 与经理画像 1.8% 的数据攻坚（需授权写库/LLM）；③ fund_watch 一次性 triggered 状态与 fund_watchlist 无 fund 行成员的展示，属设计/小瑕疵；④ 规模异动因 aum 季度口径，最快按季度变化，已按季度节奏取基准并输出对比日期。
