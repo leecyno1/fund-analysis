@@ -632,3 +632,14 @@ python3 ../.quest-recovery/export.py
 **数据覆盖现状（2026-10-16 实时）**：classified 9,679/9,679（100%），metric_ready **8,683（89.7%）**、recommendation_ready 8,641（89.3%）——较 §18.4 的 52% 已完成自动积累爬坡；style_ready 仍 **1,273（13.2%）**，是下一阶段主要数据缺口。
 
 **仍未处理（低优先级/需决策）**：① 3000 端口抢占隐患（newma-desk 侧改动）；② 风格覆盖 13% 与经理画像 1.8% 的数据攻坚（需授权写库/LLM）；③ fund_watch 一次性 triggered 状态与 fund_watchlist 无 fund 行成员的展示，属设计/小瑕疵；④ 规模异动因 aum 季度口径，最快按季度变化，已按季度节奏取基准并输出对比日期。
+
+### 18.8 市场环境分段业绩（2026-10-16，吸收国金研报步骤 2）
+
+承接 §18.6 未吸收项，新增"不同市场环境分段测试"（提交 `61a93f9`，已推两远端，后端 PID 63497、前端已重建重启）：
+
+- **口径**：每个交易日用基准 trailing 60 个交易日收益分类（>=+5% 牛、<=-5% 熊、其余震荡），连续同类日合成片段；片段收益由基金/基准日收益连乘，统计各环境 `period_count / total_days / avg_fund_return / avg_benchmark_return / avg_excess / win_rate`；片段 <5 日剔除。
+- **缺失不冒充**：基准缺失 → `insufficient/benchmark_missing`；对齐历史 <250 日 → `insufficient/insufficient_history`。
+- **入口**：`GET /api/funds/{code}/regime-performance?years=3`（只读、anyio 线程池）；研究动线 performance 步 evidence 携带 `regime_performance`，摘要显示"牛市胜率 X% / 熊市胜率 Y%"，详情页"研究流水线"面板同步展示。
+- **验证**：纯函数离线 5 项 + 后端离线 **298 全绿**；tsc 0 错；前端冒烟 124/124；浏览器确认 000309 显示"上行捕获 106% / 下行捕获 82%"与"牛市胜率 83% / 熊市胜率 50%"。
+- **交叉自洽**：000756 高 Beta（捕获上1.83/下1.63）→ 牛市胜率 57%、熊市 17%；000512 低 Beta（上1.00/下0.93）→ 熊市胜率 100%；016191 债基无基准 → insufficient。分段结果与捕获率方向一致，互为佐证。
+- **边界**：市场环境由基准自身 trailing 收益划分，不是官方牛熊判定；只解释历史、不预测、不进入评分（ADR-0004）。
