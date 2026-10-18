@@ -488,6 +488,7 @@ export type ResearchPipelineStep = {
   gap: string | null
   link: string
   capture: { up: number | null; down: number | null } | null
+  regime: { bullWinRate: number | null; bearWinRate: number | null; rangeWinRate: number | null } | null
 }
 
 export type ResearchPipeline = {

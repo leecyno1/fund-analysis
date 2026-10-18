@@ -46,6 +46,7 @@ def build_pipeline_steps(facts: Dict[str, Any]) -> Dict[str, Any]:
     nav_obs = int(facts.get("nav_observations") or 0)
     bench_obs = int(facts.get("benchmark_observations") or 0)
     capture = facts.get("capture")
+    regime = facts.get("regime_performance")
     holdings_count = int(facts.get("holdings_count") or 0)
     holding_quarters = int(facts.get("holding_quarters") or 0)
     peer_size = int(facts.get("peer_group_size") or 0)
@@ -81,6 +82,14 @@ def build_pipeline_steps(facts: Dict[str, Any]) -> Dict[str, Any]:
             "up_capture_ratio": capture.get("up_capture_ratio"),
             "down_capture_ratio": capture.get("down_capture_ratio"),
         }
+    if isinstance(regime, dict) and regime.get("status") == "available":
+        perf_evidence["regime_performance"] = {
+            "bull_win_rate": (regime.get("regimes") or {}).get("bull", {}).get("win_rate"),
+            "bear_win_rate": (regime.get("regimes") or {}).get("bear", {}).get("win_rate"),
+            "range_win_rate": (regime.get("regimes") or {}).get("range", {}).get("win_rate"),
+            "bull_periods": (regime.get("regimes") or {}).get("bull", {}).get("period_count"),
+            "bear_periods": (regime.get("regimes") or {}).get("bear", {}).get("period_count"),
+        }
     if nav_obs >= _NAV_READY:
         perf_status = "ready"
         if bench_obs < _BENCHMARK_MIN:
@@ -91,8 +100,17 @@ def build_pipeline_steps(facts: Dict[str, Any]) -> Dict[str, Any]:
     else:
         perf_status = "blocked"
         perf_gap = "净值观测过少，无法拆解业绩"
+    perf_summary = f"净值观测 {nav_obs} 天"
+    if perf_evidence.get("regime_performance"):
+        regime_evidence = perf_evidence["regime_performance"]
+        def _pct(value):
+            return "—" if value is None else f"{round(float(value) * 100)}%"
+        perf_summary += (
+            f"；牛市胜率 {_pct(regime_evidence.get('bull_win_rate'))}"
+            f" / 熊市胜率 {_pct(regime_evidence.get('bear_win_rate'))}"
+        )
     steps.append(_step(2, "performance", perf_status,
-                       f"净值观测 {nav_obs} 天", perf_evidence, perf_gap, "#fund-performance"))
+                       perf_summary, perf_evidence, perf_gap, "#fund-performance"))
 
     # 3 收益来源（归因，仅解释）
     if holdings_count >= 5:

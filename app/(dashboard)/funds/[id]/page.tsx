@@ -621,6 +621,7 @@ async function loadFundDetail(code: string) {
       const step = asRecord(value)
       const evidence = asRecord(step.evidence)
       const capture = asRecord(evidence.capture)
+      const regime = asRecord(evidence.regime_performance)
       return {
         order: Number(step.order || 0),
         key: textValue(step.key),
@@ -632,6 +633,11 @@ async function loadFundDetail(code: string) {
         capture: capture.up_capture_ratio != null ? {
           up: numberOrNull(capture.up_capture_ratio),
           down: numberOrNull(capture.down_capture_ratio),
+        } : null,
+        regime: regime.bull_win_rate != null || regime.bear_win_rate != null ? {
+          bullWinRate: numberOrNull(regime.bull_win_rate),
+          bearWinRate: numberOrNull(regime.bear_win_rate),
+          rangeWinRate: numberOrNull(regime.range_win_rate),
         } : null,
       }
     }).filter((step) => step.key && step.order > 0),

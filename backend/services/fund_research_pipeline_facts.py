@@ -105,13 +105,23 @@ def gather_pipeline_facts(wind_code: str, repo_getter: Callable[[str], Any]) -> 
 
     try:
         end = date.today()
-        start = end - timedelta(days=400)
+        start = end - timedelta(days=1120)  # 3 年，供分段业绩；捕获率仍只取近 1 年
         rows = _repo("nav").get_nav_series(code, start.isoformat(), end.isoformat()) or []
-        facts["nav_observations"] = sum(1 for r in rows if _positive(r.get("nav") or r.get("unit_nav")))
-        facts["benchmark_observations"] = sum(1 for r in rows if _positive(r.get("benchmark_nav")))
-        capture = _capture_from_rows(rows)
+        recent_cutoff = (end - timedelta(days=400)).isoformat()
+        recent_rows = [
+            r for r in rows
+            if str(r.get("date") or r.get("trade_date") or "")[:10] >= recent_cutoff
+        ]
+        facts["nav_observations"] = sum(1 for r in recent_rows if _positive(r.get("nav") or r.get("unit_nav")))
+        facts["benchmark_observations"] = sum(1 for r in recent_rows if _positive(r.get("benchmark_nav")))
+        capture = _capture_from_rows(recent_rows)
         if capture and capture.get("up_capture_ratio") is not None:
             facts["capture"] = capture
+        from services.fund_regime_performance_service import summarize_regime_performance
+
+        regime = summarize_regime_performance(_nav_basis_series(rows), _benchmark_series(rows))
+        if regime.get("status") == "available":
+            facts["regime_performance"] = regime
     except Exception:
         facts.setdefault("nav_observations", 0)
         facts.setdefault("benchmark_observations", 0)

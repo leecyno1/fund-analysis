@@ -16,6 +16,10 @@ function formatCapture(value: number | null) {
   return value == null ? '—' : `${Math.round(value * 100)}%`
 }
 
+function formatRate(value: number | null) {
+  return value == null ? '—' : `${Math.round(value * 100)}%`
+}
+
 export default function ResearchPipelinePanel({ pipeline }: { pipeline: ResearchPipeline }) {
   if (!pipeline || !Array.isArray(pipeline.steps) || pipeline.steps.length === 0) return null
   return (
@@ -46,6 +50,11 @@ export default function ResearchPipelinePanel({ pipeline }: { pipeline: Research
                 {step.capture ? (
                   <span className="text-xs text-[#173f35]">
                     上行捕获 {formatCapture(step.capture.up)} / 下行捕获 {formatCapture(step.capture.down)}
+                  </span>
+                ) : null}
+                {step.regime ? (
+                  <span className="text-xs text-[#315e4d]">
+                    牛市胜率 {formatRate(step.regime.bullWinRate)} / 熊市胜率 {formatRate(step.regime.bearWinRate)}
                   </span>
                 ) : null}
               </div>

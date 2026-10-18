@@ -1130,6 +1130,28 @@ async def get_fund_research_pipeline(wind_code: str):
         raise HTTPException(status_code=500, detail="研究动线暂时不可用")
 
 
+@router.get("/{wind_code}/regime-performance")
+async def get_fund_regime_performance(wind_code: str, years: int = Query(3, ge=1, le=5)):
+    """市场环境分段业绩：按基准 trailing 60 日收益分牛/熊/震荡，输出分段超额与胜率。
+
+    只解释历史、不预测、不进入评分；基准缺失或历史不足返回 insufficient。
+    """
+    import anyio
+
+    from services.fund_regime_performance_service import FundRegimePerformanceService
+
+    try:
+        result = await anyio.to_thread.run_sync(
+            lambda: FundRegimePerformanceService(years=years).get(wind_code)
+        )
+        return _clean_nan(result)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except Exception as exc:
+        logger.error(f"Get fund regime performance error for {wind_code}: {exc}")
+        raise HTTPException(status_code=500, detail="市场环境分段业绩暂时不可用")
+
+
 @router.get("/{wind_code}/derived-series")
 async def get_fund_derived_series(
     wind_code: str,
