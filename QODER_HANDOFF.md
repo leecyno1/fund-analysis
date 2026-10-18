@@ -643,3 +643,17 @@ python3 ../.quest-recovery/export.py
 - **验证**：纯函数离线 5 项 + 后端离线 **298 全绿**；tsc 0 错；前端冒烟 124/124；浏览器确认 000309 显示"上行捕获 106% / 下行捕获 82%"与"牛市胜率 83% / 熊市胜率 50%"。
 - **交叉自洽**：000756 高 Beta（捕获上1.83/下1.63）→ 牛市胜率 57%、熊市 17%；000512 低 Beta（上1.00/下0.93）→ 熊市胜率 100%；016191 债基无基准 → insufficient。分段结果与捕获率方向一致，互为佐证。
 - **边界**：市场环境由基准自身 trailing 收益划分，不是官方牛熊判定；只解释历史、不预测、不进入评分（ADR-0004）。
+
+### 18.9 收益来源结论（Beta vs Alpha + 滚动可复制性，2026-10-16）
+
+原计划做"Brinson 归因→主收益来源结论层"，但只读实跑发现 **Brinson 在当前环境普遍不可用**：多只权益基金（000001/000309/000512/000756）均返回 `insufficient_evidence`，原因是"数据 adapter 未提供基金、基准、成分股和行业的同区间收益"或"缺少同报告期基金资产净值"；`attribution_explanations` 表为 **0 行**（历史从未成功落库）。这是**数据源缺口**而非代码缺陷，归因服务本身诚实降级。因此改为可直接获得的数据源（`fund_nav` + `benchmark_nav`）实现收益来源结论（提交 `2e2e38a`，已推两远端，后端 PID 77156、前端已重建重启）：
+
+- **口径**：基金/基准日收益 OLS 回归 → Beta、年化 Alpha（算术）、R²、Alpha t 值、信息比率；分类 `market_driven / alpha_positive / alpha_negative / mixed`（显著性门槛 **t>=1.96**，避免把 t=1.5 量级过度称为"显著"）。滚动 3 段等长窗口计算 Alpha 方向与显著性 → `high/medium/low/not_significant/insufficient`。
+- **缺失不冒充**：基准缺失 → `benchmark_missing`；样本 <251 → `insufficient_history`；基准零方差 → `benchmark_zero_variance`。
+- **入口**：`GET /api/funds/{code}/return-source?years=3`（只读、anyio 线程池）；研究动线 performance 步 evidence 携带 `return_source`，摘要追加"收益来源：…"；详情页面板显示"收益来源：市场 Beta 驱动（β 0.90）· Alpha 不显著"。
+- **不写库**：`PerformanceAttributionService.analyze` 增加 `save_history=False` 开关，结论层逐季调用时不会写 `attribution_explanations`。
+- **实盘验证**：000512（沪深300指增）β0.90/R²94%/Alpha+3.0%/t1.31 → 市场 Beta 驱动；000309 β1.14/R²63%/Alpha+14.8%/t1.57 → 混合（未过 5% 显著）；000756 β1.37/R²64%/Alpha+8.8%/t0.75 → 混合；016191 无基准 → insufficient。与分段胜率/捕获率方向自洽。
+- **验证**：纯函数离线 6 项，后端离线 **304 全绿**；tsc 0 错；前端冒烟 124/124；浏览器确认渲染。
+- **边界**：只解释历史、不预测、不进入评分；未控制风格因子，Alpha 可能包含未纳入的暴露。
+
+**数据缺口（新记录）**：若要让 Brinson 结论层可用，需补齐"基金/基准/成分股/行业同区间收益 + 报告期基金资产净值"；这属数据攻坚（需授权取数与写库），不是本轮代码范围。
