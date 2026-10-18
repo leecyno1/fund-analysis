@@ -489,6 +489,12 @@ export type ResearchPipelineStep = {
   link: string
   capture: { up: number | null; down: number | null } | null
   regime: { bullWinRate: number | null; bearWinRate: number | null; rangeWinRate: number | null } | null
+  returnSource: {
+    classificationLabel: string
+    beta: number | null
+    alphaAnnualized: number | null
+    replicabilityLabel: string
+  } | null
 }
 
 export type ResearchPipeline = {

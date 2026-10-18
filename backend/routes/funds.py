@@ -1152,6 +1152,28 @@ async def get_fund_regime_performance(wind_code: str, years: int = Query(3, ge=1
         raise HTTPException(status_code=500, detail="市场环境分段业绩暂时不可用")
 
 
+@router.get("/{wind_code}/return-source")
+async def get_fund_return_source(wind_code: str, years: int = Query(3, ge=1, le=5)):
+    """收益来源结论：基准回归 Beta/Alpha/R²/IR + 滚动年度 Alpha 可复制性。
+
+    只解释历史、不预测、不进入评分；基准缺失或样本不足返回 insufficient。
+    """
+    import anyio
+
+    from services.return_source_service import FundReturnSourceService
+
+    try:
+        result = await anyio.to_thread.run_sync(
+            lambda: FundReturnSourceService(years=years).get(wind_code)
+        )
+        return _clean_nan(result)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except Exception as exc:
+        logger.error(f"Get fund return source error for {wind_code}: {exc}")
+        raise HTTPException(status_code=500, detail="收益来源结论暂时不可用")
+
+
 @router.get("/{wind_code}/derived-series")
 async def get_fund_derived_series(
     wind_code: str,

@@ -57,6 +57,13 @@ export default function ResearchPipelinePanel({ pipeline }: { pipeline: Research
                     牛市胜率 {formatRate(step.regime.bullWinRate)} / 熊市胜率 {formatRate(step.regime.bearWinRate)}
                   </span>
                 ) : null}
+                {step.returnSource ? (
+                  <span className="text-xs text-[#4a5560]">
+                    收益来源：{step.returnSource.classificationLabel}
+                    {step.returnSource.beta != null ? `（β ${step.returnSource.beta.toFixed(2)}）` : ''}
+                    {step.returnSource.replicabilityLabel ? ` · ${step.returnSource.replicabilityLabel}` : ''}
+                  </span>
+                ) : null}
               </div>
               <p className="mt-0.5 text-xs leading-6 text-[#4a5560]">{step.summary}</p>
               {step.gap ? <p className="mt-0.5 text-xs leading-6 text-[#8d6a2f]">{step.gap}</p> : null}

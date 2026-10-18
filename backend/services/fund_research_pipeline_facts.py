@@ -122,6 +122,11 @@ def gather_pipeline_facts(wind_code: str, repo_getter: Callable[[str], Any]) -> 
         regime = summarize_regime_performance(_nav_basis_series(rows), _benchmark_series(rows))
         if regime.get("status") == "available":
             facts["regime_performance"] = regime
+        from services.return_source_service import build_return_source_conclusion
+
+        return_source = build_return_source_conclusion(_nav_basis_series(rows), _benchmark_series(rows))
+        if return_source.get("status") == "available":
+            facts["return_source"] = return_source
     except Exception:
         facts.setdefault("nav_observations", 0)
         facts.setdefault("benchmark_observations", 0)

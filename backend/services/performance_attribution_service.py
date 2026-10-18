@@ -32,6 +32,7 @@ class PerformanceAttributionService:
         quarter: Optional[str] = None,
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
+        save_history: bool = True,
     ) -> Dict[str, Any]:
         from repositories import get_factor_repo, get_fund_repo, get_holding_repo, get_holding_style_snapshot_repo
         from service_registry import get_data_service
@@ -242,9 +243,12 @@ class PerformanceAttributionService:
             },
         }
         try:
-            from repositories import get_attribution_repo
+            if save_history:
+                from repositories import get_attribution_repo
 
-            bundle["history_saved"] = get_attribution_repo().save_bundle(bundle)
+                bundle["history_saved"] = get_attribution_repo().save_bundle(bundle)
+            else:
+                bundle["history_saved"] = False
         except Exception as exc:
             logger.warning("Attribution history save failed for %s: %s", fund_code, exc)
             bundle["history_saved"] = False

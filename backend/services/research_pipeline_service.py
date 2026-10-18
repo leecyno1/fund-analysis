@@ -47,6 +47,7 @@ def build_pipeline_steps(facts: Dict[str, Any]) -> Dict[str, Any]:
     bench_obs = int(facts.get("benchmark_observations") or 0)
     capture = facts.get("capture")
     regime = facts.get("regime_performance")
+    return_source = facts.get("return_source")
     holdings_count = int(facts.get("holdings_count") or 0)
     holding_quarters = int(facts.get("holding_quarters") or 0)
     peer_size = int(facts.get("peer_group_size") or 0)
@@ -90,6 +91,17 @@ def build_pipeline_steps(facts: Dict[str, Any]) -> Dict[str, Any]:
             "bull_periods": (regime.get("regimes") or {}).get("bull", {}).get("period_count"),
             "bear_periods": (regime.get("regimes") or {}).get("bear", {}).get("period_count"),
         }
+    if isinstance(return_source, dict) and return_source.get("status") == "available":
+        perf_evidence["return_source"] = {
+            "classification": return_source.get("classification"),
+            "classification_label": return_source.get("classification_label"),
+            "beta": return_source.get("beta"),
+            "alpha_annualized": return_source.get("alpha_annualized"),
+            "alpha_t_stat": return_source.get("alpha_t_stat"),
+            "r_squared": return_source.get("r_squared"),
+            "alpha_replicability": return_source.get("alpha_replicability"),
+            "alpha_replicability_label": return_source.get("alpha_replicability_label"),
+        }
     if nav_obs >= _NAV_READY:
         perf_status = "ready"
         if bench_obs < _BENCHMARK_MIN:
@@ -109,6 +121,8 @@ def build_pipeline_steps(facts: Dict[str, Any]) -> Dict[str, Any]:
             f"；牛市胜率 {_pct(regime_evidence.get('bull_win_rate'))}"
             f" / 熊市胜率 {_pct(regime_evidence.get('bear_win_rate'))}"
         )
+    if perf_evidence.get("return_source"):
+        perf_summary += f"；收益来源：{perf_evidence['return_source'].get('classification_label') or '—'}"
     steps.append(_step(2, "performance", perf_status,
                        perf_summary, perf_evidence, perf_gap, "#fund-performance"))
 
