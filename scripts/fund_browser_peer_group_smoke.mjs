@@ -222,7 +222,8 @@ for (const fund of categories.data) {
   }
 }
 
-const multiPeriod = await fetchJson('/api/fund-browser?peerGroup=%E6%8C%87%E6%95%B0-%E6%B2%AA%E6%B7%B1300&return6mMin=0&return1yMin=0&return3yMin=0&sortBy=multi_period&limit=10')
+// 阈值用 -100%（仍为 4 条规则、验证多周期路径），避免行情转负后夹具只剩 0-1 只基金。
+const multiPeriod = await fetchJson('/api/fund-browser?peerGroup=%E6%8C%87%E6%95%B0-%E6%B2%AA%E6%B7%B1300&return6mMin=-1&return1yMin=-1&return3yMin=-1&sortBy=multi_period&limit=10')
 if (!Array.isArray(multiPeriod.data) || multiPeriod.data.length < 3) {
   throw new Error(`multi-period fund browser returned too few complete peers: ${JSON.stringify(multiPeriod)}`)
 }
