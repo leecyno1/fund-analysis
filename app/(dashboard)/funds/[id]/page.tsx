@@ -623,6 +623,7 @@ async function loadFundDetail(code: string) {
       const capture = asRecord(evidence.capture)
       const regime = asRecord(evidence.regime_performance)
       const returnSource = asRecord(evidence.return_source)
+      const researchQuestions = asRecord(evidence.research_questions)
       return {
         order: Number(step.order || 0),
         key: textValue(step.key),
@@ -645,6 +646,11 @@ async function loadFundDetail(code: string) {
           beta: numberOrNull(returnSource.beta),
           alphaAnnualized: numberOrNull(returnSource.alpha_annualized),
           replicabilityLabel: textValue(returnSource.alpha_replicability_label),
+        } : null,
+        researchQuestions: numberOrNull(researchQuestions.count) != null ? {
+          count: Number(researchQuestions.count || 0),
+          evidenceCount: Number(researchQuestions.evidence_count || 0),
+          topQuestion: textValue(researchQuestions.top_question) || null,
         } : null,
       }
     }).filter((step) => step.key && step.order > 0),

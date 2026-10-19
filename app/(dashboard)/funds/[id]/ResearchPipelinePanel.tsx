@@ -64,6 +64,12 @@ export default function ResearchPipelinePanel({ pipeline }: { pipeline: Research
                     {step.returnSource.replicabilityLabel ? ` · ${step.returnSource.replicabilityLabel}` : ''}
                   </span>
                 ) : null}
+                {step.researchQuestions && step.researchQuestions.count > 0 ? (
+                  <span className="text-xs text-[#8d6a2f]">
+                    待查问题 {step.researchQuestions.count} 个
+                    {step.researchQuestions.evidenceCount > 0 ? `（关联纪要 ${step.researchQuestions.evidenceCount} 条）` : ''}
+                  </span>
+                ) : null}
               </div>
               <p className="mt-0.5 text-xs leading-6 text-[#4a5560]">{step.summary}</p>
               {step.gap ? <p className="mt-0.5 text-xs leading-6 text-[#8d6a2f]">{step.gap}</p> : null}

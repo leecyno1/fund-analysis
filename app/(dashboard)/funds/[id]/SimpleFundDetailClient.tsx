@@ -495,6 +495,7 @@ export type ResearchPipelineStep = {
     alphaAnnualized: number | null
     replicabilityLabel: string
   } | null
+  researchQuestions: { count: number; evidenceCount: number; topQuestion: string | null } | null
 }
 
 export type ResearchPipeline = {

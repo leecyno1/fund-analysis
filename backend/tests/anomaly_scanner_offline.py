@@ -23,7 +23,7 @@ class AnomalyScannerTest(unittest.TestCase):
     def test_scan_reports_ok_and_counts(self):
         svc = self._service()
         for name in ("_scan_scale_anomaly", "_scan_drawdown_anomaly", "_scan_manager_changes", "_scan_concentration_change"):
-            setattr(svc, name, lambda limit: [{"wind_code": "000001.OF", "description": "x"}])
+            setattr(svc, name, lambda limit, wind_code=None: [{"wind_code": "000001.OF", "description": "x"}])
         out = svc.scan(limit=5)
         self.assertEqual(out["status"], "ok")
         self.assertEqual(out["errors"], {})
@@ -32,11 +32,11 @@ class AnomalyScannerTest(unittest.TestCase):
 
     def test_scan_partial_when_one_scanner_fails(self):
         svc = self._service()
-        svc._scan_scale_anomaly = lambda limit: []
-        svc._scan_drawdown_anomaly = lambda limit: []
-        svc._scan_manager_changes = lambda limit: [{"wind_code": "000001.OF", "description": "x"}]
+        svc._scan_scale_anomaly = lambda limit, wind_code=None: []
+        svc._scan_drawdown_anomaly = lambda limit, wind_code=None: []
+        svc._scan_manager_changes = lambda limit, wind_code=None: [{"wind_code": "000001.OF", "description": "x"}]
 
-        def boom(limit):
+        def boom(limit, wind_code=None):
             raise RuntimeError("table missing")
 
         svc._scan_concentration_change = boom
@@ -49,13 +49,13 @@ class AnomalyScannerTest(unittest.TestCase):
 
     def test_passive_filtered_before_truncation(self):
         svc = self._service()
-        svc._scan_scale_anomaly = lambda limit: [
+        svc._scan_scale_anomaly = lambda limit, wind_code=None: [
             {"wind_code": "510300.SH", "description": "passive"},
             {"wind_code": "000001.OF", "description": "active"},
         ]
-        svc._scan_drawdown_anomaly = lambda limit: []
-        svc._scan_manager_changes = lambda limit: []
-        svc._scan_concentration_change = lambda limit: []
+        svc._scan_drawdown_anomaly = lambda limit, wind_code=None: []
+        svc._scan_manager_changes = lambda limit, wind_code=None: []
+        svc._scan_concentration_change = lambda limit, wind_code=None: []
         out = svc.scan(limit=1)
         self.assertEqual(len(out["anomalies"]["scale_anomaly"]), 1)
         self.assertEqual(out["anomalies"]["scale_anomaly"][0]["wind_code"], "000001.OF")

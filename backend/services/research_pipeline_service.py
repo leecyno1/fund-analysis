@@ -162,16 +162,24 @@ def build_pipeline_steps(facts: Dict[str, Any]) -> Dict[str, Any]:
                            {"peer_group_size": peer_size}, "同类样本不足，比较无意义", "#fund-peer"))
 
     # 6 异常点
+    questions = facts.get("research_questions")
+    anomaly_evidence: Dict[str, Any] = {"open": anomaly_open}
+    anomaly_summary = f"{anomaly_open if anomaly_open is not None else 0} 项未决异常"
+    if isinstance(questions, dict):
+        anomaly_evidence["research_questions"] = questions
+        if questions.get("count"):
+            anomaly_summary += f"；{questions['count']} 个待查问题"
+            if questions.get("evidence_count"):
+                anomaly_summary += f"（关联纪要 {questions['evidence_count']} 条）"
     if anomaly_status == "ok":
-        steps.append(_step(6, "anomalies", "ready",
-                           f"{anomaly_open if anomaly_open is not None else 0} 项未决异常",
-                           {"open": anomaly_open}, None, "#fund-anomalies"))
+        steps.append(_step(6, "anomalies", "ready", anomaly_summary,
+                           anomaly_evidence, None, "#fund-anomalies"))
     elif anomaly_status == "partial":
         steps.append(_step(6, "anomalies", "partial", "异常扫描部分可用",
-                           {"open": anomaly_open}, "扫描子系统部分失效，结果需复核", "#fund-anomalies"))
+                           anomaly_evidence, "扫描子系统部分失效，结果需复核", "#fund-anomalies"))
     else:
         steps.append(_step(6, "anomalies", "blocked", "异常扫描不可用",
-                           {}, "扫描子系统不可用（见 §18.5 已知缺陷）", "#fund-anomalies"))
+                           anomaly_evidence, "扫描子系统不可用（见 §18.5 已知缺陷）", "#fund-anomalies"))
 
     # 7 结论
     if has_score or has_report:

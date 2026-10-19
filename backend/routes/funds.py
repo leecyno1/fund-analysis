@@ -1174,6 +1174,28 @@ async def get_fund_return_source(wind_code: str, years: int = Query(3, ge=1, le=
         raise HTTPException(status_code=500, detail="收益来源结论暂时不可用")
 
 
+@router.get("/{wind_code}/research-questions")
+async def get_fund_research_questions(wind_code: str):
+    """研究问题清单：把该基金已触发的异常转成待查问题，并挂接相关纪要/报告。
+
+    只提示核查方向，不自动下结论；无相关纪要时如实标注证据缺口。
+    """
+    import anyio
+
+    from services.fund_research_questions_service import FundResearchQuestionsService
+
+    try:
+        result = await anyio.to_thread.run_sync(
+            lambda: FundResearchQuestionsService().get(wind_code)
+        )
+        return _clean_nan(result)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except Exception as exc:
+        logger.error(f"Get fund research questions error for {wind_code}: {exc}")
+        raise HTTPException(status_code=500, detail="研究问题清单暂时不可用")
+
+
 @router.get("/{wind_code}/derived-series")
 async def get_fund_derived_series(
     wind_code: str,

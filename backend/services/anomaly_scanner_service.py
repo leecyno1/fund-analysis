@@ -12,7 +12,7 @@
 - 扫描结果不自动触发任何操作；单类失败不再伪装成"0 异常"，scan() 输出 status/errors
 """
 from datetime import date
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 try:
     from backend.database import get_engine
@@ -45,11 +45,13 @@ class AnomalyScannerService:
             self._engine = get_engine()
         return self._engine
 
-    def scan(self, limit: int = 50) -> Dict[str, Any]:
-        """执行全量异常扫描，返回按类型分组的异常列表。
+    def scan(self, limit: int = 50, wind_code: Optional[str] = None) -> Dict[str, Any]:
+        """执行异常扫描，返回按类型分组的异常列表。
 
+        wind_code 为空时扫全库并过滤被动基金；指定时只扫该基金（用于研究问题清单）。
         单类失败会被记录到 errors 并标记 status=partial，而不是静默返回 0 条。
         """
+        filtered_code = str(wind_code or "").strip().upper() or None
         scanners = [
             ("scale_anomaly", self._scan_scale_anomaly),
             ("drawdown_anomaly", self._scan_drawdown_anomaly),
@@ -61,11 +63,14 @@ class AnomalyScannerService:
         for key, scanner in scanners:
             try:
                 # 多取再过滤，避免被动基金占满 LIMIT 额度而漏掉主动基金异常。
-                items = scanner(limit * 3)
-                results[key] = [
-                    item for item in items
-                    if not _is_passive_code(str(item.get("wind_code") or ""))
-                ][:limit]
+                items = scanner(limit * 3, wind_code=filtered_code)
+                if filtered_code:
+                    results[key] = items[:limit]
+                else:
+                    results[key] = [
+                        item for item in items
+                        if not _is_passive_code(str(item.get("wind_code") or ""))
+                    ][:limit]
             except Exception as exc:
                 results[key] = []
                 errors[key] = f"{type(exc).__name__}: {exc}"
@@ -79,32 +84,50 @@ class AnomalyScannerService:
             "anomalies": results,
         }
 
-    def _scan_scale_anomaly(self, limit: int) -> List[Dict[str, Any]]:
+    def scan_fund(self, wind_code: str, limit: int = 50) -> Dict[str, Any]:
+        """只扫单只基金，返回扁平异常列表（供研究问题清单使用）。"""
+        code = str(wind_code or "").strip().upper()
+        if not code:
+            return {"status": "ok", "errors": {}, "wind_code": "", "anomalies": [], "by_type": {}}
+        result = self.scan(limit=limit, wind_code=code)
+        anomalies = [item for items in result["anomalies"].values() for item in items]
+        return {
+            "status": result["status"],
+            "errors": result["errors"],
+            "wind_code": code,
+            "anomalies": anomalies,
+            "by_type": result["by_type"],
+        }
+
+    def _scan_scale_anomaly(self, limit: int, wind_code: Optional[str] = None) -> List[Dict[str, Any]]:
         """规模异动：最新 AUM 与上一可比快照差异 > 30%（AUM 单位为亿元）。
 
         AUM 来自季度净资产，逐日快照常为同一季度值；因此取"至少 20 天前、400 天内"
         的最近一次快照作为对比基准，并按季度节奏工作，同时输出实际对比日期。
         """
         from sqlalchemy import text
-        sql = text("""
+        code_clause = "" if wind_code is None else " AND target_id = :wind_code"
+        code_clause_m = "" if wind_code is None else " AND m.target_id = :wind_code"
+        sql = text(f"""
             WITH ranked AS (
                 SELECT target_id AS wind_code, metric_value, as_of_date,
                        ROW_NUMBER() OVER (PARTITION BY target_id ORDER BY as_of_date DESC) AS rn
                 FROM metric_snapshots
-                WHERE target_type = 'fund' AND metric_name = 'aum' AND metric_window = 'latest'
+                WHERE target_type = 'fund' AND metric_name = 'aum' AND metric_window = 'latest'{code_clause}
             ),
-            latest AS (
+            latest AS MATERIALIZED (
                 SELECT wind_code, metric_value AS aum_now, as_of_date AS now_date
                 FROM ranked WHERE rn = 1
             ),
-            prev AS (
+            prev AS MATERIALIZED (
                 SELECT wind_code, aum_prev, prev_date FROM (
-                    SELECT target_id AS wind_code, metric_value AS aum_prev, as_of_date AS prev_date,
-                           ROW_NUMBER() OVER (PARTITION BY target_id ORDER BY as_of_date DESC) AS rn
-                    FROM metric_snapshots
-                    WHERE target_type = 'fund' AND metric_name = 'aum' AND metric_window = 'latest'
-                      AND as_of_date <= CURRENT_DATE - INTERVAL '20 days'
-                      AND as_of_date >= CURRENT_DATE - INTERVAL '400 days'
+                    SELECT m.target_id AS wind_code, m.metric_value AS aum_prev, m.as_of_date AS prev_date,
+                           ROW_NUMBER() OVER (PARTITION BY m.target_id ORDER BY m.as_of_date DESC) AS rn
+                    FROM metric_snapshots m
+                    JOIN latest l ON l.wind_code = m.target_id AND m.metric_value <> l.aum_now
+                    WHERE m.target_type = 'fund' AND m.metric_name = 'aum' AND m.metric_window = 'latest'
+                      AND m.as_of_date <= CURRENT_DATE - INTERVAL '20 days'
+                      AND m.as_of_date >= CURRENT_DATE - INTERVAL '400 days'{code_clause_m}
                 ) t WHERE rn = 1
             )
             SELECT l.wind_code, l.aum_now, p.aum_prev, l.now_date, p.prev_date,
@@ -116,8 +139,11 @@ class AnomalyScannerService:
             ORDER BY ABS((l.aum_now - p.aum_prev) / p.aum_prev) DESC, l.wind_code
             LIMIT :limit
         """)
+        params = {"limit": limit, "min_aum_yi": _MIN_SCALE_AUM_YI}
+        if wind_code is not None:
+            params["wind_code"] = wind_code
         with self.engine.connect() as conn:
-            rows = conn.execute(sql, {"limit": limit, "min_aum_yi": _MIN_SCALE_AUM_YI}).fetchall()
+            rows = conn.execute(sql, params).fetchall()
         return [
             {"type": "scale_anomaly", "wind_code": str(r[0]),
              "aum_now": float(r[1]) if r[1] else None,
@@ -132,16 +158,17 @@ class AnomalyScannerService:
             for r in rows
         ]
 
-    def _scan_drawdown_anomaly(self, limit: int) -> List[Dict[str, Any]]:
+    def _scan_drawdown_anomaly(self, limit: int, wind_code: Optional[str] = None) -> List[Dict[str, Any]]:
         """回撤异常：近 3 月回撤 >= 近 3 年回撤的 80%（对齐同一 as_of_date）。"""
         from sqlalchemy import text
-        sql = text("""
+        code_clause = "" if wind_code is None else " AND target_id = :wind_code"
+        sql = text(f"""
             WITH dd_3m AS (
                 SELECT target_id AS wind_code, as_of_date, metric_value AS dd_3m FROM (
                     SELECT target_id, as_of_date, metric_value,
                            ROW_NUMBER() OVER (PARTITION BY target_id ORDER BY as_of_date DESC) AS rn
                     FROM metric_snapshots
-                    WHERE target_type='fund' AND metric_name='max_drawdown' AND metric_window='3m' AND metric_value < 0
+                    WHERE target_type='fund' AND metric_name='max_drawdown' AND metric_window='3m' AND metric_value < 0{code_clause}
                 ) t WHERE rn = 1
             ),
             dd_3y AS (
@@ -149,7 +176,7 @@ class AnomalyScannerService:
                     SELECT target_id, as_of_date, metric_value,
                            ROW_NUMBER() OVER (PARTITION BY target_id ORDER BY as_of_date DESC) AS rn
                     FROM metric_snapshots
-                    WHERE target_type='fund' AND metric_name='max_drawdown' AND metric_window='3y' AND metric_value < 0
+                    WHERE target_type='fund' AND metric_name='max_drawdown' AND metric_window='3y' AND metric_value < 0{code_clause}
                 ) t WHERE rn = 1
             )
             SELECT d3.wind_code, d3.dd_3m, d3y.dd_3y,
@@ -161,8 +188,11 @@ class AnomalyScannerService:
             ORDER BY (d3.dd_3m / d3y.dd_3y) DESC, ABS(d3.dd_3m) DESC, d3.wind_code
             LIMIT :limit
         """)
+        params = {"limit": limit}
+        if wind_code is not None:
+            params["wind_code"] = wind_code
         with self.engine.connect() as conn:
-            rows = conn.execute(sql, {"limit": limit}).fetchall()
+            rows = conn.execute(sql, params).fetchall()
         return [
             {"type": "drawdown_anomaly", "wind_code": str(r[0]),
              "dd_3m": float(r[1]) if r[1] else None,
@@ -172,19 +202,20 @@ class AnomalyScannerService:
             for r in rows
         ]
 
-    def _scan_manager_changes(self, limit: int) -> List[Dict[str, Any]]:
+    def _scan_manager_changes(self, limit: int, wind_code: Optional[str] = None) -> List[Dict[str, Any]]:
         """经理变更：近 30 天的离任/上任（来源 manager_fund_tenures）。"""
         from sqlalchemy import text
-        sql = text("""
+        code_clause = "" if wind_code is None else " AND fund_code = :wind_code"
+        sql = text(f"""
             WITH changes AS (
                 SELECT fund_code AS wind_code, 'manager_removed' AS change_type,
                        manager_id, end_date AS changed_at
                 FROM manager_fund_tenures
-                WHERE end_date BETWEEN CURRENT_DATE - INTERVAL '30 days' AND CURRENT_DATE
+                WHERE end_date BETWEEN CURRENT_DATE - INTERVAL '30 days' AND CURRENT_DATE{code_clause}
                 UNION ALL
                 SELECT fund_code, 'manager_added', manager_id, start_date
                 FROM manager_fund_tenures
-                WHERE start_date >= CURRENT_DATE - INTERVAL '30 days' AND start_date <= CURRENT_DATE
+                WHERE start_date >= CURRENT_DATE - INTERVAL '30 days' AND start_date <= CURRENT_DATE{code_clause}
             )
             SELECT wind_code, change_type, manager_id, changed_at
             FROM changes
@@ -192,8 +223,11 @@ class AnomalyScannerService:
             ORDER BY changed_at DESC, wind_code, manager_id
             LIMIT :limit
         """)
+        params = {"limit": limit}
+        if wind_code is not None:
+            params["wind_code"] = wind_code
         with self.engine.connect() as conn:
-            rows = conn.execute(sql, {"limit": limit}).fetchall()
+            rows = conn.execute(sql, params).fetchall()
         items = []
         for r in rows:
             name = str(r[2] or "").split("|")[0]
@@ -208,20 +242,21 @@ class AnomalyScannerService:
             })
         return items
 
-    def _scan_concentration_change(self, limit: int) -> List[Dict[str, Any]]:
+    def _scan_concentration_change(self, limit: int, wind_code: Optional[str] = None) -> List[Dict[str, Any]]:
         """集中度突变：前十大占比季度变动 > 10pct。
 
         仅比较 weight_basis='fund_nav'；两期披露行数均 >= 10 且完整度之比 >= 0.5，
         避免"仅披露前十大 vs 全量披露"造成的假突变。
         """
         from sqlalchemy import text
-        sql = text("""
+        code_clause = "" if wind_code is None else " AND wind_code = :wind_code"
+        sql = text(f"""
             WITH ranked AS (
                 SELECT wind_code, quarter, weight,
                        ROW_NUMBER() OVER (PARTITION BY wind_code, quarter ORDER BY weight DESC) AS rn,
                        COUNT(*) OVER (PARTITION BY wind_code, quarter) AS total_rows
                 FROM holdings
-                WHERE weight_basis = 'fund_nav' AND weight IS NOT NULL AND weight > 0
+                WHERE weight_basis = 'fund_nav' AND weight IS NOT NULL AND weight > 0{code_clause}
             ),
             quarterly_top10 AS (
                 SELECT wind_code, quarter, SUM(weight) AS top10_weight, MAX(total_rows) AS total_rows
@@ -244,12 +279,15 @@ class AnomalyScannerService:
             ORDER BY ABS(l.top10_weight - p.top10_weight) DESC, l.wind_code
             LIMIT :limit
         """)
+        params = {
+            "limit": limit,
+            "min_rows": _MIN_HOLDING_ROWS,
+            "min_ratio": _MIN_DISCLOSURE_RATIO,
+        }
+        if wind_code is not None:
+            params["wind_code"] = wind_code
         with self.engine.connect() as conn:
-            rows = conn.execute(sql, {
-                "limit": limit,
-                "min_rows": _MIN_HOLDING_ROWS,
-                "min_ratio": _MIN_DISCLOSURE_RATIO,
-            }).fetchall()
+            rows = conn.execute(sql, params).fetchall()
         return [
             {"type": "concentration_change", "wind_code": str(r[0]),
              "latest_weight": float(r[1]) if r[1] else None,

@@ -186,4 +186,19 @@ def gather_pipeline_facts(wind_code: str, repo_getter: Callable[[str], Any]) -> 
         facts.setdefault("anomaly_open", None)
         facts["anomaly_status"] = "unknown"
 
+    # 异常→研究问题：把已触发的异常转成待查问题并挂接纪要/报告（只读）。
+    try:
+        from services.fund_research_questions_service import FundResearchQuestionsService
+
+        questions = FundResearchQuestionsService().get(code)
+        question_items = questions.get("questions") or []
+        facts["research_questions"] = {
+            "status": questions.get("status"),
+            "count": int(questions.get("question_count") or 0),
+            "evidence_count": sum(len(item.get("evidence") or []) for item in question_items),
+            "top_question": question_items[0].get("question") if question_items else None,
+        }
+    except Exception:
+        facts["research_questions"] = None
+
     return facts
