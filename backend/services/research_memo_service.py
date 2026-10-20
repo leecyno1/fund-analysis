@@ -144,7 +144,7 @@ class ResearchMemoService:
             evidence_table=evidence_table,
         )
 
-        return {
+        return self._json_safe({
             "memo_type": "fund_research",
             "target_type": "fund",
             "target_id": wind_code,
@@ -165,7 +165,7 @@ class ResearchMemoService:
                 "scoring_method": scoring.get("calculation_method"),
                 "generated_at": datetime.utcnow().isoformat(),
             },
-        }
+        })
 
     def _safe_quality(self, wind_code: str) -> Dict[str, Any]:
         try:

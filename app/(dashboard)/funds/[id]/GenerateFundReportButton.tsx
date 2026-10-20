@@ -22,11 +22,15 @@ export default function GenerateFundReportButton({ windCode }: { windCode: strin
       const payload = await response.json()
       if (!response.ok) throw new Error(payload.detail || '生成失败')
       const reportId = payload.report_id || payload.id
-      if (reportId) {
-        router.push(`/reports/${reportId}`)
-      } else {
-        setError('报告已生成但未返回编号，请在报告列表中查看')
+      if (payload.saved === false || !reportId) {
+        setError(
+          payload.save_error
+            ? `报告已生成但写入失败，本次未保存：${payload.save_error}`
+            : '报告已生成但写入失败，本次未保存',
+        )
+        return
       }
+      router.push(`/reports/${reportId}`)
     } catch (exc) {
       setError(`AI 报告生成失败: ${exc instanceof Error ? exc.message : String(exc)}`)
     } finally {

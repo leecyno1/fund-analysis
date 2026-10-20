@@ -843,16 +843,26 @@ async def generate_fund_evaluation_analysis(
             },
             "created_at": datetime.utcnow(),
         }
-        report_id = _save_report_to_postgres(report_record)
+        report_id = None
+        save_error = None
+        try:
+            report_id = _save_report_to_postgres(report_record)
+        except Exception as exc:
+            # 与另两个端点一致：生成成功但落库失败时返回 200 + saved=false，不谎称已保存。
+            logger.error("evaluation-analysis report save failed for %s: %s", wind_code, exc)
+            save_error = f"{exc.__class__.__name__}: {exc}"
 
         return {
             "id": report_id,
+            "saved": report_id is not None,
+            "save_error": save_error,
             "report": report_content,
             "metadata": {
                 "target_type": "fund",
                 "target_id": wind_code,
                 "report_type": "fund_evaluation_analysis",
                 "report_id": report_id,
+                "saved": report_id is not None,
                 "mode": generation_mode,
                 "provider": generator.provider,
                 "model": generator.model,
