@@ -702,3 +702,13 @@ python3 ../.quest-recovery/export.py
 - 挂在研究流水线面板之后，不改变 SSR 数据链路。
 - 新增 `scripts/attribution_conclusion_smoke.mjs`：校验详情页含面板标题、BFF 返回 `available/insufficient` 且 available 时字段与季度完整。
 - **验证**：tsc 0 错、build exit 0、浏览器点击后真实渲染"近 4 季超额主要来自交互（3/4 季为主贡献，方向一致率 100%）；残差占比 45%。可复制性中…"；前端冒烟 **125/125 全绿**。
+
+### 18.13 falsy-zero 收尾扫描 + 指标索引（2026-10-19）
+
+按任务 #84 的同类缺陷模式做最后一次全库扫描（`or 0` / `x if x else None`），只读审查后修复真实命中：
+
+- **decision_support._reject_reason**：此前把 None 的 Sharpe/回撤/年化当 0 参与比较，会虚构"更低/更深"且方向不对称；现仅在两侧都有值时比较，候选缺证据时明确写"缺失，无法比较"；真实 0 保留。6 项离线测试。
+- **classification_confidence**：`fund_browser` 与 `fund_evaluation` 中 `x or 0.95` 会把真实的 0 置信度改成 0.95；改为 `is not None` 判断。
+- 其余 `or 0` 命中（求和、权重、计数）均为合法中性值，不改。
+- **指标索引**：`metric_snapshots` 新增 `(metric_name, metric_window, as_of_date DESC, target_id)`（DDL 已写入 `database.py`，线上用 `CREATE INDEX CONCURRENTLY` 创建并 `ANALYZE`）。全局异动扫描由 ~2.8s 降至 **~1.1-1.9s**；日调度 300s 预算更宽裕。
+- **验证**：后端离线 **328 全绿**；后端重启后 health ok（PID 28212，check 模式）。
