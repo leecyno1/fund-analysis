@@ -121,6 +121,7 @@ class FundWatchService:
         watches = self.list_watches(status="active")
         triggered: List[Dict[str, Any]] = []
         unevaluated: List[Dict[str, Any]] = []
+        rearmed: List[Dict[str, Any]] = []
         evaluated = 0
 
         for watch in watches:
@@ -150,6 +151,30 @@ class FundWatchService:
                 watch["status"] = "triggered"
                 triggered.append(watch)
 
+        # re-arm：已触发的观察项在条件解除后回到 active，下一次再触发才会重新告警。
+        for watch in self.list_watches(status="triggered"):
+            raw_value = self._get_current_value(watch["fund_wind_code"], watch["metric_field"])
+            current_value = self._comparable_value(watch["metric_field"], raw_value)
+            if current_value is None:
+                continue  # 无法评估时保持 triggered，避免误判条件已解除
+            if self._check_threshold(current_value, watch["operator"], watch["threshold"]):
+                continue
+            with self.engine.begin() as conn:
+                conn.execute(
+                    text("""
+                        UPDATE fund_watches
+                        SET status = 'active', triggered_at = NULL, triggered_value = NULL, updated_at = NOW()
+                        WHERE id = CAST(:id AS UUID)
+                    """),
+                    {"id": watch["id"]},
+                )
+            rearmed.append({
+                "id": watch["id"],
+                "fund_wind_code": watch["fund_wind_code"],
+                "metric_field": watch["metric_field"],
+                "current_value": current_value,
+            })
+
         return {
             "scanned_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             "active_watches": len(watches),
@@ -158,6 +183,8 @@ class FundWatchService:
             "unevaluated": unevaluated,
             "triggered_count": len(triggered),
             "triggered": triggered,
+            "rearmed_count": len(rearmed),
+            "rearmed": rearmed,
         }
 
     def _get_current_value(self, wind_code: str, metric_field: str) -> Optional[float]:

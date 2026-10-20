@@ -19,9 +19,18 @@ class FundWatchlistService:
         rows = [self._fund_row(member) for member in members if member.get("fund_wind_code")]
         funds = FundBrowserService().enrich_rows(rows)
         fund_map = {str(fund.get("wind_code") or ""): fund for fund in funds}
-        return [
-            {
-                **(fund_map.get(str(member.get("fund_wind_code") or "")) or {}),
+        result = []
+        for member in members:
+            wind_code = str(member.get("fund_wind_code") or "")
+            fund = fund_map.get(wind_code)
+            data_missing = fund is None
+            result.append({
+                # 先给可识别的保底身份，缺失时不至于渲染成空对象。
+                "wind_code": wind_code,
+                "name": member.get("fund_name"),
+                **(fund or {}),
+                "data_missing": data_missing,
+                "missing_items": ["基金基础数据缺失（可能已清盘或尚未入库）"] if data_missing else [],
                 "member_id": member.get("id"),
                 "pool_id": member.get("pool_id"),
                 "status": member.get("status"),
@@ -31,9 +40,8 @@ class FundWatchlistService:
                 "next_review_date": member.get("next_review_date"),
                 "member_created_at": member.get("created_at"),
                 "member_updated_at": member.get("updated_at"),
-            }
-            for member in members
-        ]
+            })
+        return result
 
     @staticmethod
     def _fund_row(member: Dict[str, Any]) -> Dict[str, Any]:

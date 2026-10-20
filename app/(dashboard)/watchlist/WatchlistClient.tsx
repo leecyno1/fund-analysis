@@ -26,6 +26,8 @@ type Watchlist = {
 type WatchlistMember = SimpleFund & {
   memberId: string
   reason: string
+  dataMissing?: boolean
+  missingItems?: string[]
 }
 
 export default function WatchlistClient() {
@@ -220,8 +222,16 @@ export default function WatchlistClient() {
                     const selected = selectedCodes.includes(member.windCode)
                     const score = professionalFundScore(member)
                     return <tr key={member.memberId} className="align-top transition hover:bg-[#f8faf8]">
-                      <td className="px-4 py-4"><button type="button" onClick={() => toggleCompare(member)} className={`grid h-7 w-7 place-items-center border ${selected ? 'border-[#2c765d] bg-[#2c765d] text-white' : 'border-[#c7d0ca] text-transparent hover:border-[#2c765d]'}`} aria-label={selected ? `移出比较：${member.name}` : `加入比较：${member.name}`}>✓</button></td>
-                      <td className="px-4 py-4"><Link href={`/funds/${encodeURIComponent(member.windCode)}`} className="font-bold text-[#1b2923] hover:text-[#28745c]">{member.name || member.windCode}</Link><div className="mt-1 text-xs text-[#7b8680]">{member.windCode} · {managerName(member)}</div></td>
+                      <td className="px-4 py-4"><button type="button" disabled={member.dataMissing} onClick={() => toggleCompare(member)} className={`grid h-7 w-7 place-items-center border ${selected ? 'border-[#2c765d] bg-[#2c765d] text-white' : 'border-[#c7d0ca] text-transparent hover:border-[#2c765d]'} ${member.dataMissing ? 'cursor-not-allowed opacity-40' : ''}`} aria-label={selected ? `移出比较：${member.name}` : `加入比较：${member.name}`} title={member.dataMissing ? '基础数据缺失，暂不可比较' : undefined}>✓</button></td>
+                      <td className="px-4 py-4">
+                        {member.dataMissing ? (
+                          <span className="font-bold text-[#8d6a2f]">{member.name || member.windCode}</span>
+                        ) : (
+                          <Link href={`/funds/${encodeURIComponent(member.windCode)}`} className="font-bold text-[#1b2923] hover:text-[#28745c]">{member.name || member.windCode}</Link>
+                        )}
+                        {member.dataMissing ? <span className="ml-2 rounded bg-[#f6f1e4] px-2 py-0.5 text-[10px] text-[#8d6a2f]">基础数据缺失</span> : null}
+                        <div className="mt-1 text-xs text-[#7b8680]">{member.windCode} · {member.dataMissing ? (member.missingItems?.[0] || '数据待补') : managerName(member)}</div>
+                      </td>
                       <td className="px-4 py-4"><div className="max-w-[14rem] font-medium">{professionalPeerGroup(member) || '专业分类待确认'}</div><span className="mt-2 inline-flex bg-[#edf1ed] px-2 py-1 text-xs text-[#5f6b65]">{styleLabel(member)}</span></td>
                       <td className={`px-4 py-4 text-right font-bold ${(returnMetric(member) || 0) < 0 ? 'text-[#a84d47]' : 'text-[#267257]'}`}>{formatPercent(returnMetric(member))}</td>
                       <td className="px-4 py-4 text-right text-[#8b4f48]">{formatPercent(drawdownMetric(member))}</td>
