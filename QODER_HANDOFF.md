@@ -712,3 +712,22 @@ python3 ../.quest-recovery/export.py
 - 其余 `or 0` 命中（求和、权重、计数）均为合法中性值，不改。
 - **指标索引**：`metric_snapshots` 新增 `(metric_name, metric_window, as_of_date DESC, target_id)`（DDL 已写入 `database.py`，线上用 `CREATE INDEX CONCURRENTLY` 创建并 `ANALYZE`）。全局异动扫描由 ~2.8s 降至 **~1.1-1.9s**；日调度 300s 预算更宽裕。
 - **验证**：后端离线 **328 全绿**；后端重启后 health ok（PID 28212，check 模式）。
+
+### 18.14 与母项目 newma-desk 的对齐审计（2026-10-20）
+
+只读核对两边 Desk 契约与运行时，结论：**协议/路由/能力契约已对齐，但母项目实际运行的 bundled 快照严重滞后；新增能力尚未进入 Desk 契约**。
+
+**已对齐**
+- Suite 协议：两边 `desk/suite.json` 均为 `version 0.6.0`、`manifest.schemaVersion 1.1`、`compatibility.level 3 / bridgeProtocol 1.0 / sdkVersion fund-analysis-desk-adapter-0.1.0 / viewSpecVersion 1.0`。
+- 6 个 Mod/Workspace 全部有映射：`fund-discover/research/analysis/recommendations/attribution(advanced)/portfolio`；`isFundResearchWorkspace` 含 `advanced`，`/mod/fund-research/advanced` 渲染业绩归因页。
+- 数据服务能力：**本轮修复** `desk/data-service.json` 缺少 `fund.risk.evidence`（后端 `/api/newma-desk/fund-risk-evidence` 已实现、母项目也已声明）；修复后两边能力完全一致（7 项），`npm run desk:check` 通过；实盘 `POST /api/newma-desk/fund-risk-evidence` 返回 `available`。
+
+**未对齐 / 风险**
+1. **bundled 快照滞后（最高优先）**：`newma-desk/.env` 的 `NEWMA_DESK_FUND_ANALYSIS_WORKSPACE=bundled-runtimes/fund-analysis`；该副本来源记录为 `b047bf2+desk-adapter`、snapshotDate `2026-09-30`，最后一次变更 `2026-10-13`；源仓库 HEAD 已到 `19c107c`（2026-10-20）。`config/external-mod-runtimes.json` 的解析顺序也**优先 bundled**，因此 Desk（3035/8035）运行的是约 3 周前的代码，缺少本轮所有修复与新能力（捕获率/分段/收益来源/归因结论/问题清单/扫描修复）。
+2. **新增能力未进入 Desk 契约**：上述新端点目前是应用内能力，未新增 `fund.*` action；Desk 仍只能通过 `fund.research.snapshot` 获取基础快照。是否暴露属产品/集成决策，需同时改两边契约。
+3. **端口模型**：Desk bundled web/API 默认 3035/8035，独立项目 3000/8005；3000 抢占是 dev-stack 进程行为，不是配置默认值，但根因仍是 bundled 副本的存在与优先级。
+
+**建议（需母项目侧决策，本轮未改母项目）**
+- 首选：把 `NEWMA_DESK_FUND_ANALYSIS_WORKSPACE` 指向 `基金筛选/fund-analysis`（源仓库），由 Desk 直接复用独立项目，避免两套实现漂移（符合 ADR-0003）。
+- 次选：定期运行 `scripts/bootstrap-bundled-runtimes.mjs` 刷新 bundled 快照，并记录 revision/snapshotDate。
+- 若要让 Desk 展示新方法论结论，需在两边 suite/data-service 增加 action（如 `fund.return-source.run`、`fund.attribution.conclusion`、`fund.research.questions`、`fund.regime.run`）。
