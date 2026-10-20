@@ -1,7 +1,7 @@
 """基金浏览器路由。"""
 from typing import Optional
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
 
 from services.fund_browser_service import FundBrowserService
 
@@ -28,21 +28,24 @@ async def browse_funds(
     availability: str = Query("evaluated", pattern="^(evaluated|classified|all)$"),
     sort_by: str = Query("quality", pattern="^(quality|return|return_6m|return_1y|return_3y|multi_period|drawdown|sharpe|asset|history)$"),
 ):
-    return FundBrowserService().browse(
-        keyword=keyword,
-        peer_group=peer_group,
-        page=page,
-        page_size=page_size,
-        asset_min=asset_min,
-        min_age_years=min_age_years,
-        min_manager_years=min_manager_years,
-        return_6m_min=return_6m_min,
-        return_1y_min=return_1y_min,
-        return_3y_min=return_3y_min,
-        max_drawdown_1y_max=max_drawdown_1y_max,
-        sharpe_1y_min=sharpe_1y_min,
-        style_tags=[item.strip() for item in (style_tags or "").split(",") if item.strip()],
-        style_match=style_match,
-        availability=availability,
-        sort_by=sort_by,
-    )
+    try:
+        return FundBrowserService().browse(
+            keyword=keyword,
+            peer_group=peer_group,
+            page=page,
+            page_size=page_size,
+            asset_min=asset_min,
+            min_age_years=min_age_years,
+            min_manager_years=min_manager_years,
+            return_6m_min=return_6m_min,
+            return_1y_min=return_1y_min,
+            return_3y_min=return_3y_min,
+            max_drawdown_1y_max=max_drawdown_1y_max,
+            sharpe_1y_min=sharpe_1y_min,
+            style_tags=[item.strip() for item in (style_tags or "").split(",") if item.strip()],
+            style_match=style_match,
+            availability=availability,
+            sort_by=sort_by,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc

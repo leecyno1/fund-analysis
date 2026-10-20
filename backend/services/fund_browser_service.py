@@ -44,6 +44,25 @@ class FundBrowserService:
             str(tag or "").strip() for tag in (style_tags or []) if str(tag or "").strip()
         ))
         normalized_style_match = "all" if str(style_match or "any").strip().lower() == "all" else "any"
+        if not peer_group:
+            # 非同类组路径只支持 keyword/availability；其余筛选若不拒绝会被静默忽略。
+            unsupported = {
+                "asset_min": asset_min,
+                "min_age_years": min_age_years,
+                "min_manager_years": min_manager_years,
+                "return_6m_min": return_6m_min,
+                "return_1y_min": return_1y_min,
+                "return_3y_min": return_3y_min,
+                "max_drawdown_1y_max": max_drawdown_1y_max,
+                "sharpe_1y_min": sharpe_1y_min,
+            }
+            active = [name for name, value in unsupported.items() if value is not None]
+            if normalized_style_tags:
+                active.append("style_tags")
+            if active:
+                raise ValueError(
+                    "peer_group is required for filters: " + ", ".join(active)
+                )
         if peer_group:
             filters = {
                 "asset_min": asset_min,
