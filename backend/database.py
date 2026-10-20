@@ -990,6 +990,7 @@ def _initialize_database_schema():
         "CREATE INDEX IF NOT EXISTS idx_data_snapshots_started ON data_source_snapshots(started_at)",
         "CREATE INDEX IF NOT EXISTS idx_metric_snapshots_target ON metric_snapshots(target_type, target_id, as_of_date)",
         "CREATE INDEX IF NOT EXISTS idx_metric_snapshots_name ON metric_snapshots(metric_name)",
+        "CREATE INDEX IF NOT EXISTS idx_metric_snapshots_name_window_date ON metric_snapshots(metric_name, metric_window, as_of_date DESC, target_id)",
         "CREATE INDEX IF NOT EXISTS idx_metric_snapshots_source ON metric_snapshots(source_snapshot_id)",
         "CREATE INDEX IF NOT EXISTS idx_fund_pools_name ON fund_pools(name)",
         "CREATE INDEX IF NOT EXISTS idx_fund_pools_default ON fund_pools(is_default)",

@@ -244,7 +244,7 @@ class FundEvaluationService:
                 "benchmark_code": benchmark_code,
                 "benchmark_name": benchmark_name,
             },
-            "classification_confidence": fund.get("classification_confidence") or 0.95,
+            "classification_confidence": fund.get("classification_confidence") if fund.get("classification_confidence") is not None else 0.95,
             "classification_evidence": [{
                 "source": "fund_classification_repo.list_recommendation_funds",
                 "field": "peer_group_members.peer_group_id",

@@ -544,7 +544,7 @@ class FundBrowserService:
                 "benchmark_name": benchmark_name,
                 "benchmark_type": "peer_group_benchmark",
                 "mapping_method": "standardized_browser_projection",
-                "confidence": row.get("classification_confidence") or peer.get("confidence") or 0.95,
+                "confidence": row.get("classification_confidence") if row.get("classification_confidence") is not None else (peer.get("confidence") if peer.get("confidence") is not None else 0.95),
                 "rationale": "标准同类组的有效基准映射",
                 "evidence_refs": {"source": "standardized_fund_browser_query"},
                 "source": "benchmark_mappings",
@@ -565,7 +565,7 @@ class FundBrowserService:
             "peer_group_name": peer_group_name,
             "minimum_peer_count": row.get("minimum_peer_count"),
             "benchmark_mapping": benchmark_mapping,
-            "classification_confidence": row.get("classification_confidence") or peer.get("confidence") or 0.95,
+            "classification_confidence": row.get("classification_confidence") if row.get("classification_confidence") is not None else (peer.get("confidence") if peer.get("confidence") is not None else 0.95),
             "classification_evidence": [{
                 "field": "peer_group_members.peer_group_id",
                 "value": peer_group_id,

@@ -268,11 +268,22 @@ class DecisionSupportService:
 
     @staticmethod
     def _reject_reason(candidate: Dict[str, Any], best: Dict[str, Any]) -> str:
-        reasons = []
-        if (candidate.get("sharpe") or 0) < (best.get("sharpe") or 0):
-            reasons.append("风险调整收益(Sharpe)更低")
-        if (candidate.get("max_drawdown") or 0) < (best.get("max_drawdown") or 0):
-            reasons.append("回撤更深")
-        if (candidate.get("annualized_return") or 0) < (best.get("annualized_return") or 0):
-            reasons.append("年化收益更低")
+        reasons: List[str] = []
+
+        def _compare(key: str, label: str, missing_label: str) -> None:
+            candidate_value = candidate.get(key)
+            best_value = best.get(key)
+            if candidate_value is None:
+                # 缺失不冒充：不把 None 当 0 参与比较，也不虚构"更低/更深"。
+                if best_value is not None:
+                    reasons.append(f"{missing_label}缺失，无法比较")
+                return
+            if best_value is None:
+                return
+            if candidate_value < best_value:
+                reasons.append(label)
+
+        _compare("sharpe", "风险调整收益(Sharpe)更低", "Sharpe")
+        _compare("max_drawdown", "回撤更深", "最大回撤")
+        _compare("annualized_return", "年化收益更低", "年化收益")
         return "；".join(reasons) or "综合得分较低"
