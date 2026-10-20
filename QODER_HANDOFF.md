@@ -692,3 +692,13 @@ python3 ../.quest-recovery/export.py
 - 边界：只解释历史、不预测、不进入评分；主导来源=绝对效应最大项，不等同能力判断。
 
 **验证**：后端离线 **322 全绿**；前端冒烟 **124/124**；实时端点健康；风格补数脚本 exit 0。
+
+### 18.12 归因结论 UI 入口（2026-10-19）
+
+把 §18.11 的归因结论端点接成详情页的**按需面板**，避免 SSR 被 8 秒计算拖慢：
+
+- `app/api/funds/[id]/attribution-conclusion/route.ts`：BFF 代理，透传 `quarters/refresh`，120s 超时。
+- `FundAttributionConclusionPanel.tsx`（client）：默认只显示说明与"生成归因结论"按钮；点击后请求 4 季结论（首次约 8s，之后缓存 1h；再次点击走 `refresh=true` 重算）。展示主贡献来源、主导稳定性、方向一致率、平均残差占比、可复制性、结论文案与逐季效应表；债基/证据不足显示 `insufficient` 原因，季度失败单独列出。
+- 挂在研究流水线面板之后，不改变 SSR 数据链路。
+- 新增 `scripts/attribution_conclusion_smoke.mjs`：校验详情页含面板标题、BFF 返回 `available/insufficient` 且 available 时字段与季度完整。
+- **验证**：tsc 0 错、build exit 0、浏览器点击后真实渲染"近 4 季超额主要来自交互（3/4 季为主贡献，方向一致率 100%）；残差占比 45%。可复制性中…"；前端冒烟 **125/125 全绿**。

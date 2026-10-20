@@ -56,6 +56,7 @@ import FundManagerHistoryPanel, { type FundManagerHistorySnapshot } from './Fund
 import FundManagerTenurePerformancePanel, { type FundManagerTenurePerformance } from './FundManagerTenurePerformancePanel'
 import GenerateFundReportButton from './GenerateFundReportButton'
 import ResearchPipelinePanel from './ResearchPipelinePanel'
+import FundAttributionConclusionPanel from './FundAttributionConclusionPanel'
 
 export type FundNavPoint = {
   date: string
@@ -1606,6 +1607,8 @@ export default function SimpleFundDetailClient({ fund, nav, evaluationWindows, e
       <PlainLanguageBriefPanel brief={plainLanguageBrief} />
 
       <ResearchPipelinePanel pipeline={researchPipeline} />
+
+      <FundAttributionConclusionPanel windCode={fund.windCode} />
 
       <FundDataQualityPanel snapshot={dataQuality} />
 
