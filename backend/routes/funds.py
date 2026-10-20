@@ -1196,6 +1196,35 @@ async def get_fund_research_questions(wind_code: str):
         raise HTTPException(status_code=500, detail="研究问题清单暂时不可用")
 
 
+@router.get("/{wind_code}/attribution-conclusion")
+async def get_fund_attribution_conclusion(
+    wind_code: str,
+    quarters: int = Query(4, ge=2, le=6),
+    refresh: bool = Query(False, description="跳过 1 小时缓存重新计算"),
+):
+    """归因结论：多季 Brinson 效应聚合出主贡献来源、稳定性与可复制性。
+
+    首次计算约 6-8 秒（每季需取基准行业权重/成分股收益），结果缓存 1 小时。
+    只解释历史、不预测、不进入评分；单季失败不影响其余季度。
+    """
+    import anyio
+
+    from services.fund_attribution_conclusion_service import FundAttributionConclusionService
+
+    try:
+        result = await anyio.to_thread.run_sync(
+            lambda: FundAttributionConclusionService(quarters=quarters).get(
+                wind_code, force_refresh=refresh,
+            )
+        )
+        return _clean_nan(result)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except Exception as exc:
+        logger.error(f"Get fund attribution conclusion error for {wind_code}: {exc}")
+        raise HTTPException(status_code=500, detail="归因结论暂时不可用")
+
+
 @router.get("/{wind_code}/derived-series")
 async def get_fund_derived_series(
     wind_code: str,
